@@ -218,8 +218,13 @@ class StockPredictionApp(QWidget):
         main_layout.addWidget(self.progress_bar)
         
         # display the time left until refresh timer 
-        self.timer_label = QLabel('Time until refresh: ' + str(self.timer.remainingTime()) + ' seconds')
+        self.timer_label = QLabel('Time until refresh:')
         main_layout.addWidget(self.timer_label)
+        
+        # Update the timer label every second
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.update_timer_label)
+        self.update_timer.setInterval(1000)  # Update every second (1000 ms)
 
         # GitHub footer label
         self.github_label = QLabel('<a href="https://github.com/grabercn">Made with ❤️ by Chrismslist</a>')
@@ -231,10 +236,32 @@ class StockPredictionApp(QWidget):
 
         # Initialize stock ticker
         self.stock_ticker = ''
+        
+    def update_timer_label(self):
+        # Get the remaining time in milliseconds and convert to seconds
+        remaining_time_seconds = self.timer.remainingTime() / 1000  # Convert to seconds
+        
+        # Convert seconds to hours, minutes, seconds using gmtime
+        remaining_time = time.gmtime(max(remaining_time_seconds, 0))  # Ensure it's not negative
+
+        # Format the remaining time as HH:MM:SS
+        formatted_time = time.strftime('%H:%M:%S', remaining_time)
+        
+        # Update the timer label with the formatted time
+        self.timer_label.setText(f'Time until refresh: {formatted_time} remaining')
+
+        # Optionally stop the update_timer when the time is up
+        if remaining_time_seconds <= 0:
+            self.update_timer.stop()
 
     def on_ticker_button_clicked(self):
         # Get the stock ticker from the text input
         self.stock_ticker = self.ticker_input.text().strip().upper()
+        
+        # Reset the timer label and stop the timer
+        self.timer_label.setText('Time until refresh:')
+        self.timer.stop()
+        self.update_timer.stop()
         
         if not self.stock_ticker:
             self.log_output.append("Please enter a valid stock ticker.")
@@ -269,6 +296,28 @@ class StockPredictionApp(QWidget):
 
         # Make predictions with the newly trained model
         predictions = predict(self.stock_ticker, period=self.prediction_period_dropdown.currentText())
+        
+        # Start the countdown timer for the refresh
+        # set the timer based on the prediction period dropdown (we need to manually define these values)
+        if self.prediction_period_dropdown.currentText() == '5d':
+            self.timer.start(432000000) # 5 days in milliseconds
+        elif self.prediction_period_dropdown.currentText() == '1d':
+            self.timer.start(86400000)
+        elif self.prediction_period_dropdown.currentText() == '3d':
+            self.timer.start(259200000)
+        elif self.prediction_period_dropdown.currentText() == '1mo':
+            self.timer.start(2592000000)
+        elif self.prediction_period_dropdown.currentText() == '3mo':
+            self.timer.start(7776000000)
+        elif self.prediction_period_dropdown.currentText() == '6mo':
+            self.timer.start(15552000000)
+        elif self.prediction_period_dropdown.currentText() == '1y':
+            self.timer.start(31536000000)
+        else:
+            self.timer.start(432000000)
+
+        # Start the update_timer to update the label
+        self.update_timer.start()
 
         # Update the graph and recommendation label with results
         self.update_graph_and_predictions(predictions)
@@ -305,9 +354,6 @@ class StockPredictionApp(QWidget):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         self.log_output.append(f"{timestamp} | Prediction: {last_prediction['action']} | Confidence: {last_prediction['confidence']:.2f} | Price: ${last_prediction['close_price']:.2f}")
 
-        # timer for refreshing data based on the selected prediction period and then update the graph and recommendations
-        self.timer.start( 15000)
-        
         # Fetch and display news headlines
         #headlines = fetch_news(self.stock_ticker)
         #self.log_output.append("\nTop 5 Headlines:\n" + "\n".join(headlines))
