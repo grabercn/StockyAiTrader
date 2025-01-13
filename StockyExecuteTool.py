@@ -137,7 +137,6 @@ class StockPredictionWindow(QMainWindow):
 
         self.stats_label.setText(f"Trading Statistics:\n{stats_text}")
 
-# MQTT callbacks
 def on_message(client, userdata, msg):
     message = msg.payload.decode()
     try:
@@ -146,10 +145,10 @@ def on_message(client, userdata, msg):
         display_message = f"Ticker: {ticker}\nAction: {action}\nConfidence: {confidence:.2f}"
         window.update_display(display_message)
 
-        # Check portfolio before buying
+        # Fetch portfolio details
         positions = window.trading_api.get_portfolio()
-        owned_symbols = {pos['symbol']: pos['qty'] for pos in positions if 'symbol' in pos}
-        
+        owned_symbols = {pos['symbol']: pos for pos in positions if 'symbol' in pos}
+
         if action.lower() == "hold":
             window.log_action(f"Holding {ticker}.")
             return
@@ -163,6 +162,19 @@ def on_message(client, userdata, msg):
             if ticker not in owned_symbols:
                 window.log_action(f"Cannot sell {ticker}. Shares not owned.")
                 return
+
+            # Get current position details
+            position = owned_symbols[ticker]
+            avg_entry_price = float(position.get('avg_entry_price', 0.0))
+            current_price = float(position.get('current_price', 0.0))  # Assume Alpaca API provides 'current_price'
+
+            if avg_entry_price > current_price:
+                window.log_action(
+                    f"Cannot sell {ticker}. Selling at a loss.\n"
+                    f"Purchased at: ${avg_entry_price:.2f}, Current price: ${current_price:.2f}"
+                )
+                return
+
             qty = 10  # Mock quantity to trade
             result = window.trading_api.place_order(ticker, qty, "sell")
             window.log_action(f"Sold {qty} {ticker}.", result.get("error"))
@@ -171,6 +183,7 @@ def on_message(client, userdata, msg):
         window.update_stats()
     except ValueError:
         print("Received message is not in the expected format.")
+
 
 def on_connect(client, userdata, flags, rc):
     print(f"Connected to broker with result code: {rc}")
