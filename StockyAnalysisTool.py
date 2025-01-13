@@ -306,7 +306,7 @@ class StockPredictionApp(QWidget):
         self.log_output.append(f"{timestamp} | Prediction: {last_prediction['action']} | Confidence: {last_prediction['confidence']:.2f} | Price: ${last_prediction['close_price']:.2f}")
 
         # timer for refreshing data based on the selected prediction period and then update the graph and recommendations
-        self.timer.start( 100000)
+        self.timer.start( 15000)
         
         # Fetch and display news headlines
         #headlines = fetch_news(self.stock_ticker)
