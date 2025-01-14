@@ -30,7 +30,7 @@ sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncas
 # Function to fetch historical data and preprocess it
 def fetch_and_prepare_data(stock_ticker, period="1y"):
     stock = yf.Ticker(stock_ticker)
-    data = stock.history(period=period)
+    data = stock.history(period=period, interval='1d')
 
     # Calculate percentage price changes
     data['Price Change (%)'] = data['Close'].pct_change() * 100

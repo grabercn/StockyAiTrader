@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import feedparser
 import paho.mqtt.client as mqtt
+import pytz
+from datetime import datetime, timedelta
 
 # MQTT broker settings
 BROKER = "test.mosquitto.org"
@@ -32,6 +34,8 @@ def fetch_and_prepare_data(stock_ticker, period="1d", interval="5m"):
     
     # Fetch historical data with a specific interval
     data = stock.history(period=period, interval=interval)
+    
+    print(data)
 
     # Calculate percentage price changes
     data['Price Change (%)'] = data['Close'].pct_change() * 100
@@ -119,8 +123,8 @@ class CustomDataset:
         return len(self.labels)
 
 # Use the trained model for predictions
-def predict(stock_ticker, period="5d"):
-    data = fetch_and_prepare_data(stock_ticker, period)
+def predict(stock_ticker, period="5d", interval="5m"):
+    data = fetch_and_prepare_data(stock_ticker, period, interval)
     predictions = []
 
     for _, row in data.iterrows():
@@ -176,7 +180,7 @@ class StockPredictionApp(QWidget):
         self.ticker_input.setPlaceholderText("Enter stock ticker (e.g., AAPL, GOOGL)")
         
         self.training_period_dropdown = QComboBox(self)
-        self.training_period_dropdown.addItems(['1d', '30d','60d','1y'])
+        self.training_period_dropdown.addItems(['1d', '2d','3d', '5d'])
         
         self.prediction_period_dropdown = QComboBox(self)
         self.prediction_period_dropdown.addItems(['1m', '5m', '15m', '30m', '60m']) 
@@ -187,7 +191,7 @@ class StockPredictionApp(QWidget):
         main_layout.addWidget(self.ticker_input)
         main_layout.addWidget(QLabel('Training Period:'))
         main_layout.addWidget(self.training_period_dropdown)
-        main_layout.addWidget(QLabel('Prediction Period:'))
+        main_layout.addWidget(QLabel('Data Interval Period:'))
         main_layout.addWidget(self.prediction_period_dropdown)
         main_layout.addWidget(self.ticker_button)
 
@@ -266,6 +270,32 @@ class StockPredictionApp(QWidget):
         if not self.stock_ticker:
             self.log_output.append("Please enter a valid stock ticker.")
             return
+        
+        ## Check if the stock market is open (between 9:30 AM and 4:00 PM EST) ##
+        
+        # Define EST timezone
+        est = pytz.timezone("US/Eastern")
+        current_time = datetime.now(est)
+
+        # Define market open and close times
+        market_open_time = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close_time = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        if current_time < market_open_time or current_time >= market_close_time:
+            self.log_output.append("The stock market is currently closed. Timer set to next market open.")
+
+            # Calculate time until market opens
+            if current_time < market_open_time:
+                time_until_open = (market_open_time - current_time).total_seconds()
+            else:  # After market close, calculate time until next day's open
+                next_day_open = market_open_time + timedelta(days=1)
+                time_until_open = (next_day_open - current_time).total_seconds()
+
+            # Convert seconds to milliseconds for the timer
+            self.timer.setInterval(int(time_until_open * 1000))
+            self.timer.start()
+            self.update_timer.start()
+            return            
 
         # Reset the UI
         self.recommendation_label.setText('Recommendation:')
@@ -282,7 +312,7 @@ class StockPredictionApp(QWidget):
 
     def train_and_predict(self):
         # Fetch historical data for the selected stock and train the model
-        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText())
+        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
 
         # Simulate the training process (this would normally take time)
         # Start the training process in a separate thread
@@ -295,26 +325,22 @@ class StockPredictionApp(QWidget):
         self.progress_bar.setVisible(False)
 
         # Make predictions with the newly trained model
-        predictions = predict(self.stock_ticker, period=self.prediction_period_dropdown.currentText())
+        predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
         
         # Start the countdown timer for the refresh
         # set the timer based on the prediction period dropdown (we need to manually define these values)
-        if self.prediction_period_dropdown.currentText() == '5d':
-            self.timer.start(432000000) # 5 days in milliseconds
-        elif self.prediction_period_dropdown.currentText() == '1d':
-            self.timer.start(86400000)
-        elif self.prediction_period_dropdown.currentText() == '3d':
-            self.timer.start(259200000)
-        elif self.prediction_period_dropdown.currentText() == '1mo':
-            self.timer.start(2592000000)
-        elif self.prediction_period_dropdown.currentText() == '3mo':
-            self.timer.start(7776000000)
-        elif self.prediction_period_dropdown.currentText() == '6mo':
-            self.timer.start(15552000000)
-        elif self.prediction_period_dropdown.currentText() == '1y':
-            self.timer.start(31536000000)
+        if self.prediction_period_dropdown.currentText() == '1m':
+            self.timer.start(60000)
+        elif self.prediction_period_dropdown.currentText() == '5m':
+            self.timer.start(300000)
+        elif self.prediction_period_dropdown.currentText() == '15m':
+            self.timer.start(900000)
+        elif self.prediction_period_dropdown.currentText() == '30m':
+            self.timer.start(1800000)
+        elif self.prediction_period_dropdown.currentText() == '60m':
+            self.timer.start(360000) # 1 hour
         else:
-            self.timer.start(432000000)
+            self.timer.start(60000)
 
         # Start the update_timer to update the label
         self.update_timer.start()
@@ -324,16 +350,16 @@ class StockPredictionApp(QWidget):
 
     def update_stock_data(self):
         # Fetch the latest stock data and update the graph and recommendations
-        predictions = predict(self.stock_ticker, period=self.prediction_period_dropdown.currentText())
+        predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
         self.update_graph_and_predictions(predictions)
 
     def update_graph_and_predictions(self, predictions=None):
         # Fetch data and make predictions if needed
         if not predictions:
-            predictions = predict(self.stock_ticker, period=self.prediction_period_dropdown.currentText())
+            predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
         
         # Fetch historical data for graphing
-        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText())
+        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
 
         # Plot the stock price data on the graph
         ax = self.figure.add_subplot(111)
