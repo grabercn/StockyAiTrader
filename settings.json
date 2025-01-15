@@ -1,0 +1,5 @@
+{
+    "api_key": "your_api_key_here",
+    "default_ticker": "AAPL",
+    "refresh_rate": 5
+}
