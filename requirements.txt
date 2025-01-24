@@ -10,4 +10,5 @@ matplotlib
 feedparser
 paho-mqtt
 pytz
+lxml-html-clean
 
