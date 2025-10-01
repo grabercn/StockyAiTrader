@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import feedparser
 import paho.mqtt.client as mqtt
+import pandas_ta as ta
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # MQTT broker settings
 BROKER = "test.mosquitto.org"
@@ -26,11 +28,21 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=3)  # 3 labels: BUY, SELL, HOLD
 
 sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+vader_analyzer = SentimentIntensityAnalyzer()
 
 # Function to fetch historical data and preprocess it
 def fetch_and_prepare_data(stock_ticker, period="1y"):
     stock = yf.Ticker(stock_ticker)
     data = stock.history(period=period, interval='1d')
+
+    # Calculate technical indicators
+    data.ta.bbands(append=True)
+    data.ta.macd(append=True)
+    data.ta.rsi(append=True)
+
+    # Fetch news and calculate sentiment
+    headlines = fetch_news(stock_ticker)
+    sentiment_score = np.mean([vader_analyzer.polarity_scores(h)['compound'] for h in headlines]) if headlines else 0
 
     # Calculate percentage price changes
     data['Price Change (%)'] = data['Close'].pct_change() * 100
@@ -46,14 +58,16 @@ def fetch_and_prepare_data(stock_ticker, period="1y"):
 
     # Create text input for AI
     data['Text'] = data.apply(
-        lambda row: f"Stock price: {row['Close']:.2f}, volume: {row['Volume']}, percentage change: {row['Price Change (%)']:.2f}.",
+        lambda row: f"Stock price: {row['Close']:.2f}, volume: {row['Volume']}, percentage change: {row['Price Change (%)']:.2f}, "
+                    f"BBands: ({row['BBL_20_2.0']:.2f}, {row['BBM_20_2.0']:.2f}, {row['BBU_20_2.0']:.2f}), "
+                    f"MACD: {row['MACD_12_26_9']:.2f}, RSI: {row['RSI_14']:.2f}, News Sentiment: {sentiment_score:.2f}",
         axis=1
     )
 
     # Filter out rows with NaN labels (e.g., first row with no percentage change)
     data = data.dropna(subset=['Label'])
 
-    return data[['Text', 'Label', 'Close']]
+    return data
 
 # Function to publish prediction to MQTT
 def publish_prediction(stock_ticker, prediction):
@@ -354,9 +368,9 @@ class StockPredictionApp(QWidget):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         self.log_output.append(f"{timestamp} | Prediction: {last_prediction['action']} | Confidence: {last_prediction['confidence']:.2f} | Price: ${last_prediction['close_price']:.2f}")
 
-        # Fetch and display news headlines
-        #headlines = fetch_news(self.stock_ticker)
-        #self.log_output.append("\nTop 5 Headlines:\n" + "\n".join(headlines))
+        # Log the new metrics
+        last_row = data.iloc[-1]
+        self.log_output.append(f"BBands: ({last_row['BBL_20_2.0']:.2f}, {last_row['BBM_20_2.0']:.2f}, {last_row['BBU_20_2.0']:.2f}) | MACD: {last_row['MACD_12_26_9']:.2f} | RSI: {last_row['RSI_14']:.2f} | News Sentiment: {np.mean([vader_analyzer.polarity_scores(h)['compound'] for h in fetch_news(self.stock_ticker)]) if fetch_news(self.stock_ticker) else 0:.2f}")
 
 # Worker thread for training model asynchronously
 class TrainingWorker(QThread):

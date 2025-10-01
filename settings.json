@@ -1,5 +1,7 @@
 {
     "api_key": "your_api_key_here",
     "default_ticker": "AAPL",
-    "refresh_rate": 5
+    "refresh_rate": 5,
+    "alpaca_api_key": "PK1HNLS989GG2QFSYPQT",
+    "alpaca_secret_key": "txODF9YjwtaeN7Dh4gwb2UOheqclo5iM9yMIW7s2"
 }
