@@ -6,7 +6,6 @@ beautifulsoup4
 newspaper3k
 pandas
 transformers
-transformers[torch]
 matplotlib
 feedparser
 paho-mqtt

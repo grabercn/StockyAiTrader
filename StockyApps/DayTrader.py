@@ -32,7 +32,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name, num_label
 sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 vader_analyzer = SentimentIntensityAnalyzer()
 
-def fetch_and_prepare_data(stock_ticker, period="1d", interval="5m"):
+def fetch_and_prepare_data(stock_ticker, period="1d", interval="5m", trading_mode="Normal", custom_buy_threshold=None, custom_sell_threshold=None):
     stock = yf.Ticker(stock_ticker)
     
     # Fetch historical data with a specific interval
@@ -60,11 +60,25 @@ def fetch_and_prepare_data(stock_ticker, period="1d", interval="5m"):
     # Calculate percentage price changes
     data['Price Change (%)'] = data['Close'].pct_change() * 100
 
-    # Label data based on thresholds
+    # Label data based on trading mode
+    if trading_mode == 'Custom' and custom_buy_threshold is not None and custom_sell_threshold is not None:
+        buy_threshold = custom_buy_threshold
+        sell_threshold = custom_sell_threshold
+    else:
+        if trading_mode == 'Aggressive':
+            buy_threshold = 1.0
+            sell_threshold = -1.0
+        elif trading_mode == 'Minimal':
+            buy_threshold = 2.0
+            sell_threshold = -2.0
+        else:  # Normal
+            buy_threshold = 1.5
+            sell_threshold = -1.5
+
     conditions = [
-        (data['Price Change (%)'] > 1.5),  # Large positive change -> BUY
-        (data['Price Change (%)'] < -1.5), # Large negative change -> SELL
-        (abs(data['Price Change (%)']) <= 1.5)  # Small changes -> HOLD
+        (data['Price Change (%)'] > buy_threshold),  # Large positive change -> BUY
+        (data['Price Change (%)'] < sell_threshold), # Large negative change -> SELL
+        (abs(data['Price Change (%)']) <= buy_threshold)  # Small changes -> HOLD
     ]
     labels = [2, 0, 1]  # BUY=2, SELL=0, HOLD=1
     data['Label'] = np.select(conditions, labels)
@@ -145,8 +159,8 @@ class CustomDataset:
         return len(self.labels)
 
 # Use the trained model for predictions
-def predict(stock_ticker, period="5d", interval="5m"):
-    data = fetch_and_prepare_data(stock_ticker, period, interval)
+def predict(stock_ticker, period="5d", interval="5m", trading_mode="Normal", custom_buy_threshold=None, custom_sell_threshold=None):
+    data = fetch_and_prepare_data(stock_ticker, period, interval, trading_mode, custom_buy_threshold, custom_sell_threshold)
     predictions = []
 
     for _, row in data.iterrows():
@@ -205,7 +219,20 @@ class StockPredictionApp(QWidget):
         self.training_period_dropdown.addItems(['1d', '2d','3d', '5d'])
         
         self.prediction_period_dropdown = QComboBox(self)
-        self.prediction_period_dropdown.addItems(['1m', '5m', '15m', '30m', '60m']) 
+        self.prediction_period_dropdown.addItems(['1m', '5m', '15m', '30m', '60m'])
+        
+        self.trading_mode_dropdown = QComboBox(self)
+        self.trading_mode_dropdown.addItems(['Normal', 'Minimal', 'Aggressive', 'Custom'])
+        self.trading_mode_dropdown.currentTextChanged.connect(self.on_trading_mode_changed)
+
+        self.custom_buy_threshold = QLineEdit(self)
+        self.custom_buy_threshold.setPlaceholderText("Buy threshold (e.g., 1.5)")
+        self.custom_sell_threshold = QLineEdit(self)
+        self.custom_sell_threshold.setPlaceholderText("Sell threshold (e.g., -1.5)")
+
+        self.custom_buy_threshold.setVisible(False)
+        self.custom_sell_threshold.setVisible(False)
+
         self.ticker_button = QPushButton('Get Prediction', self)
         self.ticker_button.clicked.connect(self.on_ticker_button_clicked)
 
@@ -215,6 +242,10 @@ class StockPredictionApp(QWidget):
         main_layout.addWidget(self.training_period_dropdown)
         main_layout.addWidget(QLabel('Data Interval Period:'))
         main_layout.addWidget(self.prediction_period_dropdown)
+        main_layout.addWidget(QLabel('Trading Mode:'))
+        main_layout.addWidget(self.trading_mode_dropdown)
+        main_layout.addWidget(self.custom_buy_threshold)
+        main_layout.addWidget(self.custom_sell_threshold)
         main_layout.addWidget(self.ticker_button)
 
         # Timer for live updates
@@ -262,6 +293,14 @@ class StockPredictionApp(QWidget):
 
         # Initialize stock ticker
         self.stock_ticker = ''
+
+    def on_trading_mode_changed(self, mode):
+        if mode == 'Custom':
+            self.custom_buy_threshold.setVisible(True)
+            self.custom_sell_threshold.setVisible(True)
+        else:
+            self.custom_buy_threshold.setVisible(False)
+            self.custom_sell_threshold.setVisible(False)
         
     def update_timer_label(self):
         # Get the remaining time in milliseconds and convert to seconds
@@ -334,7 +373,18 @@ class StockPredictionApp(QWidget):
 
     def train_and_predict(self):
         # Fetch historical data for the selected stock and train the model
-        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
+        trading_mode = self.trading_mode_dropdown.currentText()
+        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
+        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
+
+        data = fetch_and_prepare_data(
+            self.stock_ticker, 
+            period=self.training_period_dropdown.currentText(), 
+            interval=self.prediction_period_dropdown.currentText(),
+            trading_mode=trading_mode,
+            custom_buy_threshold=custom_buy_threshold,
+            custom_sell_threshold=custom_sell_threshold
+        )
 
         # Simulate the training process (this would normally take time)
         # Start the training process in a separate thread
@@ -347,7 +397,18 @@ class StockPredictionApp(QWidget):
         self.progress_bar.setVisible(False)
 
         # Make predictions with the newly trained model
-        predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
+        trading_mode = self.trading_mode_dropdown.currentText()
+        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
+        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
+
+        predictions = predict(
+            self.stock_ticker, 
+            period=self.training_period_dropdown.currentText(), 
+            interval=self.prediction_period_dropdown.currentText(),
+            trading_mode=trading_mode,
+            custom_buy_threshold=custom_buy_threshold,
+            custom_sell_threshold=custom_sell_threshold
+        )
         
         # Start the countdown timer for the refresh
         # set the timer based on the prediction period dropdown (we need to manually define these values)
@@ -372,16 +433,37 @@ class StockPredictionApp(QWidget):
 
     def update_stock_data(self):
         # Fetch the latest stock data and update the graph and recommendations
-        predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
+        trading_mode = self.trading_mode_dropdown.currentText()
+        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
+        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
+
+        predictions = predict(
+            self.stock_ticker, 
+            period=self.training_period_dropdown.currentText(), 
+            interval=self.prediction_period_dropdown.currentText(),
+            trading_mode=trading_mode,
+            custom_buy_threshold=custom_buy_threshold,
+            custom_sell_threshold=custom_sell_threshold
+        )
         self.update_graph_and_predictions(predictions)
 
     def update_graph_and_predictions(self, predictions=None):
         # Fetch data and make predictions if needed
+        trading_mode = self.trading_mode_dropdown.currentText()
+        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
+        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
+
         if not predictions:
-            predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
-        
+            predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText(), trading_mode=self.trading_mode_dropdown.currentText())        
         # Fetch historical data for graphing
-        data = fetch_and_prepare_data(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText())
+        data = fetch_and_prepare_data(
+            self.stock_ticker, 
+            period=self.training_period_dropdown.currentText(), 
+            interval=self.prediction_period_dropdown.currentText(),
+            trading_mode=trading_mode,
+            custom_buy_threshold=custom_buy_threshold,
+            custom_sell_threshold=custom_sell_threshold
+        )
 
         # Plot the stock price data on the graph
         ax = self.figure.add_subplot(111)
