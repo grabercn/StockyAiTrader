@@ -19,5 +19,6 @@
     },
     "scanner_workers": 3,
     "custom_profiles": {},
-    "setup_complete": false
+    "setup_complete": false,
+    "theme": "auto"
 }

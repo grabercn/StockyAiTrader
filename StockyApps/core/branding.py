@@ -246,6 +246,19 @@ SUITE_STYLESHEET = f"""
         padding: 6px;
         font-size: {FONT_SIZE_SMALL}px;
     }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 30px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {BG_DARK};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER};
+        border-radius: 6px;
+        selection-background-color: {BRAND_PRIMARY};
+        padding: 4px;
+        outline: none;
+    }}
 """
 
 
@@ -380,6 +393,19 @@ LIGHT_STYLESHEET = f"""
     }}
     QMenu::item:selected {{
         background-color: {BRAND_PRIMARY}; border-radius: 4px;
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 30px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: #ffffff;
+        color: #1e293b;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        selection-background-color: {BRAND_PRIMARY};
+        padding: 4px;
+        outline: none;
     }}
 """
 

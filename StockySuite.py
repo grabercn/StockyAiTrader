@@ -150,7 +150,7 @@ class DashboardPanel(QWidget):
         layout.setContentsMargins(12, 8, 12, 8)
 
         # Header
-        header = GradientHeader(f"Dashboard", "Portfolio overview and recent activity")
+        header = GradientHeader("Dashboard", "Portfolio overview and recent activity", height=70)
         layout.addWidget(header)
 
         # Account stats row — premium stat cards
@@ -183,8 +183,8 @@ class DashboardPanel(QWidget):
             btn = QPushButton(f"  {label}")
             btn.setIcon(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY))
             btn.setStyleSheet(f"""
-                QPushButton {{ background-color: {BG_PANEL};
-                    border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; font-size: 12px; }}
+                QPushButton {{ background-color: transparent;
+                    border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; }}
                 QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; }}
             """)
             btn.setCursor(Qt.PointingHandCursor)
@@ -1630,24 +1630,28 @@ class StockySuite(QMainWindow):
 
     @staticmethod
     def _detect_ideal_scale():
-        """Auto-detect ideal UI scale based on screen resolution and DPI."""
+        """Auto-detect ideal UI scale. Qt high DPI handles the heavy lifting now,
+        so we just add a small bump for comfort."""
         try:
             screen = QApplication.primaryScreen()
-            w = screen.geometry().width()
-            dpi = screen.logicalDotsPerInch()
-            if w >= 2560:
-                scale = 1.5
-            elif w >= 1920:
-                scale = 1.3
-            elif w >= 1600:
-                scale = 1.15
+            ratio = screen.devicePixelRatio()
+            # Qt high DPI scaling is active — ratio > 1 means it's already scaling
+            # Just add a slight comfort bump
+            if ratio >= 1.5:
+                return 1.15  # Qt already scaled 1.5x, add 15%
+            elif ratio > 1.0:
+                return 1.1
             else:
-                scale = 1.0
-            if dpi > 120:
-                scale *= 1.1
-            return round(scale, 2)
+                # No system scaling — we need to compensate more
+                w = screen.geometry().width()
+                if w >= 2560:
+                    return 1.5
+                elif w >= 1920:
+                    return 1.25
+                else:
+                    return 1.1
         except Exception:
-            return 1.3
+            return 1.15
 
     def _zoom(self, delta):
         self._scale = max(0.7, min(2.0, round(self._scale + delta, 2)))
@@ -1732,6 +1736,12 @@ class AboutDialog(QDialog):
 
 def boot_app():
     """Boot sequence with premium animated loading screen."""
+    # Enable Qt high DPI scaling BEFORE QApplication is created
+    # This is critical for 2560x1600 / 144 DPI screens
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))

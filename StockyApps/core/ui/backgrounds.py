@@ -71,15 +71,25 @@ class GlassPanel(QWidget):
 
 class GradientHeader(QWidget):
     """
-    A header bar with gradient background and title text.
+    Animated header bar with subtly shifting gradient and accent line.
     Used at the top of panels for visual hierarchy.
     """
 
-    def __init__(self, title="", subtitle="", height=60, parent=None):
+    def __init__(self, title="", subtitle="", height=65, parent=None):
         super().__init__(parent)
         self._title = title
         self._subtitle = subtitle
+        self._phase = 0.0
         self.setFixedHeight(height)
+
+        # Subtle animation
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(60)
+
+    def _tick(self):
+        self._phase += 0.015
+        self.update()
 
     def set_title(self, title, subtitle=""):
         self._title = title
@@ -93,33 +103,37 @@ class GradientHeader(QWidget):
         w = self.width()
         h = self.height()
 
-        # Gradient background
+        # Animated gradient background — colors shift slowly
+        shift = (math.sin(self._phase) + 1) / 2 * 0.2
         grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0, QColor(14, 165, 233, 30))
-        grad.setColorAt(0.5, QColor(99, 102, 241, 20))
-        grad.setColorAt(1, QColor(16, 185, 129, 30))
+        grad.setColorAt(0, QColor(14, 165, 233, 25))
+        grad.setColorAt(0.3 + shift, QColor(99, 102, 241, 18))
+        grad.setColorAt(0.7 - shift, QColor(16, 185, 129, 22))
+        grad.setColorAt(1, QColor(14, 165, 233, 10))
         painter.fillRect(0, 0, w, h, grad)
 
-        # Bottom accent line
+        # Animated bottom accent line
         line_grad = QLinearGradient(0, 0, w, 0)
+        ls = (math.sin(self._phase * 0.7) + 1) / 2 * 0.15
         line_grad.setColorAt(0, QColor(14, 165, 233, 0))
-        line_grad.setColorAt(0.3, QColor(14, 165, 233, 200))
-        line_grad.setColorAt(0.7, QColor(16, 185, 129, 200))
+        line_grad.setColorAt(0.2 + ls, QColor(14, 165, 233, 200))
+        line_grad.setColorAt(0.5, QColor(99, 102, 241, 150))
+        line_grad.setColorAt(0.8 - ls, QColor(16, 185, 129, 200))
         line_grad.setColorAt(1, QColor(16, 185, 129, 0))
         painter.setPen(QPen(QBrush(line_grad), 2))
         painter.drawLine(0, h - 1, w, h - 1)
 
         # Title text
         painter.setPen(theme.qcolor("text_heading"))
-        painter.setFont(QFont("Segoe UI", 15, QFont.Bold))
-        y = 12 if self._subtitle else (h - 20) // 2
-        painter.drawText(20, y, w - 40, 24, Qt.AlignLeft | Qt.AlignVCenter, self._title)
+        painter.setFont(QFont("Segoe UI", 16, QFont.Bold))
+        y = 14 if self._subtitle else (h - 22) // 2
+        painter.drawText(20, y, w - 40, 26, Qt.AlignLeft | Qt.AlignVCenter, self._title)
 
         # Subtitle
         if self._subtitle:
             painter.setPen(theme.qcolor("text_secondary"))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(20, y + 22, w - 40, 18, Qt.AlignLeft | Qt.AlignVCenter, self._subtitle)
+            painter.setFont(QFont("Segoe UI", 11))
+            painter.drawText(20, y + 26, w - 40, 20, Qt.AlignLeft | Qt.AlignVCenter, self._subtitle)
 
         painter.end()
 
