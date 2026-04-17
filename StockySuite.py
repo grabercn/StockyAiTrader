@@ -1607,30 +1607,31 @@ class StockySuite(QMainWindow):
         # Build UI
         self._build()
 
-        # Notification bar (replaces plain status bar)
+        # Notification bar — subtle, elegant status display
         self._notif_bar = QWidget()
-        self._notif_bar.setMinimumHeight(36)
+        self._notif_bar.setMinimumHeight(30)
+        self._notif_bar.setMaximumHeight(32)
         self._notif_bar.setStyleSheet(f"""
             background-color: {BG_DARK};
-            border-top: 2px solid {BRAND_PRIMARY}40;
+            border-top: 1px solid {BORDER};
         """)
         nb_layout = QHBoxLayout()
-        nb_layout.setContentsMargins(16, 4, 16, 4)
-        nb_layout.setSpacing(10)
+        nb_layout.setContentsMargins(14, 3, 14, 3)
+        nb_layout.setSpacing(8)
 
         from core.ui.icons import StockyIcons
         self._notif_icon = QLabel()
-        self._notif_icon.setPixmap(StockyIcons.get("check", 16, BRAND_PRIMARY))
+        self._notif_icon.setPixmap(StockyIcons.get("check", 14, BRAND_PRIMARY))
         self._notif_icon.setStyleSheet("background: transparent;")
         nb_layout.addWidget(self._notif_icon)
 
         self._notif_text = QLabel(f"{APP_NAME} v{APP_VERSION} — Ready")
-        self._notif_text.setFont(QFont(FONT_FAMILY, 11, QFont.DemiBold))
+        self._notif_text.setFont(QFont(FONT_FAMILY, 10))
         self._notif_text.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         nb_layout.addWidget(self._notif_text, 1)
 
         self._notif_detail = QLabel("")
-        self._notif_detail.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
+        self._notif_detail.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px; background: transparent;")
         nb_layout.addWidget(self._notif_detail)
 
         self._notif_bar.setLayout(nb_layout)
@@ -1694,7 +1695,7 @@ class StockySuite(QMainWindow):
         for tab_name, icon_key, factory in panels:
             try:
                 panel = factory()
-                icon = StockyIcons.get_icon(icon_key, 18, BRAND_PRIMARY)
+                icon = StockyIcons.get_icon(icon_key, 22, BRAND_PRIMARY)
                 self.tabs.addTab(panel, icon, tab_name)
                 # Store reference for cross-panel access
                 attr = tab_name.lower().replace(" ", "_")
@@ -1730,34 +1731,37 @@ class StockySuite(QMainWindow):
             self.dashboard.refresh()
 
     def _on_log(self, msg, level):
-        """Update the notification bar with color-coded messages."""
+        """Update the notification bar — subtle, elegant, color-coded."""
         from core.ui.icons import StockyIcons
+        from core.ui.animations import FadeIn
 
         icon_map = {
-            "info":   ("check",   BRAND_PRIMARY, BRAND_PRIMARY),
-            "trade":  ("bolt",    BRAND_ACCENT,  BRAND_ACCENT),
-            "warn":   ("warning", COLOR_HOLD,    COLOR_HOLD),
-            "error":  ("x_mark",  COLOR_SELL,    COLOR_SELL),
-            "system": ("settings",TEXT_MUTED,    TEXT_MUTED),
+            "info":   ("check",    BRAND_PRIMARY, TEXT_SECONDARY),
+            "trade":  ("bolt",     BRAND_ACCENT,  BRAND_ACCENT),
+            "warn":   ("warning",  COLOR_HOLD,    COLOR_HOLD),
+            "error":  ("x_mark",   COLOR_SELL,    COLOR_SELL),
+            "system": ("settings", TEXT_MUTED,    TEXT_MUTED),
         }
         icon_name, icon_color, text_color = icon_map.get(level, ("check", TEXT_MUTED, TEXT_MUTED))
 
-        self._notif_icon.setPixmap(StockyIcons.get(icon_name, 16, icon_color))
+        self._notif_icon.setPixmap(StockyIcons.get(icon_name, 18, icon_color))
         self._notif_text.setText(msg)
-        self._notif_text.setStyleSheet(f"color: {text_color}; background: transparent; font-weight: 600;")
+        self._notif_text.setStyleSheet(f"color: {text_color}; background: transparent;")
         self._notif_detail.setText(datetime.now().strftime("%H:%M:%S"))
 
-        # Flash the border color briefly to draw attention
-        border_color = text_color
+        # Subtle border accent that fades
+        accent = icon_color + "80"  # 50% opacity
         self._notif_bar.setStyleSheet(f"""
             background-color: {BG_DARK};
-            border-top: 2px solid {border_color};
+            border-top: 1px solid {accent};
         """)
-        # Fade border back to subtle after 3 seconds
-        QTimer.singleShot(3000, lambda: self._notif_bar.setStyleSheet(f"""
+        QTimer.singleShot(4000, lambda: self._notif_bar.setStyleSheet(f"""
             background-color: {BG_DARK};
-            border-top: 2px solid {BRAND_PRIMARY}40;
+            border-top: 1px solid {BORDER};
         """))
+
+        # Fade in the text smoothly
+        FadeIn(self._notif_text, duration=300)
 
     # ── UI Scaling (Ctrl+/-, Ctrl+0 to reset) ─────────────────────────────
 

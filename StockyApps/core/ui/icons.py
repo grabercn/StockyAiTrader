@@ -133,12 +133,10 @@ class StockyIcons:
     @staticmethod
     def get(name, size=20, color="#94a3b8"):
         """
-        Get an icon as a QPixmap.
+        Get an icon as a QPixmap, rendered at high resolution for crisp display.
 
-        Args:
-            name:  Icon name (see _SVGS keys)
-            size:  Pixel size (icons are square)
-            color: Hex color string for the icon stroke/fill
+        Renders at 2x the requested size internally then scales down with
+        smooth filtering, producing crisp icons even on high-DPI screens.
         """
         key = (name, size, color)
         if key in _cache:
@@ -146,19 +144,26 @@ class StockyIcons:
 
         svg_template = _SVGS.get(name)
         if not svg_template:
-            # Return empty pixmap for unknown icons
             return QPixmap(size, size)
 
         svg_str = svg_template.format(color=color)
         svg_bytes = QByteArray(svg_str.encode("utf-8"))
 
         renderer = QSvgRenderer(svg_bytes)
-        pixmap = QPixmap(size, size)
+
+        # Render at 2x for crisp high-DPI display
+        render_size = size * 2
+        pixmap = QPixmap(render_size, render_size)
         pixmap.fill(Qt.transparent)
 
         painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         renderer.render(painter)
         painter.end()
+
+        # Scale down with smooth filtering
+        pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         _cache[key] = pixmap
         return pixmap
