@@ -21,7 +21,7 @@ import shutil
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 APP_NAME = "StockyAiTrader"
-MAIN_SCRIPT = "StockyHub.py"
+MAIN_SCRIPT = "StockySuite.py"
 ICON_FILE = None  # Set to "icon.ico" if you have one
 
 # Files/folders to bundle WITH the exe (data files, not Python)

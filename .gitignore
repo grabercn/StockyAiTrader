@@ -161,6 +161,7 @@ cython_debug/
 /results
 /models
 /logs
+/tax_reports
 settings.json
 signal.json
 trade_history.json
