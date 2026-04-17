@@ -38,6 +38,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "StockyApps"))
 
 from core.branding import *
+from core.branding import get_stylesheet, detect_system_theme
 from core.event_bus import EventBus
 from core.risk import RiskManager
 from core.broker import AlpacaBroker
@@ -906,10 +907,25 @@ class SettingsPanel(QWidget):
         profile_box.setLayout(pl)
         inner_layout.addWidget(profile_box)
 
+        # Appearance
+        appear_box = QGroupBox("Appearance")
+        al2 = QHBoxLayout()
+        al2.addWidget(QLabel("Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Auto (System)", "Dark", "Light"])
+        # Set current
+        settings = load_settings()
+        theme = settings.get("theme", "auto")
+        idx_map = {"auto": 0, "dark": 1, "light": 2}
+        self.theme_combo.setCurrentIndex(idx_map.get(theme, 0))
+        self.theme_combo.currentIndexChanged.connect(self._change_theme)
+        al2.addWidget(self.theme_combo, 1)
+        appear_box.setLayout(al2)
+        inner_layout.addWidget(appear_box)
+
         # API Keys
         keys_box = QGroupBox("API Keys")
         kl = QFormLayout()
-        settings = load_settings()
         self.inputs = {}
         for key, label in [("alpaca_api_key", "Alpaca API Key"), ("alpaca_secret_key", "Alpaca Secret Key")]:
             inp = QLineEdit(settings.get(key, ""))
@@ -975,6 +991,22 @@ class SettingsPanel(QWidget):
         layout.addWidget(scroll)
         self.setLayout(layout)
         self._refresh()
+
+    def _change_theme(self, index):
+        theme_map = {0: "auto", 1: "dark", 2: "light"}
+        theme = theme_map.get(index, "auto")
+        settings = load_settings()
+        settings["theme"] = theme
+        save_settings(settings)
+        # Apply immediately to the main window
+        main_window = self.window()
+        if main_window:
+            main_window.setStyleSheet(get_stylesheet(theme))
+            if hasattr(main_window, '_theme'):
+                main_window._theme = theme
+            if hasattr(main_window, '_apply_scale'):
+                main_window._apply_scale()
+        self.bus.log_entry.emit(f"Theme changed to: {theme}", "system")
 
     def _save_keys(self):
         settings = load_settings()
@@ -1414,7 +1446,11 @@ class StockySuite(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.setGeometry(50, 50, 1500, 950)
-        self.setStyleSheet(SUITE_STYLESHEET)
+
+        # Load theme from settings or auto-detect from Windows
+        settings = load_settings()
+        self._theme = settings.get("theme", "auto")
+        self.setStyleSheet(get_stylesheet(self._theme))
 
         if os.path.exists(ICON_FILE):
             self.setWindowIcon(QIcon(ICON_FILE))
@@ -1435,10 +1471,23 @@ class StockySuite(QMainWindow):
         )
 
         # Refresh dashboard on startup
-        QTimer.singleShot(500, self.dashboard.refresh)
+        if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh'):
+            QTimer.singleShot(500, self.dashboard.refresh)
 
         # Activity feed forwarding
         self.event_bus.log_entry.connect(self._on_log)
+
+        # UI scaling — start larger, allow Ctrl+/- zoom
+        self._scale = 1.15  # Start 15% bigger than default
+        self._apply_scale()
+
+        # Keyboard shortcuts for zoom
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        QShortcut(QKeySequence("Ctrl+="), self, lambda: self._zoom(0.1))
+        QShortcut(QKeySequence("Ctrl++"), self, lambda: self._zoom(0.1))
+        QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-0.1))
+        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._reset_zoom())
 
         log_event("startup", f"{APP_NAME} v{APP_VERSION} launched")
 
@@ -1508,6 +1557,34 @@ class StockySuite(QMainWindow):
     def _on_log(self, msg, level):
         # Forward to status bar for quick glance
         self.statusBar().showMessage(f"{datetime.now().strftime('%H:%M:%S')} — {msg}", 10000)
+
+    # ── UI Scaling (Ctrl+/-, Ctrl+0 to reset) ─────────────────────────────
+
+    def _apply_scale(self):
+        """Apply the current scale factor to the entire UI via font size."""
+        base_size = int(FONT_SIZE_BODY * self._scale)
+        theme = getattr(self, '_theme', 'auto')
+        base_sheet = get_stylesheet(theme)
+        self.setStyleSheet(base_sheet + f"""
+            * {{ font-size: {base_size}px; }}
+            QTabBar::tab {{
+                font-size: {base_size}px;
+                padding: {int(8*self._scale)}px {int(18*self._scale)}px;
+                min-width: 0px;
+            }}
+            QTabBar {{ qproperty-expanding: 0; }}
+        """)
+        self.statusBar().showMessage(
+            f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", 3000
+        )
+
+    def _zoom(self, delta):
+        self._scale = max(0.7, min(2.0, self._scale + delta))
+        self._apply_scale()
+
+    def _reset_zoom(self):
+        self._scale = 1.0
+        self._apply_scale()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

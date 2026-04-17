@@ -7,7 +7,7 @@ Import from here instead of hardcoding values.
 
 # ─── App Identity ─────────────────────────────────────────────────────────────
 APP_NAME = "Stocky Suite"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.3.0"
 APP_TAGLINE = "AI-Powered Trading Suite"
 APP_AUTHOR = "grabercn"
 APP_URL = "https://github.com/grabercn/StockyAiTrader"
@@ -247,6 +247,165 @@ SUITE_STYLESHEET = f"""
         font-size: {FONT_SIZE_SMALL}px;
     }}
 """
+
+
+# ─── Light Theme ──────────────────────────────────────────────────────────────
+LIGHT_STYLESHEET = f"""
+    * {{
+        font-family: "{FONT_FAMILY}";
+        font-size: {FONT_SIZE_BODY}px;
+    }}
+    QMainWindow, QWidget {{
+        background-color: #f8fafc;
+        color: #1e293b;
+    }}
+    QLabel {{
+        color: #475569;
+    }}
+    QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        padding: 7px 10px;
+        color: #1e293b;
+        border-radius: 6px;
+    }}
+    QLineEdit:focus, QComboBox:focus {{
+        border: 1px solid {BRAND_PRIMARY};
+    }}
+    QPushButton {{
+        background-color: {BRAND_PRIMARY};
+        color: white;
+        padding: 8px 18px;
+        border-radius: 6px;
+        font-weight: 600;
+        border: none;
+    }}
+    QPushButton:hover {{
+        background-color: #38bdf8;
+    }}
+    QPushButton:disabled {{
+        background-color: #e2e8f0;
+        color: #94a3b8;
+    }}
+    QGroupBox {{
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        margin-top: 12px;
+        padding: 16px 12px 12px 12px;
+        color: #475569;
+        font-weight: 600;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 14px;
+        padding: 0 6px;
+        color: {BRAND_PRIMARY};
+    }}
+    QTextEdit {{
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        color: #1e293b;
+        font-family: "{FONT_MONO}";
+        font-size: {FONT_SIZE_SMALL}px;
+        border-radius: 6px;
+    }}
+    QTableWidget {{
+        background-color: #ffffff;
+        color: #1e293b;
+        gridline-color: #e2e8f0;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+    }}
+    QHeaderView::section {{
+        background-color: #f1f5f9;
+        color: #475569;
+        padding: 6px 8px;
+        border: none;
+        border-bottom: 2px solid {BRAND_PRIMARY};
+        font-weight: 600;
+    }}
+    QTabWidget::pane {{
+        border: 1px solid #e2e8f0;
+        background-color: #f8fafc;
+    }}
+    QTabBar::tab {{
+        background-color: #f1f5f9;
+        color: #64748b;
+        padding: 10px 20px;
+        border: 1px solid #e2e8f0;
+        border-bottom: none;
+        border-radius: 6px 6px 0 0;
+        margin-right: 2px;
+        font-weight: 600;
+    }}
+    QTabBar::tab:selected {{
+        background-color: #f8fafc;
+        color: {BRAND_PRIMARY};
+        border-bottom: 2px solid {BRAND_PRIMARY};
+    }}
+    QProgressBar {{
+        background-color: #e2e8f0;
+        border: none;
+        border-radius: 6px;
+        text-align: center;
+        color: #1e293b;
+        height: 22px;
+    }}
+    QProgressBar::chunk {{
+        background-color: {BRAND_ACCENT};
+        border-radius: 5px;
+    }}
+    QCheckBox {{ color: #1e293b; }}
+    QCheckBox::indicator {{
+        width: 18px; height: 18px; border-radius: 4px;
+        border: 2px solid #cbd5e1; background-color: #ffffff;
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {BRAND_PRIMARY}; border-color: {BRAND_PRIMARY};
+    }}
+    QScrollBar:vertical {{
+        background-color: #f8fafc; width: 10px; border: none;
+    }}
+    QScrollBar::handle:vertical {{
+        background-color: #cbd5e1; border-radius: 5px; min-height: 30px;
+    }}
+    QMenuBar {{
+        background-color: #f8fafc; color: #475569; border-bottom: 1px solid #e2e8f0;
+    }}
+    QMenuBar::item:selected {{
+        background-color: {BRAND_PRIMARY}; color: white; border-radius: 4px;
+    }}
+    QMenu {{
+        background-color: #ffffff; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 6px;
+    }}
+    QMenu::item:selected {{
+        background-color: {BRAND_PRIMARY}; border-radius: 4px;
+    }}
+"""
+
+
+# ─── Theme Detection & Switching ─────────────────────────────────────────────
+
+def detect_system_theme():
+    """Detect Windows dark/light mode from registry. Returns 'dark' or 'light'."""
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        )
+        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return "light" if value == 1 else "dark"
+    except Exception:
+        return "dark"  # Default to dark
+
+
+def get_stylesheet(theme="auto"):
+    """Get the stylesheet for a given theme. 'auto' detects from system."""
+    if theme == "auto":
+        theme = detect_system_theme()
+    return LIGHT_STYLESHEET if theme == "light" else SUITE_STYLESHEET
 
 
 def log_html(msg, level="info"):
