@@ -173,19 +173,12 @@ class BootScreen(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # Scale to screen resolution
-        screen = QApplication.primaryScreen()
-        geo = screen.geometry()
-        dpi = screen.logicalDotsPerInch()
-        scale = 1.5 if geo.width() >= 2560 else (1.2 if geo.width() >= 1920 else 1.0)
-        if dpi > 120:
-            scale *= 1.1
-
-        bw = int(580 * scale)
-        bh = int(420 * scale)
+        # Size — Qt high DPI handles scaling, so use logical pixels
+        bw, bh = 520, 380
         self.setFixedSize(bw, bh)
-        self.move((geo.width() - bw) // 2, (geo.height() - bh) // 2)
-        self._scale = scale
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.move((screen.width() - bw) // 2, (screen.height() - bh) // 2)
+        scale = 1.0  # Qt high DPI does the heavy lifting
 
         # Animated background
         self._bg = _AnimatedBackground(self)

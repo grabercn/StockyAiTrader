@@ -231,14 +231,9 @@ class SetupWizard(QDialog):
         self.setWindowTitle(f"{APP_NAME} — Welcome")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        # Scale to screen resolution
-        screen = QApplication.primaryScreen()
-        geo = screen.geometry()
-        dpi = screen.logicalDotsPerInch()
-        self._scale = 1.5 if geo.width() >= 2560 else (1.2 if geo.width() >= 1920 else 1.0)
-        if dpi > 120:
-            self._scale *= 1.1
-        self.setFixedSize(int(620 * self._scale), int(560 * self._scale))
+        # Qt high DPI handles scaling — use logical pixels
+        self._scale = 1.0
+        self.setFixedSize(580, 520)
 
         # Background
         self._bg = _WizardBackground(self)
@@ -502,31 +497,23 @@ class SetupWizard(QDialog):
         self.profile_combo.setCurrentIndex(1)  # Balanced
         layout.addWidget(self.profile_combo)
 
-        # Profile descriptions
-        descs = {
-            "Max": ("Full power — all AI models and addons active", "16GB+ RAM recommended"),
-            "Balanced": ("Smart defaults — core AI + lightweight addons", "Works great on most laptops"),
-            "Light": ("Speed first — API-only addons, no heavy models", "4GB+ RAM, older hardware"),
-            "Minimal": ("Core engine only — maximum speed, no addons", "Fastest possible"),
-        }
-        for name, (desc, note) in descs.items():
-            card = QFrame()
-            card.setStyleSheet(f"""
-                QFrame {{ background-color: {theme.color('bg_card')}; border: 1px solid {theme.color('border')};
-                    border-radius: 8px; padding: 8px; }}
-            """)
-            cl = QVBoxLayout()
-            cl.setContentsMargins(12, 8, 12, 8)
-            cl.setSpacing(2)
-            n = QLabel(name)
-            n.setStyleSheet(f"color: {BRAND_PRIMARY}; font-weight: 700; font-size: 12px; background: transparent; border: none;")
-            cl.addWidget(n)
-            d = QLabel(f"{desc}  ·  {note}")
-            d.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px; background: transparent; border: none;")
-            d.setWordWrap(True)
-            cl.addWidget(d)
-            card.setLayout(cl)
-            layout.addWidget(card)
+        # Profile descriptions — compact list
+        descs = [
+            ("Max", "All AI models + addons · 16GB+ RAM"),
+            ("Balanced", "Core AI + lightweight addons · Recommended"),
+            ("Light", "API-only addons, no heavy models · Fast"),
+            ("Minimal", "Core engine only · Fastest possible"),
+        ]
+        for name, desc in descs:
+            row = QHBoxLayout()
+            n = QLabel(f"  {name}")
+            n.setStyleSheet(f"color: {BRAND_PRIMARY}; font-weight: 700; font-size: 11px; background: transparent;")
+            n.setFixedWidth(80)
+            row.addWidget(n)
+            d = QLabel(desc)
+            d.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px; background: transparent;")
+            row.addWidget(d, 1)
+            layout.addLayout(row)
 
         layout.addStretch()
         page.setLayout(layout)

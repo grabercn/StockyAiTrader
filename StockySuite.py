@@ -1487,7 +1487,16 @@ class StockySuite(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
-        self.setGeometry(50, 50, 1500, 950)
+        # Size relative to screen (85% width, 85% height)
+        try:
+            screen = QApplication.primaryScreen().availableGeometry()
+            w = int(screen.width() * 0.85)
+            h = int(screen.height() * 0.85)
+            x = (screen.width() - w) // 2
+            y = (screen.height() - h) // 2
+            self.setGeometry(x, y, w, h)
+        except Exception:
+            self.setGeometry(50, 50, 1200, 800)
 
         # Load theme from settings or auto-detect from Windows
         settings = load_settings()
@@ -1638,18 +1647,17 @@ class StockySuite(QMainWindow):
             # Qt high DPI scaling is active — ratio > 1 means it's already scaling
             # Just add a slight comfort bump
             if ratio >= 1.5:
-                return 1.15  # Qt already scaled 1.5x, add 15%
+                return 1.0   # Qt already scaled 1.5x — don't double-scale
             elif ratio > 1.0:
-                return 1.1
+                return 1.05
             else:
-                # No system scaling — we need to compensate more
                 w = screen.geometry().width()
                 if w >= 2560:
-                    return 1.5
+                    return 1.3
                 elif w >= 1920:
-                    return 1.25
+                    return 1.15
                 else:
-                    return 1.1
+                    return 1.05
         except Exception:
             return 1.15
 
