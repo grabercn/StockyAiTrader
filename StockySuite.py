@@ -1497,21 +1497,25 @@ class StockySuite(QMainWindow):
 
         # Create panels — each wrapped in try/except so one bad panel
         # doesn't kill the entire app
+        from core.ui.icons import StockyIcons
+
+        # Tab definitions: (name, icon_key, factory)
         panels = [
-            ("Dashboard",   lambda: DashboardPanel(self.broker, self.event_bus)),
-            ("Scanner",     lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
-            ("Day Trade",   lambda: DayTradePanel(self.broker, self.risk_manager, self.event_bus)),
-            ("Long Trade",  lambda: LongTradePanel(self.event_bus)),
-            ("Logs",        lambda: LogsPanel(self.event_bus)),
-            ("Tax Reports", lambda: TaxPanel(self.broker, self.event_bus)),
-            ("Testing",     lambda: TestingPanel(self.broker, self.event_bus)),
-            ("Settings",    lambda: SettingsPanel(self.event_bus)),
+            ("Dashboard",   "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
+            ("Scanner",     "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Day Trade",   "bolt",      lambda: DayTradePanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Long Trade",  "chart_up",  lambda: LongTradePanel(self.event_bus)),
+            ("Logs",        "log",       lambda: LogsPanel(self.event_bus)),
+            ("Tax Reports", "tax",       lambda: TaxPanel(self.broker, self.event_bus)),
+            ("Testing",     "test",      lambda: TestingPanel(self.broker, self.event_bus)),
+            ("Settings",    "settings",  lambda: SettingsPanel(self.event_bus)),
         ]
 
-        for tab_name, factory in panels:
+        for tab_name, icon_key, factory in panels:
             try:
                 panel = factory()
-                self.tabs.addTab(panel, tab_name)
+                icon = StockyIcons.get_icon(icon_key, 18, BRAND_PRIMARY)
+                self.tabs.addTab(panel, icon, tab_name)
                 # Store reference for cross-panel access
                 attr = tab_name.lower().replace(" ", "_")
                 setattr(self, attr, panel)
