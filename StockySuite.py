@@ -500,10 +500,10 @@ class ScannerPanel(QWidget):
 
     def _auto_invest(self):
         if not self.selected:
-            self.bus.log_entry.emit("No tickers selected", "warn")
+            self.bus.log_entry.emit("Select tickers first — check the boxes next to stocks you want to invest in", "warn")
             return
         if not self.broker:
-            self.bus.log_entry.emit("Alpaca not configured", "error")
+            self.bus.log_entry.emit("Alpaca API not connected — go to Settings tab and enter your API keys from alpaca.markets", "error")
             return
 
         actionable = [r for r in self.results if r.ticker in self.selected and r.action in ("BUY", "SELL") and r.position_size > 0]
@@ -1607,12 +1607,35 @@ class StockySuite(QMainWindow):
         # Build UI
         self._build()
 
-        # Status bar
-        self.statusBar().showMessage(f"{APP_NAME} v{APP_VERSION} — {APP_TAGLINE}")
-        self.statusBar().setStyleSheet(
-            f"background-color: {BG_DARK}; color: {TEXT_MUTED}; "
-            f"border-top: 1px solid {BORDER}; padding: 4px;"
-        )
+        # Notification bar (replaces plain status bar)
+        self._notif_bar = QWidget()
+        self._notif_bar.setMinimumHeight(36)
+        self._notif_bar.setStyleSheet(f"""
+            background-color: {BG_DARK};
+            border-top: 2px solid {BRAND_PRIMARY}40;
+        """)
+        nb_layout = QHBoxLayout()
+        nb_layout.setContentsMargins(16, 4, 16, 4)
+        nb_layout.setSpacing(10)
+
+        from core.ui.icons import StockyIcons
+        self._notif_icon = QLabel()
+        self._notif_icon.setPixmap(StockyIcons.get("check", 16, BRAND_PRIMARY))
+        self._notif_icon.setStyleSheet("background: transparent;")
+        nb_layout.addWidget(self._notif_icon)
+
+        self._notif_text = QLabel(f"{APP_NAME} v{APP_VERSION} — Ready")
+        self._notif_text.setFont(QFont(FONT_FAMILY, 11, QFont.DemiBold))
+        self._notif_text.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        nb_layout.addWidget(self._notif_text, 1)
+
+        self._notif_detail = QLabel("")
+        self._notif_detail.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
+        nb_layout.addWidget(self._notif_detail)
+
+        self._notif_bar.setLayout(nb_layout)
+        self.statusBar().addPermanentWidget(self._notif_bar, 1)
+        self.statusBar().setStyleSheet("border: none; padding: 0; margin: 0;")
 
         # Refresh dashboard on startup
         if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh'):
@@ -1707,8 +1730,34 @@ class StockySuite(QMainWindow):
             self.dashboard.refresh()
 
     def _on_log(self, msg, level):
-        # Forward to status bar for quick glance
-        self.statusBar().showMessage(f"{datetime.now().strftime('%H:%M:%S')} — {msg}", 10000)
+        """Update the notification bar with color-coded messages."""
+        from core.ui.icons import StockyIcons
+
+        icon_map = {
+            "info":   ("check",   BRAND_PRIMARY, BRAND_PRIMARY),
+            "trade":  ("bolt",    BRAND_ACCENT,  BRAND_ACCENT),
+            "warn":   ("warning", COLOR_HOLD,    COLOR_HOLD),
+            "error":  ("x_mark",  COLOR_SELL,    COLOR_SELL),
+            "system": ("settings",TEXT_MUTED,    TEXT_MUTED),
+        }
+        icon_name, icon_color, text_color = icon_map.get(level, ("check", TEXT_MUTED, TEXT_MUTED))
+
+        self._notif_icon.setPixmap(StockyIcons.get(icon_name, 16, icon_color))
+        self._notif_text.setText(msg)
+        self._notif_text.setStyleSheet(f"color: {text_color}; background: transparent; font-weight: 600;")
+        self._notif_detail.setText(datetime.now().strftime("%H:%M:%S"))
+
+        # Flash the border color briefly to draw attention
+        border_color = text_color
+        self._notif_bar.setStyleSheet(f"""
+            background-color: {BG_DARK};
+            border-top: 2px solid {border_color};
+        """)
+        # Fade border back to subtle after 3 seconds
+        QTimer.singleShot(3000, lambda: self._notif_bar.setStyleSheet(f"""
+            background-color: {BG_DARK};
+            border-top: 2px solid {BRAND_PRIMARY}40;
+        """))
 
     # ── UI Scaling (Ctrl+/-, Ctrl+0 to reset) ─────────────────────────────
 
@@ -1726,9 +1775,7 @@ class StockySuite(QMainWindow):
             }}
             QTabBar {{ qproperty-expanding: 0; }}
         """)
-        self.statusBar().showMessage(
-            f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", 3000
-        )
+        self._on_log(f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", "system")
 
     @staticmethod
     def _detect_ideal_scale():
