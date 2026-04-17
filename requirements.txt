@@ -13,3 +13,4 @@ joblib
 transformers
 torch
 pytz
+pytest

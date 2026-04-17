@@ -26,9 +26,10 @@ from PyQt5.QtWidgets import (
     QGroupBox, QGridLayout, QTableWidget, QTableWidgetItem, QHeaderView,
     QCheckBox, QTabWidget, QSpinBox, QSplitter, QAction, QMessageBox,
     QAbstractItemView, QFormLayout, QDialog, QStatusBar, QScrollArea,
+    QSplashScreen, QGraphicsDropShadowEffect,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap
+from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPainter, QLinearGradient, QPen
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import pytz
@@ -1489,10 +1490,197 @@ class StockySuite(QMainWindow):
         self.statusBar().showMessage(f"{datetime.now().strftime('%H:%M:%S')} — {msg}", 10000)
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SPLASH SCREEN
+# ═════════════════════════════════════════════════════════════════════════════
+
+def create_splash_pixmap():
+    """Generate a premium splash screen image programmatically."""
+    w, h = 580, 360
+    pixmap = QPixmap(w, h)
+    pixmap.fill(QColor(0, 0, 0, 0))
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    # Background gradient (dark blue -> near black)
+    grad = QLinearGradient(0, 0, w, h)
+    grad.setColorAt(0, QColor(15, 17, 23))
+    grad.setColorAt(0.5, QColor(20, 25, 40))
+    grad.setColorAt(1, QColor(10, 12, 18))
+    painter.setBrush(grad)
+    painter.setPen(Qt.NoPen)
+    painter.drawRoundedRect(0, 0, w, h, 16, 16)
+
+    # Subtle border
+    painter.setPen(QPen(QColor(42, 45, 58), 1))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawRoundedRect(1, 1, w-2, h-2, 16, 16)
+
+    # Accent line at top
+    accent_grad = QLinearGradient(0, 0, w, 0)
+    accent_grad.setColorAt(0, QColor(14, 165, 233, 0))
+    accent_grad.setColorAt(0.3, QColor(14, 165, 233, 255))
+    accent_grad.setColorAt(0.7, QColor(16, 185, 129, 255))
+    accent_grad.setColorAt(1, QColor(16, 185, 129, 0))
+    painter.setPen(QPen(accent_grad, 3))
+    painter.drawLine(40, 4, w-40, 4)
+
+    # App icon (if exists)
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+    if os.path.exists(icon_path):
+        icon = QPixmap(icon_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap((w - 64) // 2, 40, icon)
+
+    # App name
+    painter.setPen(QColor(14, 165, 233))
+    painter.setFont(QFont("Segoe UI", 28, QFont.Bold))
+    painter.drawText(0, 115, w, 45, Qt.AlignCenter, APP_NAME)
+
+    # Tagline
+    painter.setPen(QColor(148, 163, 184))
+    painter.setFont(QFont("Segoe UI", 12))
+    painter.drawText(0, 160, w, 25, Qt.AlignCenter, APP_TAGLINE)
+
+    # Version
+    painter.setPen(QColor(100, 116, 139))
+    painter.setFont(QFont("Segoe UI", 10))
+    painter.drawText(0, 188, w, 20, Qt.AlignCenter, f"v{APP_VERSION}")
+
+    # Feature list
+    features = [
+        "LightGBM + FinBERT AI Engine",
+        "10 Signal Addons  |  38 Features",
+        "Multi-Stock Scanner  |  Auto-Invest",
+        "Risk Management  |  Tax Reports",
+    ]
+    painter.setFont(QFont("Segoe UI", 9))
+    for i, feat in enumerate(features):
+        painter.setPen(QColor(100, 116, 139))
+        painter.drawText(0, 225 + i * 20, w, 18, Qt.AlignCenter, feat)
+
+    # Loading text area (will be updated)
+    painter.setPen(QColor(14, 165, 233, 150))
+    painter.setFont(QFont("Segoe UI", 9))
+    painter.drawText(0, h - 30, w, 20, Qt.AlignCenter, "Loading...")
+
+    # Copyright
+    painter.setPen(QColor(64, 74, 91))
+    painter.setFont(QFont("Segoe UI", 8))
+    painter.drawText(0, h - 16, w, 14, Qt.AlignCenter, f"2024-2026 {APP_AUTHOR}  |  {APP_URL}")
+
+    painter.end()
+    return pixmap
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ABOUT DIALOG
+# ═════════════════════════════════════════════════════════════════════════════
+
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"About {APP_NAME}")
+        self.setFixedSize(420, 350)
+        self.setStyleSheet(SUITE_STYLESHEET)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(12)
+
+        # Icon
+        icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+        if os.path.exists(icon_path):
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(QPixmap(icon_path).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            layout.addWidget(icon_lbl)
+
+        name_lbl = QLabel(APP_NAME)
+        name_lbl.setFont(QFont(FONT_FAMILY, 20, QFont.Bold))
+        name_lbl.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        name_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(name_lbl)
+
+        ver_lbl = QLabel(f"Version {APP_VERSION}")
+        ver_lbl.setAlignment(Qt.AlignCenter)
+        ver_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+        layout.addWidget(ver_lbl)
+
+        tag_lbl = QLabel(APP_TAGLINE)
+        tag_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(tag_lbl)
+
+        desc = QLabel(
+            "A comprehensive AI-powered trading suite featuring\n"
+            "LightGBM machine learning, FinBERT sentiment analysis,\n"
+            "10 pluggable signal addons, multi-stock scanning,\n"
+            "risk management, and automated portfolio investing.\n\n"
+            "68 unit tests  |  38 ML features  |  4 hardware profiles"
+        )
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        layout.addWidget(desc)
+
+        link = QLabel(f'<a href="{APP_URL}" style="color: {BRAND_PRIMARY};">{APP_URL}</a>')
+        link.setOpenExternalLinks(True)
+        link.setAlignment(Qt.AlignCenter)
+        layout.addWidget(link)
+
+        copy_lbl = QLabel(f"2024-2026 {APP_AUTHOR}")
+        copy_lbl.setAlignment(Qt.AlignCenter)
+        copy_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        layout.addWidget(copy_lbl)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn, alignment=Qt.AlignCenter)
+
+        self.setLayout(layout)
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
+
+    # Show splash screen
+    splash_pixmap = create_splash_pixmap()
+    splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
+    splash.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    splash.show()
+    app.processEvents()
+
+    def splash_msg(msg):
+        splash.showMessage(
+            f"  {msg}", Qt.AlignBottom | Qt.AlignLeft,
+            QColor(14, 165, 233),
+        )
+        app.processEvents()
+
+    # Load modules with splash feedback
+    splash_msg("Loading core modules...")
+    time.sleep(0.3)
+
+    splash_msg("Discovering addons...")
+    from addons import discover_addons
+    discover_addons()
+    time.sleep(0.2)
+
+    splash_msg("Initializing trading engine...")
+    time.sleep(0.3)
+
+    splash_msg("Building interface...")
     suite = StockySuite()
+
+    # Add About to menu bar
+    help_menu = suite.menuBar().addMenu("Help")
+    about_action = QAction("About Stocky Suite", suite)
+    about_action.triggered.connect(lambda: AboutDialog(suite).exec_())
+    help_menu.addAction(about_action)
+
+    splash_msg("Ready.")
+    time.sleep(0.4)
+
+    splash.finish(suite)
     suite.show()
     sys.exit(app.exec_())
