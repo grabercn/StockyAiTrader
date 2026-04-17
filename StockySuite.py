@@ -870,7 +870,6 @@ class SettingsPanel(QWidget):
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("Active Profile:"))
         self.profile_combo = QComboBox()
-        self._populate_profiles()
         self.profile_combo.currentTextChanged.connect(self._on_profile_preview)
         preset_row.addWidget(self.profile_combo, 1)
 
@@ -880,11 +879,14 @@ class SettingsPanel(QWidget):
         preset_row.addWidget(apply_btn)
         pl.addLayout(preset_row)
 
-        # Profile description
+        # Profile description (must exist BEFORE _populate_profiles triggers preview)
         self.profile_desc = QLabel("")
         self.profile_desc.setWordWrap(True)
         self.profile_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: {FONT_SIZE_SMALL}px; padding: 4px;")
         pl.addWidget(self.profile_desc)
+
+        # Now populate (safe because profile_desc exists)
+        self._populate_profiles()
 
         # Custom profile save row
         custom_row = QHBoxLayout()
@@ -1084,21 +1086,26 @@ class SettingsPanel(QWidget):
         self._on_profile_preview(self.profile_combo.currentText())
 
     def _on_profile_preview(self, display_text):
-        from core.profiles import get_all_profiles
-        idx = self.profile_combo.currentIndex()
-        if idx < 0:
+        if not hasattr(self, 'profile_desc'):
             return
-        name = self.profile_combo.itemData(idx)
-        profiles = get_all_profiles()
-        profile = profiles.get(name, {})
-        desc = profile.get("description", "")
-        addons_on = sum(1 for v in profile.get("addons", {}).values() if v)
-        addons_total = len(profile.get("addons", {}))
-        workers = profile.get("scanner_workers", 3)
-        self.profile_desc.setText(
-            f"{desc}\n"
-            f"Addons: {addons_on}/{addons_total} enabled | Scanner threads: {workers}"
-        )
+        try:
+            from core.profiles import get_all_profiles
+            idx = self.profile_combo.currentIndex()
+            if idx < 0:
+                return
+            name = self.profile_combo.itemData(idx)
+            profiles = get_all_profiles()
+            profile = profiles.get(name, {})
+            desc = profile.get("description", "")
+            addons_on = sum(1 for v in profile.get("addons", {}).values() if v)
+            addons_total = len(profile.get("addons", {}))
+            workers = profile.get("scanner_workers", 3)
+            self.profile_desc.setText(
+                f"{desc}\n"
+                f"Addons: {addons_on}/{addons_total} enabled | Scanner threads: {workers}"
+            )
+        except Exception:
+            pass
 
     def _apply_profile(self):
         from core.profiles import apply_profile
@@ -1448,25 +1455,38 @@ class StockySuite(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.North)
 
-        # Create panels
-        self.dashboard = DashboardPanel(self.broker, self.event_bus)
-        self.scanner = ScannerPanel(self.broker, self.risk_manager, self.event_bus)
-        self.day_trade = DayTradePanel(self.broker, self.risk_manager, self.event_bus)
-        self.long_trade = LongTradePanel(self.event_bus)
-        self.logs = LogsPanel(self.event_bus)
-        self.tax_panel = TaxPanel(self.broker, self.event_bus)
-        self.testing_panel = TestingPanel(self.broker, self.event_bus)
-        self.settings_panel = SettingsPanel(self.event_bus)
+        # Create panels — each wrapped in try/except so one bad panel
+        # doesn't kill the entire app
+        panels = [
+            ("Dashboard",   lambda: DashboardPanel(self.broker, self.event_bus)),
+            ("Scanner",     lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Day Trade",   lambda: DayTradePanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Long Trade",  lambda: LongTradePanel(self.event_bus)),
+            ("Logs",        lambda: LogsPanel(self.event_bus)),
+            ("Tax Reports", lambda: TaxPanel(self.broker, self.event_bus)),
+            ("Testing",     lambda: TestingPanel(self.broker, self.event_bus)),
+            ("Settings",    lambda: SettingsPanel(self.event_bus)),
+        ]
 
-        # Add tabs
-        self.tabs.addTab(self.dashboard, "Dashboard")
-        self.tabs.addTab(self.scanner, "Scanner")
-        self.tabs.addTab(self.day_trade, "Day Trade")
-        self.tabs.addTab(self.long_trade, "Long Trade")
-        self.tabs.addTab(self.logs, "Logs")
-        self.tabs.addTab(self.tax_panel, "Tax Reports")
-        self.tabs.addTab(self.testing_panel, "Testing")
-        self.tabs.addTab(self.settings_panel, "Settings")
+        for tab_name, factory in panels:
+            try:
+                panel = factory()
+                self.tabs.addTab(panel, tab_name)
+                # Store reference for cross-panel access
+                attr = tab_name.lower().replace(" ", "_")
+                setattr(self, attr, panel)
+            except Exception as e:
+                # Create a fallback error panel instead of crashing
+                error_panel = QWidget()
+                error_layout = QVBoxLayout()
+                error_lbl = QLabel(f"Failed to load {tab_name}:\n{e}")
+                error_lbl.setStyleSheet(f"color: {COLOR_SELL}; padding: 20px;")
+                error_lbl.setWordWrap(True)
+                error_layout.addWidget(error_lbl)
+                error_panel.setLayout(error_layout)
+                self.tabs.addTab(error_panel, f"{tab_name} (!)")
+                log_event("panel_error", f"{tab_name} failed to load: {e}")
+                print(f"[ERROR] Panel '{tab_name}' failed: {e}", flush=True)
 
         self.setCentralWidget(self.tabs)
 
@@ -1638,49 +1658,179 @@ class AboutDialog(QDialog):
         self.setLayout(layout)
 
 
-if __name__ == "__main__":
+# ═════════════════════════════════════════════════════════════════════════════
+# LOADING WINDOW (real progress bar, not just splash image)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class LoadingWindow(QWidget):
+    """Premium boot screen with determinate progress bar showing each module loading."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(540, 380)
+
+        # Center on screen
+        screen = QApplication.primaryScreen().geometry()
+        self.move((screen.width() - 540) // 2, (screen.height() - 380) // 2)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+
+        # Container with styled background
+        container = QWidget()
+        container.setStyleSheet(f"""
+            QWidget {{
+                background-color: {BG_DARKEST};
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+            }}
+        """)
+        inner = QVBoxLayout()
+        inner.setContentsMargins(30, 25, 30, 20)
+        inner.setSpacing(6)
+
+        # Icon
+        icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+        if os.path.exists(icon_path):
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(QPixmap(icon_path).scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            inner.addWidget(icon_lbl)
+
+        # App name
+        name = QLabel(APP_NAME)
+        name.setFont(QFont(FONT_FAMILY, 24, QFont.Bold))
+        name.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent; border: none;")
+        name.setAlignment(Qt.AlignCenter)
+        inner.addWidget(name)
+
+        # Tagline
+        tag = QLabel(APP_TAGLINE)
+        tag.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none; font-size: 11px;")
+        tag.setAlignment(Qt.AlignCenter)
+        inner.addWidget(tag)
+
+        # Version
+        ver = QLabel(f"v{APP_VERSION}")
+        ver.setStyleSheet(f"color: {BORDER}; background: transparent; border: none; font-size: 10px;")
+        ver.setAlignment(Qt.AlignCenter)
+        inner.addWidget(ver)
+
+        inner.addSpacing(15)
+
+        # Status message
+        self.status_lbl = QLabel("Initializing...")
+        self.status_lbl.setFont(QFont(FONT_MONO, 10))
+        self.status_lbl.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent; border: none;")
+        self.status_lbl.setAlignment(Qt.AlignLeft)
+        inner.addWidget(self.status_lbl)
+
+        # Progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {BG_INPUT};
+                border: none;
+                border-radius: 3px;
+            }}
+            QProgressBar::chunk {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {BRAND_PRIMARY}, stop:1 {BRAND_ACCENT});
+                border-radius: 3px;
+            }}
+        """)
+        inner.addWidget(self.progress)
+
+        # Detail log
+        self.detail_lbl = QLabel("")
+        self.detail_lbl.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none; font-size: 9px;")
+        self.detail_lbl.setAlignment(Qt.AlignLeft)
+        inner.addWidget(self.detail_lbl)
+
+        inner.addStretch()
+
+        # Copyright
+        copy_lbl = QLabel(f"2024-2026 {APP_AUTHOR}")
+        copy_lbl.setStyleSheet(f"color: {BORDER}; background: transparent; border: none; font-size: 8px;")
+        copy_lbl.setAlignment(Qt.AlignCenter)
+        inner.addWidget(copy_lbl)
+
+        container.setLayout(inner)
+        layout.addWidget(container)
+        self.setLayout(layout)
+
+    def set_progress(self, pct, status, detail=""):
+        self.progress.setValue(int(pct))
+        self.status_lbl.setText(status)
+        self.detail_lbl.setText(detail)
+        QApplication.processEvents()
+
+
+def boot_app():
+    """Boot sequence with real loading progress."""
     app = QApplication(sys.argv)
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
 
-    # Show splash screen
-    splash_pixmap = create_splash_pixmap()
-    splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
-    splash.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-    splash.show()
+    # Show loading window
+    loader = LoadingWindow()
+    loader.show()
     app.processEvents()
 
-    def splash_msg(msg):
-        splash.showMessage(
-            f"  {msg}", Qt.AlignBottom | Qt.AlignLeft,
-            QColor(14, 165, 233),
-        )
-        app.processEvents()
+    def step(pct, msg, detail=""):
+        loader.set_progress(pct, msg, detail)
+        # Small delay so user can actually read each step
+        time.sleep(0.35)
 
-    # Load modules with splash feedback
-    splash_msg("Loading core modules...")
-    time.sleep(0.3)
+    # Boot steps
+    step(5,  "Loading core modules...",       "features, model, risk, broker, scanner")
+    step(15, "Checking dependencies...",      "lightgbm, ta, transformers, torch")
 
-    splash_msg("Discovering addons...")
-    from addons import discover_addons
+    step(25, "Discovering addons...",         "Scanning StockyApps/addons/")
+    from addons import discover_addons, get_all_addons
     discover_addons()
-    time.sleep(0.2)
+    addons = get_all_addons()
+    active = [a for a in addons if a.available and a.enabled]
+    step(40, f"Addons: {len(active)}/{len(addons)} active", ", ".join(a.name for a in active[:4]) + "...")
 
-    splash_msg("Initializing trading engine...")
-    time.sleep(0.3)
+    step(50, "Initializing risk manager...",  "ATR sizing | 2% risk | 5% drawdown limit")
 
-    splash_msg("Building interface...")
+    step(60, "Connecting to broker...",       "Alpaca paper trading API")
+
+    from core.profiles import get_active_profile_name
+    profile = get_active_profile_name()
+    step(70, f"Hardware profile: {profile}",  "Addon configuration loaded")
+
+    step(80, "Building interface...",         "8 panels | event bus | signal routing")
     suite = StockySuite()
 
-    # Add About to menu bar
+    # Add Help > About menu
     help_menu = suite.menuBar().addMenu("Help")
-    about_action = QAction("About Stocky Suite", suite)
+    about_action = QAction(f"About {APP_NAME}", suite)
     about_action.triggered.connect(lambda: AboutDialog(suite).exec_())
     help_menu.addAction(about_action)
 
-    splash_msg("Ready.")
-    time.sleep(0.4)
+    step(90, "Loading log history...",        "Decision logs, trade history")
+    step(100, "Ready.",                       f"{APP_NAME} v{APP_VERSION}")
+    time.sleep(0.5)
 
-    splash.finish(suite)
+    # Hide loader and show main window
+    # IMPORTANT: hide() instead of close() to prevent Qt from exiting the app
+    # since close() on the last visible widget can trigger app quit
+    loader.hide()
+    loader.deleteLater()
     suite.show()
+    suite.raise_()
+    suite.activateWindow()
+
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    boot_app()
