@@ -846,7 +846,7 @@ class LogsPanel(QWidget):
 # ═════════════════════════════════════════════════════════════════════════════
 
 class SettingsPanel(QWidget):
-    """API keys, addon management, model management."""
+    """API keys, hardware profiles, addon management, model management."""
 
     def __init__(self, event_bus):
         super().__init__()
@@ -860,6 +860,48 @@ class SettingsPanel(QWidget):
         scroll.setWidgetResizable(True)
         inner = QWidget()
         inner_layout = QVBoxLayout()
+
+        # ── Hardware Profiles ──
+        profile_box = QGroupBox("Hardware Profile")
+        pl = QVBoxLayout()
+
+        # Preset selector row
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Active Profile:"))
+        self.profile_combo = QComboBox()
+        self._populate_profiles()
+        self.profile_combo.currentTextChanged.connect(self._on_profile_preview)
+        preset_row.addWidget(self.profile_combo, 1)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.setStyleSheet(f"background-color: {BRAND_ACCENT};")
+        apply_btn.clicked.connect(self._apply_profile)
+        preset_row.addWidget(apply_btn)
+        pl.addLayout(preset_row)
+
+        # Profile description
+        self.profile_desc = QLabel("")
+        self.profile_desc.setWordWrap(True)
+        self.profile_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: {FONT_SIZE_SMALL}px; padding: 4px;")
+        pl.addWidget(self.profile_desc)
+
+        # Custom profile save row
+        custom_row = QHBoxLayout()
+        self.custom_name = QLineEdit()
+        self.custom_name.setPlaceholderText("Custom profile name")
+        custom_row.addWidget(self.custom_name)
+        save_prof_btn = QPushButton("Save Current as Profile")
+        save_prof_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px;")
+        save_prof_btn.clicked.connect(self._save_custom_profile)
+        custom_row.addWidget(save_prof_btn)
+        del_prof_btn = QPushButton("Delete")
+        del_prof_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px;")
+        del_prof_btn.clicked.connect(self._delete_custom_profile)
+        custom_row.addWidget(del_prof_btn)
+        pl.addLayout(custom_row)
+
+        profile_box.setLayout(pl)
+        inner_layout.addWidget(profile_box)
 
         # API Keys
         keys_box = QGroupBox("API Keys")
@@ -1022,6 +1064,78 @@ class SettingsPanel(QWidget):
                       capture_output=True, timeout=120)
         discover_addons()
         self._refresh()
+
+    # ── Profile methods ───────────────────────────────────────────────────
+
+    def _populate_profiles(self):
+        from core.profiles import get_all_profiles, get_active_profile_name
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        profiles = get_all_profiles()
+        active = get_active_profile_name()
+        for i, name in enumerate(profiles):
+            is_custom = profiles[name].get("custom", False)
+            label = f"{name} (custom)" if is_custom else name
+            self.profile_combo.addItem(label, name)
+            if name == active:
+                self.profile_combo.setCurrentIndex(i)
+        self.profile_combo.blockSignals(False)
+        self._on_profile_preview(self.profile_combo.currentText())
+
+    def _on_profile_preview(self, display_text):
+        from core.profiles import get_all_profiles
+        idx = self.profile_combo.currentIndex()
+        if idx < 0:
+            return
+        name = self.profile_combo.itemData(idx)
+        profiles = get_all_profiles()
+        profile = profiles.get(name, {})
+        desc = profile.get("description", "")
+        addons_on = sum(1 for v in profile.get("addons", {}).values() if v)
+        addons_total = len(profile.get("addons", {}))
+        workers = profile.get("scanner_workers", 3)
+        self.profile_desc.setText(
+            f"{desc}\n"
+            f"Addons: {addons_on}/{addons_total} enabled | Scanner threads: {workers}"
+        )
+
+    def _apply_profile(self):
+        from core.profiles import apply_profile
+        idx = self.profile_combo.currentIndex()
+        if idx < 0:
+            return
+        name = self.profile_combo.itemData(idx)
+        ok, msg = apply_profile(name)
+        self.dl_status.setText(msg)
+        if ok:
+            self.bus.log_entry.emit(f"Profile applied: {name}", "system")
+            self.bus.settings_changed.emit(load_settings())
+            discover_addons()
+            self._refresh()
+
+    def _save_custom_profile(self):
+        from core.profiles import save_custom_profile, get_current_addon_states
+        name = self.custom_name.text().strip()
+        if not name:
+            self.dl_status.setText("Enter a profile name first.")
+            return
+        states = get_current_addon_states()
+        ok, msg = save_custom_profile(name, f"Custom profile: {name}", states)
+        self.dl_status.setText(msg)
+        if ok:
+            self._populate_profiles()
+            self.bus.log_entry.emit(f"Custom profile saved: {name}", "system")
+
+    def _delete_custom_profile(self):
+        from core.profiles import delete_custom_profile
+        idx = self.profile_combo.currentIndex()
+        if idx < 0:
+            return
+        name = self.profile_combo.itemData(idx)
+        ok, msg = delete_custom_profile(name)
+        self.dl_status.setText(msg)
+        if ok:
+            self._populate_profiles()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
