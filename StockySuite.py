@@ -141,34 +141,27 @@ class DashboardPanel(QWidget):
         self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
 
     def _build(self):
+        from core.widgets import StatCard, GradientDivider, SectionHeader
+
         layout = QVBoxLayout()
+        layout.setSpacing(12)
 
-        # Account stats row
-        stats = QGroupBox("Account Overview")
-        sg = QGridLayout()
-        self.lbl_portfolio = QLabel("--")
-        self.lbl_portfolio.setFont(QFont(FONT_FAMILY, 22, QFont.Bold))
-        self.lbl_portfolio.setStyleSheet(f"color: {BRAND_PRIMARY};")
-        sg.addWidget(QLabel("Portfolio Value"), 0, 0)
-        sg.addWidget(self.lbl_portfolio, 1, 0)
+        # Account stats row — premium stat cards
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(10)
 
-        self.lbl_buying = QLabel("--")
-        self.lbl_buying.setFont(QFont(FONT_FAMILY, 16))
-        sg.addWidget(QLabel("Buying Power"), 0, 1)
-        sg.addWidget(self.lbl_buying, 1, 1)
+        self.card_portfolio = StatCard("Portfolio Value", "--", BRAND_PRIMARY)
+        self.card_buying = StatCard("Buying Power", "--", BRAND_SECONDARY)
+        self.card_cash = StatCard("Cash", "--", TEXT_SECONDARY)
+        self.card_pnl = StatCard("Day P&L", "--", BRAND_ACCENT)
 
-        self.lbl_cash = QLabel("--")
-        self.lbl_cash.setFont(QFont(FONT_FAMILY, 16))
-        sg.addWidget(QLabel("Cash"), 0, 2)
-        sg.addWidget(self.lbl_cash, 1, 2)
+        cards_row.addWidget(self.card_portfolio)
+        cards_row.addWidget(self.card_buying)
+        cards_row.addWidget(self.card_cash)
+        cards_row.addWidget(self.card_pnl)
+        layout.addLayout(cards_row)
 
-        self.lbl_pnl = QLabel("--")
-        self.lbl_pnl.setFont(QFont(FONT_FAMILY, 16, QFont.Bold))
-        sg.addWidget(QLabel("Day P&L"), 0, 3)
-        sg.addWidget(self.lbl_pnl, 1, 3)
-
-        stats.setLayout(sg)
-        layout.addWidget(stats)
+        layout.addWidget(GradientDivider())
 
         # Chart
         self.figure = plt.Figure(figsize=(8, 3), dpi=100, facecolor=BG_DARKEST)
@@ -210,12 +203,11 @@ class DashboardPanel(QWidget):
         pnl = eq - leq
         pct = (pnl / leq * 100) if leq > 0 else 0
 
-        self.lbl_portfolio.setText(f"${pv:,.2f}")
-        self.lbl_buying.setText(f"${bp:,.2f}")
-        self.lbl_cash.setText(f"${cash:,.2f}")
-        c = COLOR_PROFIT if pnl >= 0 else COLOR_LOSS
-        self.lbl_pnl.setText(f"${pnl:+,.2f} ({pct:+.2f}%)")
-        self.lbl_pnl.setStyleSheet(f"color: {c}; font-weight: bold;")
+        self.card_portfolio.set_value(f"${pv:,.2f}")
+        self.card_buying.set_value(f"${bp:,.2f}")
+        self.card_cash.set_value(f"${cash:,.2f}")
+        pnl_color = COLOR_PROFIT if pnl >= 0 else COLOR_LOSS
+        self.card_pnl.set_value(f"${pnl:+,.2f} ({pct:+.2f}%)", pnl_color)
 
         # Positions
         positions = self.broker.get_positions()
@@ -514,16 +506,16 @@ class DayTradePanel(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
-        # Signal display
+        # Signal display — premium animated badge
+        from core.widgets import SignalBadge, GradientDivider
         sig_row = QHBoxLayout()
-        self.signal_lbl = QLabel("—")
-        self.signal_lbl.setFont(QFont(FONT_FAMILY, 26, QFont.Bold))
-        self.signal_lbl.setAlignment(Qt.AlignCenter)
-        sig_row.addWidget(self.signal_lbl)
+        self.signal_badge = SignalBadge()
+        sig_row.addWidget(self.signal_badge)
         self.stats_lbl = QLabel("")
         self.stats_lbl.setFont(QFont(FONT_MONO, 10))
         sig_row.addWidget(self.stats_lbl)
         layout.addLayout(sig_row)
+        layout.addWidget(GradientDivider())
 
         # Chart
         self.figure = plt.Figure(figsize=(8, 4), dpi=100, facecolor=BG_DARKEST)
@@ -590,9 +582,7 @@ class DayTradePanel(QWidget):
         sl = self.rm.stop_loss(price, atr, side)
         tp = self.rm.take_profit(price, atr, side)
 
-        colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
-        self.signal_lbl.setText(f"{act} {ticker}")
-        self.signal_lbl.setStyleSheet(f"color: {colors[act]};")
+        self.signal_badge.set_signal(f"{act} {ticker}", conf)
         self.stats_lbl.setText(
             f"${price:.2f} | Conf: {conf:.0%} | "
             f"SELL {p[0]:.0%} HOLD {p[1]:.0%} BUY {p[2]:.0%}\n"
@@ -1477,8 +1467,9 @@ class StockySuite(QMainWindow):
         # Activity feed forwarding
         self.event_bus.log_entry.connect(self._on_log)
 
-        # UI scaling — start larger, allow Ctrl+/- zoom
-        self._scale = 1.15  # Start 15% bigger than default
+        # UI scaling — load saved zoom or default to 130%
+        settings = load_settings()
+        self._scale = settings.get("ui_zoom", 1.30)
         self._apply_scale()
 
         # Keyboard shortcuts for zoom
@@ -1579,12 +1570,19 @@ class StockySuite(QMainWindow):
         )
 
     def _zoom(self, delta):
-        self._scale = max(0.7, min(2.0, self._scale + delta))
+        self._scale = max(0.7, min(2.0, round(self._scale + delta, 2)))
         self._apply_scale()
+        self._save_zoom()
 
     def _reset_zoom(self):
-        self._scale = 1.0
+        self._scale = 1.30
         self._apply_scale()
+        self._save_zoom()
+
+    def _save_zoom(self):
+        settings = load_settings()
+        settings["ui_zoom"] = self._scale
+        save_settings(settings)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
