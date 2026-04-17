@@ -317,11 +317,21 @@ class DetailedProgressBar(QWidget):
 
 
 class _GradientBar(QWidget):
-    """Internal: the actual painted gradient bar."""
+    """Internal: animated gradient bar with shimmer sweep effect."""
 
     def __init__(self):
         super().__init__()
         self._pct = 0.0
+        self._shimmer = 0.0
+
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(30)
+
+    def _tick(self):
+        self._shimmer = (self._shimmer + 0.02) % 1.0
+        if self._pct > 0:
+            self.update()
 
     def set_value(self, pct):
         self._pct = max(0.0, min(1.0, pct))
@@ -338,15 +348,37 @@ class _GradientBar(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(0, 0, w, h, h // 2, h // 2)
 
-        # Fill
         fill_w = int(w * self._pct)
-        if fill_w > 0:
-            from PyQt5.QtGui import QLinearGradient
+        if fill_w > 2:
+            from PyQt5.QtGui import QLinearGradient, QRadialGradient
+
+            # Base gradient
             grad = QLinearGradient(0, 0, fill_w, 0)
             grad.setColorAt(0, QColor("#0ea5e9"))
+            grad.setColorAt(0.5, QColor("#6366f1"))
             grad.setColorAt(1, QColor("#10b981"))
             painter.setBrush(grad)
             painter.drawRoundedRect(0, 0, fill_w, h, h // 2, h // 2)
+
+            # Shimmer sweep — bright highlight that moves across the bar
+            shimmer_x = self._shimmer * fill_w
+            shimmer = QRadialGradient(shimmer_x, h / 2, 30)
+            shimmer.setColorAt(0, QColor(255, 255, 255, 60))
+            shimmer.setColorAt(1, QColor(255, 255, 255, 0))
+            painter.setBrush(shimmer)
+            painter.drawRoundedRect(0, 0, fill_w, h, h // 2, h // 2)
+
+            # Glow at leading edge
+            if self._pct < 1.0:
+                glow = QRadialGradient(fill_w, h / 2, 12)
+                gc = QColor("#10b981")
+                gc.setAlphaF(0.5)
+                glow.setColorAt(0, gc)
+                gc.setAlphaF(0)
+                glow.setColorAt(1, gc)
+                painter.setBrush(glow)
+                painter.drawEllipse(int(fill_w - 12), int(-6), 24, int(h + 12))
+
         painter.end()
 
 

@@ -103,13 +103,14 @@ class GradientHeader(QWidget):
         w = self.width()
         h = self.height()
 
-        # Animated gradient background — colors shift slowly
-        shift = (math.sin(self._phase) + 1) / 2 * 0.2
-        grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0, QColor(14, 165, 233, 25))
-        grad.setColorAt(0.3 + shift, QColor(99, 102, 241, 18))
-        grad.setColorAt(0.7 - shift, QColor(16, 185, 129, 22))
-        grad.setColorAt(1, QColor(14, 165, 233, 10))
+        # Animated gradient background — vivid, noticeable color shift
+        shift = (math.sin(self._phase) + 1) / 2 * 0.25
+        grad = QLinearGradient(0, 0, w, h)
+        grad.setColorAt(0, QColor(14, 165, 233, 50))
+        grad.setColorAt(0.25 + shift, QColor(99, 102, 241, 35))
+        grad.setColorAt(0.5, QColor(139, 92, 246, 25))
+        grad.setColorAt(0.75 - shift, QColor(16, 185, 129, 40))
+        grad.setColorAt(1, QColor(14, 165, 233, 20))
         painter.fillRect(0, 0, w, h, grad)
 
         # Animated bottom accent line

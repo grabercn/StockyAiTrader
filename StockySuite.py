@@ -223,7 +223,7 @@ class DashboardPanel(QWidget):
         al = QVBoxLayout()
         self.activity_feed = QTextEdit()
         self.activity_feed.setReadOnly(True)
-        self.activity_feed.setFixedHeight(120)
+        self.activity_feed.setMinimumHeight(120)
         al.addWidget(self.activity_feed)
         activity_box.setLayout(al)
         layout.addWidget(activity_box)
@@ -356,11 +356,10 @@ class ScannerPanel(QWidget):
         self.scan_btn.clicked.connect(self._start_scan)
         cg.addWidget(self.scan_btn, 3, 0, 1, 4)
 
-        self.progress = QProgressBar()
+        from core.widgets import DetailedProgressBar
+        self.progress = DetailedProgressBar()
         self.progress.setVisible(False)
-        cg.addWidget(self.progress, 4, 0, 1, 3)
-        self.prog_lbl = QLabel("")
-        cg.addWidget(self.prog_lbl, 4, 3)
+        cg.addWidget(self.progress, 4, 0, 1, 4)
 
         ctrl.setLayout(cg)
         layout.addWidget(ctrl)
@@ -407,8 +406,7 @@ class ScannerPanel(QWidget):
 
         self.scan_btn.setEnabled(False)
         self.progress.setVisible(True)
-        self.progress.setRange(0, len(tickers))
-        self.progress.setValue(0)
+        self.progress.reset()
         self.bus.scan_started.emit(len(tickers))
         self.bus.log_entry.emit(f"Scanning {len(tickers)} tickers...", "info")
         self._t0 = time.time()
@@ -420,8 +418,10 @@ class ScannerPanel(QWidget):
         self._worker.start()
 
     def _on_progress(self, done, total, ticker, action):
-        self.progress.setValue(done)
-        self.prog_lbl.setText(f"{done}/{total} — {ticker}: {action}")
+        pct = int(done / total * 100) if total > 0 else 0
+        self.progress.set_progress(pct, f"Scanning {ticker}...", f"{done}/{total} complete")
+        colors = {"BUY": "#10b981", "SELL": "#ef4444"}
+        self.progress.add_log(f"{ticker}: <b style='color:{colors.get(action, '#94a3b8')}'>{action}</b>")
 
     def _on_done(self, results):
         self.results = results
@@ -572,8 +572,8 @@ class DayTradePanel(QWidget):
         layout.addWidget(self.canvas)
 
         # Progress
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
+        from core.widgets import DetailedProgressBar
+        self.progress = DetailedProgressBar()
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
@@ -596,14 +596,21 @@ class DayTradePanel(QWidget):
 
         self.run_btn.setEnabled(False)
         self.progress.setVisible(True)
+        self.progress.reset()
+        self.progress.set_progress(10, f"Fetching {ticker} data...", "Downloading from Yahoo Finance")
+        self.progress.add_log(f"Fetching {ticker} {self.period_cb.currentText()} @ {self.interval_cb.currentText()}")
         self.bus.log_entry.emit(f"Analyzing {ticker}...", "info")
+        QApplication.processEvents()
 
         data = fetch_intraday(ticker, self.period_cb.currentText(), self.interval_cb.currentText())
         if data.empty or len(data) < 30:
             self.bus.log_entry.emit(f"{ticker}: not enough data", "error")
+            self.progress.set_progress(100, "Failed — not enough data", "Try a longer period")
             self.run_btn.setEnabled(True)
-            self.progress.setVisible(False)
             return
+
+        self.progress.set_progress(40, "Training LightGBM model...", f"{len(data)} bars, computing features")
+        self.progress.add_log(f"Got {len(data)} bars — training model")
 
         feats = get_all_features("intraday")
         self._worker = TrainWorker(data, feats, ticker)
@@ -611,11 +618,14 @@ class DayTradePanel(QWidget):
         self._worker.start()
 
     def _on_done(self, ticker, model, features, data):
-        self.progress.setVisible(False)
         self.run_btn.setEnabled(True)
         if model is None:
+            self.progress.set_progress(100, "Training failed", "Not enough usable data")
             self.bus.log_entry.emit(f"{ticker}: training failed", "error")
             return
+
+        self.progress.set_progress(80, "Running predictions...", f"{len(features)} features")
+        self.progress.add_log(f"Model trained with {len(features)} features")
 
         self.model = model
         self.features = features
@@ -642,6 +652,9 @@ class DayTradePanel(QWidget):
         log_decision(ticker, act, conf, price, size, sl, tp, atr, list(p), reasoning=f"DayTrade analysis")
         self.bus.signal_generated.emit(ticker, act, {"conf": conf, "price": price, "size": size})
         self.bus.log_entry.emit(f"{act} {ticker} @ ${price:.2f} ({conf:.0%})", "trade")
+
+        self.progress.set_progress(100, f"Done — {act} {ticker}", f"Confidence: {conf:.0%}")
+        self.progress.add_log(f"Signal: {act} @ ${price:.2f} ({conf:.0%})")
 
         # Chart
         self.figure.clear()
@@ -712,8 +725,8 @@ class LongTradePanel(QWidget):
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
+        from core.widgets import DetailedProgressBar
+        self.progress = DetailedProgressBar()
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
         self.setLayout(layout)
@@ -724,13 +737,20 @@ class LongTradePanel(QWidget):
             return
         self.run_btn.setEnabled(False)
         self.progress.setVisible(True)
+        self.progress.reset()
+        self.progress.set_progress(10, f"Fetching {ticker} data...", "Daily bars from Yahoo Finance")
+        self.progress.add_log(f"Fetching {ticker} {self.period_cb.currentText()}")
+        QApplication.processEvents()
 
         data = fetch_longterm(ticker, self.period_cb.currentText())
         if data.empty or len(data) < 50:
             self.bus.log_entry.emit(f"{ticker}: not enough long-term data", "error")
+            self.progress.set_progress(100, "Failed — not enough data")
             self.run_btn.setEnabled(True)
-            self.progress.setVisible(False)
             return
+
+        self.progress.set_progress(40, "Training model...", f"{len(data)} daily bars")
+        self.progress.add_log(f"Got {len(data)} bars — training")
 
         feats = get_all_features("longterm")
         self._worker = TrainWorker(data, feats, ticker, prefix="lgbm_long")
@@ -738,11 +758,12 @@ class LongTradePanel(QWidget):
         self._worker.start()
 
     def _on_done(self, ticker, model, features, data):
-        self.progress.setVisible(False)
         self.run_btn.setEnabled(True)
         if model is None:
+            self.progress.set_progress(100, "Training failed")
             return
 
+        self.progress.set_progress(80, "Running predictions...", f"{len(features)} features")
         actions, confs, probs = predict_lgbm(model, data, features)
         act = LABEL_NAMES[actions[-1]]
         conf = confs[-1]
@@ -757,6 +778,9 @@ class LongTradePanel(QWidget):
         )
         log_decision(ticker, act, conf, price, 0, 0, 0, 0, list(p), reasoning="LongTrade analysis")
         self.bus.log_entry.emit(f"Long outlook: {act} {ticker} ({conf:.0%})", "trade")
+
+        self.progress.set_progress(100, f"Done — {act} {ticker}", f"Confidence: {conf:.0%}")
+        self.progress.add_log(f"Outlook: {act} @ ${price:.2f} ({conf:.0%})")
 
         # Chart
         self.figure.clear()
@@ -997,7 +1021,7 @@ class SettingsPanel(QWidget):
         for c in range(1, 4):
             self.model_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.model_table.verticalHeader().setVisible(False)
-        self.model_table.setFixedHeight(120)
+        self.model_table.setMinimumHeight(120)
         ml.addWidget(self.model_table)
         self.dl_status = QLabel("")
         self.dl_status.setStyleSheet(f"color: {BRAND_ACCENT};")
@@ -1234,11 +1258,24 @@ class TaxPanel(QWidget):
         self._build()
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
+        from core.widgets import DetailedProgressBar
+
         layout = QVBoxLayout()
-        layout.addWidget(QLabel(
-            "Generate IRS Form 8949 data (Sales and Dispositions of Capital Assets).\n"
-            "Exports CSV for your accountant or TurboTax import."
-        ))
+        layout.setSpacing(10)
+
+        header = GradientHeader("Tax Reports", "IRS Form 8949 — Capital Gains & Losses", height=65)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Generate a tax report from your Alpaca trade history. "
+            "This produces Form 8949 data (Sales and Dispositions of Capital Assets) "
+            "showing each closed trade with proceeds, cost basis, and gain/loss.\n\n"
+            "The CSV export can be imported into TurboTax, H&R Block, or handed to your accountant."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        layout.addWidget(desc)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Tax Year:"))
@@ -1247,40 +1284,59 @@ class TaxPanel(QWidget):
         self.year_spin.setValue(datetime.now().year)
         row.addWidget(self.year_spin)
 
-        gen_btn = QPushButton("Generate Report")
+        gen_btn = QPushButton("  Generate Report")
         gen_btn.setStyleSheet(f"background-color: {BRAND_ACCENT};")
         gen_btn.clicked.connect(self._generate)
         row.addWidget(gen_btn)
         row.addStretch()
         layout.addLayout(row)
 
+        self.progress = DetailedProgressBar()
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
+
         self.report_view = QTextEdit()
         self.report_view.setReadOnly(True)
         self.report_view.setFont(QFont(FONT_MONO, 10))
         layout.addWidget(self.report_view)
 
-        self.status = QLabel("")
-        self.status.setStyleSheet(f"color: {BRAND_ACCENT};")
-        layout.addWidget(self.status)
         self.setLayout(layout)
 
     def _generate(self):
         if not self.broker:
-            self.status.setText("Alpaca API not configured.")
+            self.progress.setVisible(True)
+            self.progress.set_progress(100, "Alpaca API not configured",
+                                       "Go to Settings and enter your API keys first")
             return
 
         from core.tax_report import generate_form_8949
-        self.status.setText("Generating...")
-        year = self.year_spin.value()
 
+        self.progress.setVisible(True)
+        self.progress.reset()
+        self.progress.set_progress(20, "Connecting to Alpaca...", "Fetching closed orders")
+        self.progress.add_log("Requesting trade history from Alpaca API")
+        QApplication.processEvents()
+
+        year = self.year_spin.value()
         result = generate_form_8949(self.broker, year)
+
+        self.progress.set_progress(80, "Formatting report...", "")
+        self.progress.add_log(f"Found {result['summary']['total_trades']} trades for {year}")
+        QApplication.processEvents()
+
         self.report_view.setPlainText(result["text"])
 
-        if result["csv_path"]:
-            self.status.setText(f"Saved: {result['csv_path']}")
+        if result["summary"]["total_trades"] == 0:
+            self.progress.set_progress(100, "No trades found",
+                                       f"No closed trades in {year}. Trade first, then generate.")
+            self.progress.add_log(f"No closed positions found for tax year {year}")
+        elif result["csv_path"]:
+            self.progress.set_progress(100, f"Report saved!",
+                                       result["csv_path"])
+            self.progress.add_log(f"CSV saved: {result['csv_path']}")
             self.bus.log_entry.emit(f"Tax report generated: {result['csv_path']}", "system")
         else:
-            self.status.setText("Report generated (no trades found).")
+            self.progress.set_progress(100, "Report generated", "")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1307,7 +1363,7 @@ class TestingPanel(QWidget):
         self.diag_output = QTextEdit()
         self.diag_output.setReadOnly(True)
         self.diag_output.setFont(QFont(FONT_MONO, 10))
-        self.diag_output.setFixedHeight(250)
+        self.diag_output.setMinimumHeight(250)
         dg.addWidget(self.diag_output)
 
         dbtn_row = QHBoxLayout()
