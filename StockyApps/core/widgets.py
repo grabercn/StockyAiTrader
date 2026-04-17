@@ -9,7 +9,7 @@ All widgets use core.ui.theme for colors so they adapt to light/dark mode.
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton,
-    QGraphicsDropShadowEffect, QProgressBar, QFrame,
+    QGraphicsDropShadowEffect, QProgressBar, QFrame, QTextEdit,
 )
 from PyQt5.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, pyqtProperty,

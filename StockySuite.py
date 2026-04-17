@@ -183,9 +183,9 @@ class DashboardPanel(QWidget):
             btn = QPushButton(f"  {label}")
             btn.setIcon(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY))
             btn.setStyleSheet(f"""
-                QPushButton {{ background-color: transparent;
+                QPushButton {{ background-color: transparent; color: {TEXT_SECONDARY};
                     border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; }}
-                QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; }}
+                QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; color: {BRAND_PRIMARY}; }}
             """)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(callback)
@@ -327,7 +327,13 @@ class ScannerPanel(QWidget):
         self._build()
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("Scanner", "Multi-stock AI analysis with auto-invest", height=65)
+        layout.addWidget(header)
 
         # Controls
         ctrl = QGroupBox("Scan Universe")
@@ -535,7 +541,13 @@ class DayTradePanel(QWidget):
         self.bus.ticker_selected.connect(self._set_ticker)
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("Day Trade", "Single-stock intraday analysis", height=65)
+        layout.addWidget(header)
 
         # Controls row
         row = QHBoxLayout()
@@ -697,7 +709,14 @@ class LongTradePanel(QWidget):
         self._build()
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("Long Trade", "Long-term stock outlook analysis", height=65)
+        layout.addWidget(header)
+
         row = QHBoxLayout()
         self.ticker_input = QLineEdit()
         self.ticker_input.setPlaceholderText("Ticker")
@@ -816,7 +835,13 @@ class LogsPanel(QWidget):
         self.bus.log_entry.connect(self._on_live)
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("Decision Logs", "Full history with reasoning and feature importances", height=65)
+        layout.addWidget(header)
 
         # File selector
         row = QHBoxLayout()
@@ -920,7 +945,14 @@ class SettingsPanel(QWidget):
         self._build()
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("Settings", "API keys, profiles, addons, and models", height=65)
+        layout.addWidget(header)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
@@ -1353,8 +1385,13 @@ class TestingPanel(QWidget):
         self._build()
 
     def _build(self):
+        from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Run system diagnostics and unit tests to verify everything works."))
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        header = GradientHeader("System Testing", "Diagnostics, addon checks, and unit test runner", height=65)
+        layout.addWidget(header)
 
         # Quick diagnostics
         diag_box = QGroupBox("System Diagnostics")
