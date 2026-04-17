@@ -1592,13 +1592,15 @@ class _NotificationBar(QWidget):
         self._icon_name = "check"
         self._icon_color = BRAND_PRIMARY
         self._text_color = QColor(TEXT_SECONDARY)
-        self._icon_pulse = 0.0  # 0-1, decays over time
+        self._icon_pulse = 0.0   # 0-1, decays over time (glow)
+        self._icon_bounce = 0.0  # 0-1, decays (vertical bounce)
+        self._text_slide = 0.0   # 0-1, decays (text slides in from right)
         self._market_open = False
 
         # Animation timer
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(50)
+        self._timer.start(30)
 
         # Market status check
         self._check_market()
@@ -1621,7 +1623,11 @@ class _NotificationBar(QWidget):
     def _tick(self):
         self._phase += 0.008
         if self._icon_pulse > 0:
-            self._icon_pulse = max(0, self._icon_pulse - 0.03)
+            self._icon_pulse = max(0, self._icon_pulse - 0.025)
+        if self._icon_bounce > 0:
+            self._icon_bounce = max(0, self._icon_bounce - 0.04)
+        if self._text_slide > 0:
+            self._text_slide = max(0, self._text_slide - 0.05)
         self.update()
 
     def show_message(self, msg, level="info"):
@@ -1637,7 +1643,9 @@ class _NotificationBar(QWidget):
         self._text_color = QColor(text_hex)
         self._msg = msg
         self._time = datetime.now().strftime("%H:%M:%S")
-        self._icon_pulse = 1.0  # Start pulse
+        self._icon_pulse = 1.0   # Start glow
+        self._icon_bounce = 1.0  # Start bounce
+        self._text_slide = 1.0   # Start slide-in
         self.update()
 
     def paintEvent(self, event):
@@ -1684,25 +1692,39 @@ class _NotificationBar(QWidget):
         painter.drawLine(int(x), 6, int(x), h - 6)
         x += 12
 
-        # Icon with pulse glow
+        # Icon with bounce + pulse glow
         from core.ui.icons import StockyIcons
+        import math as _m
         icon_px = StockyIcons.get(self._icon_name, 16, self._icon_color)
 
+        # Bounce: icon pops up then settles (elastic ease-out)
+        bounce_offset = 0
+        if self._icon_bounce > 0:
+            # Elastic bounce: goes up, overshoots, settles
+            t = 1.0 - self._icon_bounce
+            bounce_offset = int(_m.sin(t * _m.pi * 2.5) * (1.0 - t) * 8)
+
+        # Glow behind icon
         if self._icon_pulse > 0:
-            # Glow behind icon
             glow_c = QColor(self._icon_color)
-            glow_c.setAlphaF(self._icon_pulse * 0.4)
+            glow_c.setAlphaF(self._icon_pulse * 0.35)
             painter.setBrush(glow_c)
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(int(x - 2), int(h / 2 - 10), 20, 20)
+            glow_r = 10 + self._icon_pulse * 4
+            painter.drawEllipse(int(x + 8 - glow_r), int(h / 2 - glow_r + bounce_offset), int(glow_r * 2), int(glow_r * 2))
 
-        painter.drawPixmap(int(x), int(h / 2 - 8), icon_px)
+        painter.drawPixmap(int(x), int(h / 2 - 8 + bounce_offset), icon_px)
         x += 22
 
-        # Message text
-        painter.setPen(self._text_color)
+        # Message text — slides in from right
+        text_offset = int(self._text_slide * 40)  # Starts 40px to the right, slides to 0
+        text_alpha = 1.0 - self._text_slide * 0.6  # Fades in as it slides
+
+        tc = QColor(self._text_color)
+        tc.setAlphaF(max(0.3, text_alpha))
+        painter.setPen(tc)
         painter.setFont(QFont(FONT_FAMILY, 10))
-        painter.drawText(int(x), 0, w - x - 70, h, Qt.AlignVCenter, self._msg)
+        painter.drawText(int(x + text_offset), 0, w - x - 70, h, Qt.AlignVCenter, self._msg)
 
         # Timestamp on right
         if self._time:
