@@ -1,330 +1,424 @@
+"""
+StockExecuter — Executes trades on Alpaca based on DayTrader signals.
+
+Polls signal.json every 5 seconds for new signals from DayTrader.
+Can auto-execute trades or wait for manual confirmation.
+
+Features:
+- Bracket orders with automatic stop-loss and take-profit
+- Live positions table with P&L
+- Daily portfolio chart
+- Confidence threshold filter
+- Emergency "close all" button
+"""
+
 import sys
-import threading
-import requests
 import json
+import os
 from datetime import datetime
+
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QHBoxLayout,
-    QDialog, QLineEdit, QPushButton, QFormLayout, QMenuBar, QAction, QMessageBox
+    QApplication, QMainWindow, QLabel, QVBoxLayout, QHBoxLayout, QWidget,
+    QTextEdit, QDialog, QLineEdit, QPushButton, QFormLayout, QAction,
+    QMessageBox, QGroupBox, QGridLayout, QTableWidget, QTableWidgetItem,
+    QHeaderView, QCheckBox, QSpinBox,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
-import paho.mqtt.client as mqtt
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont, QColor
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-# MQTT broker settings
-BROKER = "test.mosquitto.org"
-PORT = 1883
-TOPIC = "stock-predictions"
+from core.broker import AlpacaBroker
+from core.signals import read_signal
+from core.chart import BG_DARK, COLOR_PRICE, COLOR_BUY, COLOR_SELL
+from core.style import APP_STYLESHEET, log_html
 
-# --- Settings Dialog ---
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "..", "settings.json")
+
+
+# ─── Settings Dialog ─────────────────────────────────────────────────────────
 class SettingsDialog(QDialog):
+    """Dialog for entering Alpaca API credentials."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.layout = QFormLayout(self)
+        self.setWindowTitle("API Settings")
+        self.setStyleSheet(APP_STYLESHEET)
+        self.setMinimumWidth(400)
 
-        self.api_key_input = QLineEdit(self)
-        self.secret_key_input = QLineEdit(self)
-        self.secret_key_input.setEchoMode(QLineEdit.Password)
+        layout = QFormLayout(self)
+        self.api_key = QLineEdit()
+        self.secret_key = QLineEdit()
+        self.secret_key.setEchoMode(QLineEdit.Password)
 
-        self.layout.addRow("Alpaca API Key:", self.api_key_input)
-        self.layout.addRow("Alpaca Secret Key:", self.secret_key_input)
+        layout.addRow("Alpaca API Key:", self.api_key)
+        layout.addRow("Alpaca Secret Key:", self.secret_key)
 
-        self.test_button = QPushButton("Test Connection", self)
-        self.test_button.clicked.connect(self.test_connection)
-        self.layout.addWidget(self.test_button)
+        btns = QHBoxLayout()
+        test_btn = QPushButton("Test Connection")
+        test_btn.clicked.connect(self._test)
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self._save)
+        btns.addWidget(test_btn)
+        btns.addWidget(save_btn)
+        layout.addRow(btns)
 
-        self.save_button = QPushButton("Save", self)
-        self.save_button.clicked.connect(self.save_settings)
-        self.layout.addWidget(self.save_button)
+    def load(self, settings):
+        self.api_key.setText(settings.get("alpaca_api_key", ""))
+        self.secret_key.setText(settings.get("alpaca_secret_key", ""))
 
-    def load_settings(self, settings):
-        self.api_key_input.setText(settings.get("alpaca_api_key", ""))
-        self.secret_key_input.setText(settings.get("alpaca_secret_key", ""))
+    def _test(self):
+        broker = AlpacaBroker(self.api_key.text(), self.secret_key.text())
+        acct = broker.get_account()
+        if "error" in acct:
+            QMessageBox.warning(self, "Error", f"Connection failed:\n{acct['error']}")
+        else:
+            QMessageBox.information(
+                self, "Connected",
+                f"Portfolio: ${float(acct.get('portfolio_value', 0)):,.2f}\n"
+                f"Buying Power: ${float(acct.get('buying_power', 0)):,.2f}",
+            )
 
-    def save_settings(self):
-        settings = {
-            "alpaca_api_key": self.api_key_input.text(),
-            "alpaca_secret_key": self.secret_key_input.text()
-        }
-        try:
-            with open("settings.json", "r+") as f:
+    def _save(self):
+        data = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r") as f:
                 data = json.load(f)
-                data.update(settings)
-                f.seek(0)
-                json.dump(data, f, indent=4)
-            QMessageBox.information(self, "Success", "Settings saved successfully.")
-            self.accept()
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save settings: {e}")
-
-    def test_connection(self):
-        api_key = self.api_key_input.text()
-        secret_key = self.secret_key_input.text()
-        if not api_key or not secret_key:
-            QMessageBox.warning(self, "Error", "API Key and Secret Key cannot be empty.")
-            return
-
-        headers = {
-            "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": secret_key
-        }
-        try:
-            response = requests.get("https://paper-api.alpaca.markets/v2/account", headers=headers)
-            response.raise_for_status()
-            QMessageBox.information(self, "Success", "Alpaca API connection successful!")
-        except requests.RequestException as e:
-            QMessageBox.warning(self, "Error", f"Failed to connect to Alpaca API: {e}")
-
-# --- Alpaca API Wrapper ---
-class AlpacaTradingAPI:
-    def __init__(self, api_key, secret_key):
-        self.base_url = "https://paper-api.alpaca.markets/v2"
-        self.headers = {
-            "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": secret_key
-        }
-
-    def get_account(self):
-        try:
-            response = requests.get(f"{self.base_url}/account", headers=self.headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            return {"error": str(e)}
-
-    def get_portfolio_history(self, period='1M', timeframe='1D'):
-        params = {'period': period, 'timeframe': timeframe}
-        try:
-            response = requests.get(f"{self.base_url}/account/portfolio/history", headers=self.headers, params=params)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            return {"error": str(e)}
-
-    def place_order(self, symbol, qty, side, order_type="market", time_in_force="gtc"):
-        order_data = {"symbol": symbol, "qty": qty, "side": side, "type": order_type, "time_in_force": time_in_force}
-        try:
-            response = requests.post(f"{self.base_url}/orders", headers=self.headers, json=order_data)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            return {"error": str(e)}
-
-    def get_positions(self):
-        try:
-            response = requests.get(f"{self.base_url}/positions", headers=self.headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            return {"error": str(e)}
+        data["alpaca_api_key"] = self.api_key.text()
+        data["alpaca_secret_key"] = self.secret_key.text()
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+        QMessageBox.information(self, "Saved", "Settings saved.")
+        self.accept()
 
 
-# --- Main Application Window ---
-class StockExecutionDashboard(QMainWindow):
+# ─── Main Dashboard ──────────────────────────────────────────────────────────
+class ExecuterApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Stocky Executer - Dashboard")
-        self.setGeometry(100, 100, 900, 600)
-        self.trading_api = None
-        self.settings = self.load_app_settings()
+        self.setWindowTitle("Stocky Executer — Risk-Managed Trading")
+        self.setGeometry(100, 100, 1100, 750)
+        self.setStyleSheet(APP_STYLESHEET)
 
-        self.init_ui()
-        self.init_api()
-        self.update_dashboard()
+        self.broker = None
+        self.settings = self._load_settings()
+        self.auto_execute = False
+        self.min_confidence = 60
+        self._last_signal_time = None
 
-    def init_ui(self):
-        # Menu Bar
+        self._build_ui()
+        self._init_broker()
+        self._refresh_dashboard()
+
+        # Poll for new signals every 5 seconds
+        self._signal_timer = QTimer()
+        self._signal_timer.timeout.connect(self._check_signal)
+        self._signal_timer.start(5000)
+
+        # Refresh dashboard every 30 seconds
+        self._dash_timer = QTimer()
+        self._dash_timer.timeout.connect(self._refresh_dashboard)
+        self._dash_timer.start(30_000)
+
+    # ── UI Construction ───────────────────────────────────────────────────
+
+    def _build_ui(self):
         menubar = self.menuBar()
-        settings_menu = menubar.addMenu('Settings')
-        edit_settings_action = QAction('Edit API Keys', self)
-        edit_settings_action.triggered.connect(self.open_settings_dialog)
-        settings_menu.addAction(edit_settings_action)
+        settings_menu = menubar.addMenu("Settings")
+        edit_action = QAction("Edit API Keys", self)
+        edit_action.triggered.connect(self._open_settings)
+        settings_menu.addAction(edit_action)
 
-        # Main Layout
-        main_layout = QHBoxLayout()
-        left_layout = QVBoxLayout()
-        right_layout = QVBoxLayout()
+        main = QWidget()
+        layout = QHBoxLayout()
 
-        # Left side: Graph and Stats
-        self.figure = plt.Figure()
+        # Left: account + chart + positions
+        left = QVBoxLayout()
+
+        # Account stats
+        acct_box = QGroupBox("Account")
+        acct_layout = QGridLayout()
+        self.portfolio_lbl = QLabel("Portfolio: --")
+        self.portfolio_lbl.setFont(QFont("Consolas", 14, QFont.Bold))
+        self.buying_power_lbl = QLabel("Buying Power: --")
+        self.cash_lbl = QLabel("Cash: --")
+        self.pnl_lbl = QLabel("Day P&L: --")
+        acct_layout.addWidget(self.portfolio_lbl, 0, 0, 1, 2)
+        acct_layout.addWidget(self.buying_power_lbl, 1, 0)
+        acct_layout.addWidget(self.cash_lbl, 1, 1)
+        acct_layout.addWidget(self.pnl_lbl, 2, 0, 1, 2)
+        acct_box.setLayout(acct_layout)
+        left.addWidget(acct_box)
+
+        # Portfolio chart
+        self.figure = plt.Figure(figsize=(6, 3), dpi=100, facecolor=BG_DARK)
         self.canvas = FigureCanvas(self.figure)
-        self.stats_label = QLabel("Account Statistics:")
-        self.stats_label.setAlignment(Qt.AlignTop)
-        left_layout.addWidget(QLabel("Portfolio Performance:"))
-        left_layout.addWidget(self.canvas)
-        left_layout.addWidget(self.stats_label)
+        left.addWidget(self.canvas)
 
-        # Right side: Predictions and Log
-        self.prediction_label = QLabel("Waiting for predictions...")
-        self.prediction_label.setWordWrap(True)
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        right_layout.addWidget(QLabel("Live Predictions:"))
-        right_layout.addWidget(self.prediction_label)
-        right_layout.addWidget(QLabel("Activity Log:"))
-        right_layout.addWidget(self.log)
+        # Positions table
+        pos_box = QGroupBox("Open Positions")
+        pos_layout = QVBoxLayout()
+        self.pos_table = QTableWidget()
+        self.pos_table.setColumnCount(6)
+        self.pos_table.setHorizontalHeaderLabels(
+            ["Symbol", "Qty", "Avg Cost", "Current", "P&L", "P&L %"]
+        )
+        self.pos_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        pos_layout.addWidget(self.pos_table)
 
-        main_layout.addLayout(left_layout, 2)
-        main_layout.addLayout(right_layout, 1)
+        close_all_btn = QPushButton("CLOSE ALL POSITIONS")
+        close_all_btn.setStyleSheet("background-color: #cc0000;")
+        close_all_btn.clicked.connect(self._close_all)
+        pos_layout.addWidget(close_all_btn)
 
-        container = QWidget()
-        container.setLayout(main_layout)
-        self.setCentralWidget(container)
+        pos_box.setLayout(pos_layout)
+        left.addWidget(pos_box)
 
-    def init_api(self):
-        api_key = self.settings.get("alpaca_api_key")
-        secret_key = self.settings.get("alpaca_secret_key")
-        if api_key and secret_key:
-            self.trading_api = AlpacaTradingAPI(api_key, secret_key)
-        else:
-            self.log_action("Alpaca API keys not found. Please configure them in Settings.", error=True)
+        # Right: signal + controls + log
+        right = QVBoxLayout()
 
-    def load_app_settings(self):
+        # Signal display
+        sig_box = QGroupBox("Latest Signal from DayTrader")
+        sig_layout = QVBoxLayout()
+        self.signal_lbl = QLabel("No signal yet")
+        self.signal_lbl.setFont(QFont("Consolas", 16, QFont.Bold))
+        self.signal_lbl.setAlignment(Qt.AlignCenter)
+        self.signal_detail = QLabel("")
+        self.signal_detail.setFont(QFont("Consolas", 10))
+        sig_layout.addWidget(self.signal_lbl)
+        sig_layout.addWidget(self.signal_detail)
+        sig_box.setLayout(sig_layout)
+        right.addWidget(sig_box)
+
+        # Execution controls
+        ctrl_box = QGroupBox("Execution Controls")
+        ctrl_layout = QGridLayout()
+
+        self.auto_cb = QCheckBox("Auto-Execute Trades")
+        self.auto_cb.toggled.connect(lambda v: setattr(self, "auto_execute", v))
+        ctrl_layout.addWidget(self.auto_cb, 0, 0)
+
+        ctrl_layout.addWidget(QLabel("Min Confidence %:"), 0, 1)
+        self.conf_spin = QSpinBox()
+        self.conf_spin.setRange(30, 99)
+        self.conf_spin.setValue(60)
+        self.conf_spin.valueChanged.connect(lambda v: setattr(self, "min_confidence", v))
+        ctrl_layout.addWidget(self.conf_spin, 0, 2)
+
+        buy_btn = QPushButton("Manual BUY")
+        buy_btn.setStyleSheet("background-color: #006600;")
+        buy_btn.clicked.connect(lambda: self._manual("buy"))
+        ctrl_layout.addWidget(buy_btn, 1, 0)
+
+        sell_btn = QPushButton("Manual SELL")
+        sell_btn.setStyleSheet("background-color: #cc0000;")
+        sell_btn.clicked.connect(lambda: self._manual("sell"))
+        ctrl_layout.addWidget(sell_btn, 1, 1)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_dashboard)
+        ctrl_layout.addWidget(refresh_btn, 1, 2)
+
+        ctrl_box.setLayout(ctrl_layout)
+        right.addWidget(ctrl_box)
+
+        # Activity log
+        log_box = QGroupBox("Activity Log")
+        log_layout = QVBoxLayout()
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        log_layout.addWidget(self.log_box)
+        log_box.setLayout(log_layout)
+        right.addWidget(log_box)
+
+        layout.addLayout(left, 3)
+        layout.addLayout(right, 2)
+        main.setLayout(layout)
+        self.setCentralWidget(main)
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _log(self, msg, level="info"):
+        self.log_box.append(log_html(msg, level))
+
+    def _load_settings(self):
         try:
-            with open("settings.json", "r") as f:
+            with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
-    def open_settings_dialog(self):
-        dialog = SettingsDialog(self)
-        dialog.load_settings(self.settings)
-        if dialog.exec_():
-            self.settings = self.load_app_settings()
-            self.init_api()
-            self.update_dashboard()
+    def _init_broker(self):
+        key = self.settings.get("alpaca_api_key")
+        secret = self.settings.get("alpaca_secret_key")
+        if key and secret:
+            self.broker = AlpacaBroker(key, secret)
+            self._log("Alpaca API connected (paper mode).")
+        else:
+            self._log("API keys not set — go to Settings.", "warn")
 
-    def update_dashboard(self):
-        if not self.trading_api:
+    def _open_settings(self):
+        dialog = SettingsDialog(self)
+        dialog.load(self.settings)
+        if dialog.exec_():
+            self.settings = self._load_settings()
+            self._init_broker()
+            self._refresh_dashboard()
+
+    # ── Dashboard ─────────────────────────────────────────────────────────
+
+    def _refresh_dashboard(self):
+        if not self.broker:
             return
 
-        # Update stats
-        account_data = self.trading_api.get_account()
-        if "error" in account_data:
-            self.stats_label.setText(f"Account Statistics:\nError: {account_data['error']}")
-        else:
-            stats_text = f"""
-            Portfolio Value: ${account_data.get('portfolio_value', 'N/A')}\n
-            Buying Power: ${account_data.get('buying_power', 'N/A')}\n
-            Cash: ${account_data.get('cash', 'N/A')}\n
-            """
-            self.stats_label.setText(f"Account Statistics:\n{stats_text}")
+        acct = self.broker.get_account()
+        if "error" in acct:
+            self._log(f"Account error: {acct['error']}", "error")
+            return
 
-        # Update graph
-        history = self.trading_api.get_portfolio_history()
-        if "error" not in history and history.get('equity'):
-            self.plot_portfolio_history(history)
+        # Update account stats
+        portfolio = float(acct.get("portfolio_value", 0))
+        buying = float(acct.get("buying_power", 0))
+        cash = float(acct.get("cash", 0))
+        equity = float(acct.get("equity", 0))
+        last_eq = float(acct.get("last_equity", equity))
+        day_pnl = equity - last_eq
+        day_pct = (day_pnl / last_eq * 100) if last_eq > 0 else 0
 
-    def plot_portfolio_history(self, history):
+        self.portfolio_lbl.setText(f"Portfolio: ${portfolio:,.2f}")
+        self.buying_power_lbl.setText(f"Buying Power: ${buying:,.2f}")
+        self.cash_lbl.setText(f"Cash: ${cash:,.2f}")
+        pnl_color = COLOR_BUY if day_pnl >= 0 else COLOR_SELL
+        self.pnl_lbl.setText(f"Day P&L: ${day_pnl:,.2f} ({day_pct:+.2f}%)")
+        self.pnl_lbl.setStyleSheet(f"color: {pnl_color}; font-weight: bold;")
+
+        # Update positions table
+        positions = self.broker.get_positions()
+        if isinstance(positions, list):
+            self.pos_table.setRowCount(len(positions))
+            for i, pos in enumerate(positions):
+                pnl = float(pos.get("unrealized_pl", 0))
+                values = [
+                    pos.get("symbol", ""),
+                    f"{float(pos.get('qty', 0)):.0f}",
+                    f"${float(pos.get('avg_entry_price', 0)):.2f}",
+                    f"${float(pos.get('current_price', 0)):.2f}",
+                    f"${pnl:,.2f}",
+                    f"{float(pos.get('unrealized_plpc', 0)) * 100:+.2f}%",
+                ]
+                for j, val in enumerate(values):
+                    item = QTableWidgetItem(val)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j >= 4:
+                        item.setForeground(QColor(COLOR_BUY if pnl >= 0 else COLOR_SELL))
+                    self.pos_table.setItem(i, j, item)
+
+        # Update portfolio chart
+        history = self.broker.get_portfolio_history()
+        if "error" not in history and history.get("equity"):
+            self._plot_portfolio(history)
+
+    def _plot_portfolio(self, history):
         self.figure.clear()
+        self.figure.set_facecolor(BG_DARK)
         ax = self.figure.add_subplot(111)
-        equity = history['equity']
-        timestamps = [datetime.fromtimestamp(t) for t in history['timestamp']]
-        ax.plot(timestamps, equity, label='Portfolio Value')
-        
-        # Plot gains/losses
-        profit_loss = history['profit_loss']
-        profit_loss_pct = history['profit_loss_pct']
-        
-        # Create a second y-axis for profit/loss percentage
-        ax2 = ax.twinx()
-        ax2.plot(timestamps, profit_loss, 'g--', label='Profit/Loss ($)')
-        
-        ax.set_title('Portfolio Performance')
-        ax.set_ylabel('Portfolio Value ($)')
-        ax2.set_ylabel('Profit/Loss ($)', color='g')
-        # Format date on X-axis
-        ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%m-%d'))
-        self.figure.autofmt_xdate()
+        ax.set_facecolor("#16213e")
 
-        ax.legend(loc='upper left')
-        ax2.legend(loc='upper right')
+        equity = history["equity"]
+        timestamps = [datetime.fromtimestamp(t) for t in history["timestamp"]]
+
+        ax.plot(timestamps, equity, color=COLOR_PRICE, linewidth=1.5)
+        ax.fill_between(timestamps, equity, alpha=0.1, color=COLOR_PRICE)
+        ax.set_title("Portfolio (1 Week)", color="white", fontsize=10)
+        ax.set_ylabel("$", color="white")
+        ax.tick_params(colors="#888", labelsize=8)
+        ax.grid(True, alpha=0.15, color="#444")
+        ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%m/%d %H:%M"))
+        self.figure.autofmt_xdate()
         self.figure.tight_layout()
         self.canvas.draw()
 
-    def log_action(self, action, error=None):
-        timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-        log_message = f"{timestamp} {action}"
-        if error:
-            log_message = f"{timestamp} Error: {action}"
-        self.log.append(log_message)
+    # ── Signal Handling ───────────────────────────────────────────────────
 
-    def handle_prediction(self, message):
-        self.prediction_label.setText(message)
-        self.log_action(f"Received prediction: {message}")
-        
-        if not self.trading_api:
-            self.log_action("Cannot execute trade, API not configured.", error=True)
+    def _check_signal(self):
+        """Poll signal.json for new signals from DayTrader."""
+        signal = read_signal()
+        if not signal:
             return
 
-        try:
-            ticker, action, confidence_str = message.split(' : ')
-            confidence = float(confidence_str)
-            action = action.lower()
+        # Skip if we've already processed this signal
+        sig_time = signal.get("timestamp", "")
+        if sig_time == self._last_signal_time:
+            return
+        self._last_signal_time = sig_time
 
-            if action == "buy":
-                result = self.trading_api.place_order(ticker, 10, "buy") # Example qty
-                self.log_action(f"Placed BUY order for 10 {ticker}.", result.get("error"))
-            elif action == "sell":
-                result = self.trading_api.place_order(ticker, 10, "sell") # Example qty
-                self.log_action(f"Placed SELL order for 10 {ticker}.", result.get("error"))
-            
-            self.log_action("Updating dashboard...")
-            self.update_dashboard()
+        action = signal.get("action", "HOLD")
+        ticker = signal.get("ticker", "???")
+        conf = signal.get("confidence", 0)
+        price = signal.get("price", 0)
+        size = signal.get("position_size", 0)
+        sl = signal.get("stop_loss", 0)
+        tp = signal.get("take_profit", 0)
 
-        except ValueError:
-            self.log_action(f"Could not parse prediction: {message}", error=True)
+        # Update signal display
+        colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": "#ffaa00"}
+        self.signal_lbl.setText(f"{action} {ticker}")
+        self.signal_lbl.setStyleSheet(f"color: {colors.get(action, '#666')}; font-size: 20px;")
+        self.signal_detail.setText(
+            f"Price: ${price:.2f} | Size: {size} | Conf: {conf:.1%}\n"
+            f"SL: ${sl:.2f} | TP: ${tp:.2f}"
+        )
 
+        self._log(f"Signal: {action} {ticker} x{size} @ ${price:.2f} ({conf:.1%})", "trade")
 
-# --- MQTT Client ---
-class MqttClient(QObject):
-    message_received = pyqtSignal(str)
+        # Auto-execute if enabled and confident enough
+        if self.auto_execute and action in ("BUY", "SELL") and conf * 100 >= self.min_confidence:
+            self._execute(ticker, size, action.lower(), sl, tp)
+        elif action == "HOLD":
+            self._log("HOLD signal — no action.")
 
-    def __init__(self):
-        super().__init__()
-        self.client = mqtt.Client()
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
+    def _execute(self, ticker, qty, side, sl=None, tp=None):
+        if not self.broker:
+            self._log("Cannot trade — API not configured.", "error")
+            return
+        if qty <= 0:
+            self._log("Position size is 0 — skipping.", "warn")
+            return
 
-    def on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            print("Connected to MQTT Broker!")
-            self.client.subscribe(TOPIC)
+        self._log(f"Placing {side.upper()}: {ticker} x{qty} (SL ${sl:.2f}, TP ${tp:.2f})", "trade")
+        result = self.broker.place_order(ticker, qty, side, stop_loss=sl, take_profit=tp)
+
+        if "error" in result:
+            self._log(f"Order failed: {result['error']}", "error")
         else:
-            print(f"Failed to connect, return code {rc}\n")
+            self._log(f"Order placed — ID: {result.get('id', '?')}", "trade")
 
-    def on_message(self, client, userdata, msg):
-        self.message_received.emit(msg.payload.decode())
+        self._refresh_dashboard()
 
-    def connect(self):
-        self.client.connect(BROKER, PORT, 60)
-        thread = threading.Thread(target=self.client.loop_forever)
-        thread.daemon = True
-        thread.start()
+    def _manual(self, side):
+        signal = read_signal()
+        if not signal:
+            self._log("No signal available.", "warn")
+            return
+        self._execute(signal["ticker"], signal["position_size"], side,
+                      signal.get("stop_loss"), signal.get("take_profit"))
 
+    def _close_all(self):
+        if not self.broker:
+            return
+        reply = QMessageBox.question(self, "Confirm", "Close ALL positions?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            result = self.broker.close_all_positions()
+            if "error" in result:
+                self._log(f"Close all failed: {result['error']}", "error")
+            else:
+                self._log("All positions closed.", "trade")
+            self._refresh_dashboard()
 
-def main():
-    app = QApplication(sys.argv)
-    window = StockExecutionDashboard()
-    
-    mqtt_client = MqttClient()
-    mqtt_client.message_received.connect(window.handle_prediction)
-    mqtt_client.connect()
-    
-    window.show()
-    sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    main().client.loop_start()
-
-mqtt_thread = threading.Thread(target=mqtt_loop)
-mqtt_thread.daemon = True
-mqtt_thread.start()
-
-# Show the PyQt5 window
-window.show()
-
-# Start the PyQt5 event loop
-sys.exit(app.exec_())
+    app = QApplication(sys.argv)
+    window = ExecuterApp()
+    window.show()
+    sys.exit(app.exec_())

@@ -1,508 +1,305 @@
+"""
+DayTrader — Aggressive intraday stock analysis and signal generation.
+
+Uses LightGBM on technical indicators + FinBERT sentiment to produce
+BUY/SELL/HOLD signals with ATR-based risk management.
+
+Signals are written to signal.json for StockExecuter to consume.
+"""
+
 import sys
 import time
-import yfinance as yf
 import numpy as np
-import requests
-from bs4 import BeautifulSoup
-from newspaper import Article
-import pandas as pd
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QProgressBar, QComboBox
+from datetime import datetime, timedelta
+
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QTextEdit, QProgressBar, QComboBox, QGroupBox, QGridLayout,
+)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments, pipeline
+from PyQt5.QtGui import QFont
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-import feedparser
-import paho.mqtt.client as mqtt
 import pytz
-from datetime import datetime, timedelta
-import pandas_ta as ta
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# MQTT broker settings
-BROKER = "test.mosquitto.org"
-PORT = 1883
-TOPIC = "stock-predictions"
-
-# Load the pre-trained model and tokenizer
-model_name = "distilbert-base-uncased"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=3)  # 3 labels: BUY, SELL, HOLD
-
-sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-vader_analyzer = SentimentIntensityAnalyzer()
-
-def fetch_and_prepare_data(stock_ticker, period="1d", interval="5m", trading_mode="Normal", custom_buy_threshold=None, custom_sell_threshold=None):
-    stock = yf.Ticker(stock_ticker)
-    
-    # Fetch historical data with a specific interval
-    data = stock.history(period=period, interval=interval)
-    
-    # Calculate technical indicators
-    data.ta.bbands(append=True)
-    data.ta.macd(append=True)
-    data.ta.rsi(append=True)
-
-    # If indicators are not generated due to lack of data, fill with 0
-    if 'BBL_20_2.0' not in data.columns:
-        data['BBL_20_2.0'] = 0
-        data['BBM_20_2.0'] = 0
-        data['BBU_20_2.0'] = 0
-    if 'MACD_12_26_9' not in data.columns:
-        data['MACD_12_26_9'] = 0
-    if 'RSI_14' not in data.columns:
-        data['RSI_14'] = 0
-
-    # Fetch news and calculate sentiment
-    headlines = fetch_news(stock_ticker)
-    sentiment_score = np.mean([vader_analyzer.polarity_scores(h)['compound'] for h in headlines]) if headlines else 0
-
-    # Calculate percentage price changes
-    data['Price Change (%)'] = data['Close'].pct_change() * 100
-
-    # Label data based on trading mode
-    if trading_mode == 'Custom' and custom_buy_threshold is not None and custom_sell_threshold is not None:
-        buy_threshold = custom_buy_threshold
-        sell_threshold = custom_sell_threshold
-    else:
-        if trading_mode == 'Aggressive':
-            buy_threshold = 1.0
-            sell_threshold = -1.0
-        elif trading_mode == 'Minimal':
-            buy_threshold = 2.0
-            sell_threshold = -2.0
-        else:  # Normal
-            buy_threshold = 1.5
-            sell_threshold = -1.5
-
-    conditions = [
-        (data['Price Change (%)'] > buy_threshold),  # Large positive change -> BUY
-        (data['Price Change (%)'] < sell_threshold), # Large negative change -> SELL
-        (abs(data['Price Change (%)']) <= buy_threshold)  # Small changes -> HOLD
-    ]
-    labels = [2, 0, 1]  # BUY=2, SELL=0, HOLD=1
-    data['Label'] = np.select(conditions, labels)
-
-    # Create text input for AI
-    data['Text'] = data.apply(
-        lambda row: f"Stock price: {row['Close']:.2f}, volume: {row['Volume']}, percentage change: {row['Price Change (%)']:.2f}, "
-                    f"BBands: ({row['BBL_20_2.0']:.2f}, {row['BBM_20_2.0']:.2f}, {row['BBU_20_2.0']:.2f}), "
-                    f"MACD: {row['MACD_12_26_9']:.2f}, RSI: {row['RSI_14']:.2f}, News Sentiment: {sentiment_score:.2f}",
-        axis=1
-    )
-
-    # Filter out rows with NaN labels (e.g., first row with no percentage change)
-    data = data.dropna(subset=['Label'])
-
-    return data
-
-# Function to publish prediction to MQTT
-def publish_prediction(stock_ticker, prediction):
-    client = mqtt.Client()
-    
-    # Connect to the MQTT broker
-    client.connect(BROKER, PORT, 60)
-    
-    # Start the loop in the background to handle network operations
-    client.loop_start()
-
-    # Publish the prediction
-    message = f"{stock_ticker} : {prediction['action']} : {prediction['confidence']:.2f}"
-    
-    # Publish the message multiple times for redundancy
-    client.publish(TOPIC, message)
-
-    print(f"Message published: {message}")
-
-    # Stop the loop once the message is published (optional, depends on use case)
-    client.loop_stop()
-
-# Function to fine-tune the model
-def train_model(data):
-    train_encodings = tokenizer(list(data['Text']), truncation=True, padding=True, max_length=512)
-    train_labels = list(data['Label'])
-    train_dataset = CustomDataset(train_encodings, train_labels)
-
-    training_args = TrainingArguments(
-        output_dir='./results',
-        num_train_epochs=3,
-        per_device_train_batch_size=8,
-        warmup_steps=500,
-        weight_decay=0.01,
-        logging_dir='./logs',
-        logging_steps=10,
-        save_total_limit=2
-    )
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset
-    )
-
-    trainer.train()
-
-# Dataset preparation for training
-class CustomDataset:
-    def __init__(self, encodings, labels):
-        self.encodings = encodings
-        self.labels = labels
-
-    def __getitem__(self, idx):
-        return {
-            'input_ids': self.encodings['input_ids'][idx],
-            'attention_mask': self.encodings['attention_mask'][idx],
-            'labels': self.labels[idx]
-        }
-
-    def __len__(self):
-        return len(self.labels)
-
-# Use the trained model for predictions
-def predict(stock_ticker, period="5d", interval="5m", trading_mode="Normal", custom_buy_threshold=None, custom_sell_threshold=None):
-    data = fetch_and_prepare_data(stock_ticker, period, interval, trading_mode, custom_buy_threshold, custom_sell_threshold)
-    predictions = []
-
-    for _, row in data.iterrows():
-        inputs = tokenizer(row['Text'], return_tensors="pt", truncation=True, padding=True)
-        outputs = model(**inputs)
-        logits = outputs.logits[0].detach().numpy()
-
-        action_idx = logits.argmax()
-        action = ['SELL', 'HOLD', 'BUY'][action_idx]
-        confidence = np.max(logits)
-
-        predictions.append({
-            "text": row['Text'],
-            "action": action,
-            "logits": logits,
-            "confidence": confidence,
-            "close_price": row['Close'],
-            "description": f"Prediction based on stock price and volume changes.",
-            "evaluation": f"Model evaluated the stock's behavior as {action} due to the percentage change in price."
-        })
-        
-    publish_prediction(stock_ticker, predictions[-1])
-
-    return predictions
-
-# Fetch latest news headlines from Google News RSS
-def fetch_news(stock_ticker):
-    rss_url = f"https://news.google.com/rss/search?q={stock_ticker}+stock&hl=en-US&gl=US&ceid=US:en"
-    feed = feedparser.parse(rss_url)
-
-    headlines = []
-    for entry in feed.entries[:5]:  # Get the top 5 headlines
-        headlines.append(entry.title)
-
-    if not headlines:
-        headlines = ["No recent news available."]
-    
-    return headlines
-
-# PyQt5 UI to display graphs and stock recommendations
-class StockPredictionApp(QWidget):
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle('Stocky Day Trader')
-        self.setGeometry(100, 100, 1200, 800)
-
-        # Create main layout
-        main_layout = QVBoxLayout()
-
-        # Input for custom stock ticker
-        self.ticker_input = QLineEdit(self)
-        self.ticker_input.setPlaceholderText("Enter stock ticker (e.g., AAPL, GOOGL)")
-        
-        self.training_period_dropdown = QComboBox(self)
-        self.training_period_dropdown.addItems(['1d', '2d','3d', '5d'])
-        
-        self.prediction_period_dropdown = QComboBox(self)
-        self.prediction_period_dropdown.addItems(['1m', '5m', '15m', '30m', '60m'])
-        
-        self.trading_mode_dropdown = QComboBox(self)
-        self.trading_mode_dropdown.addItems(['Normal', 'Minimal', 'Aggressive', 'Custom'])
-        self.trading_mode_dropdown.currentTextChanged.connect(self.on_trading_mode_changed)
-
-        self.custom_buy_threshold = QLineEdit(self)
-        self.custom_buy_threshold.setPlaceholderText("Buy threshold (e.g., 1.5)")
-        self.custom_sell_threshold = QLineEdit(self)
-        self.custom_sell_threshold.setPlaceholderText("Sell threshold (e.g., -1.5)")
-
-        self.custom_buy_threshold.setVisible(False)
-        self.custom_sell_threshold.setVisible(False)
-
-        self.ticker_button = QPushButton('Get Prediction', self)
-        self.ticker_button.clicked.connect(self.on_ticker_button_clicked)
-
-        main_layout.addWidget(QLabel('Enter Stock Ticker:'))
-        main_layout.addWidget(self.ticker_input)
-        main_layout.addWidget(QLabel('Training Period:'))
-        main_layout.addWidget(self.training_period_dropdown)
-        main_layout.addWidget(QLabel('Data Interval Period:'))
-        main_layout.addWidget(self.prediction_period_dropdown)
-        main_layout.addWidget(QLabel('Trading Mode:'))
-        main_layout.addWidget(self.trading_mode_dropdown)
-        main_layout.addWidget(self.custom_buy_threshold)
-        main_layout.addWidget(self.custom_sell_threshold)
-        main_layout.addWidget(self.ticker_button)
-
-        # Timer for live updates
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.on_ticker_button_clicked)
-
-        # Stock recommendation display (BUY, SELL, HOLD)
-        self.recommendation_label = QLabel('Recommendation:')
-        self.recommendation_label.setStyleSheet('font-size: 24px; color: black;')
-        main_layout.addWidget(self.recommendation_label)
-
-        # Graph display
-        self.figure = plt.Figure(figsize=(8, 6), dpi=100)
-        self.canvas = FigureCanvas(self.figure)
-        main_layout.addWidget(self.canvas)
-
-        # Log display
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setFixedHeight(150)
-        main_layout.addWidget(self.log_output)
-
-        # Progress bar for training
-        self.progress_bar = QProgressBar(self)
-        self.progress_bar.setRange(0, 0)  # Indeterminate range
-        self.progress_bar.setVisible(False)
-        main_layout.addWidget(self.progress_bar)
-        
-        # display the time left until refresh timer 
-        self.timer_label = QLabel('Time until refresh:')
-        main_layout.addWidget(self.timer_label)
-        
-        # Update the timer label every second
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self.update_timer_label)
-        self.update_timer.setInterval(1000)  # Update every second (1000 ms)
-
-        # GitHub footer label
-        self.github_label = QLabel('<a href="https://github.com/grabercn">Made with ❤️ by Chrismslist</a>')
-        self.github_label.setOpenExternalLinks(True)
-        main_layout.addWidget(self.github_label)
-
-        # Set layout for main window
-        self.setLayout(main_layout)
-
-        # Initialize stock ticker
-        self.stock_ticker = ''
-
-    def on_trading_mode_changed(self, mode):
-        if mode == 'Custom':
-            self.custom_buy_threshold.setVisible(True)
-            self.custom_sell_threshold.setVisible(True)
-        else:
-            self.custom_buy_threshold.setVisible(False)
-            self.custom_sell_threshold.setVisible(False)
-        
-    def update_timer_label(self):
-        # Get the remaining time in milliseconds and convert to seconds
-        remaining_time_seconds = self.timer.remainingTime() / 1000  # Convert to seconds
-        
-        # Convert seconds to hours, minutes, seconds using gmtime
-        remaining_time = time.gmtime(max(remaining_time_seconds, 0))  # Ensure it's not negative
-
-        # Format the remaining time as HH:MM:SS
-        formatted_time = time.strftime('%H:%M:%S', remaining_time)
-        
-        # Update the timer label with the formatted time
-        self.timer_label.setText(f'Time until refresh: {formatted_time} remaining')
-
-        # Optionally stop the update_timer when the time is up
-        if remaining_time_seconds <= 0:
-            self.update_timer.stop()
-
-    def on_ticker_button_clicked(self):
-        # Get the stock ticker from the text input
-        self.stock_ticker = self.ticker_input.text().strip().upper()
-        
-        # Reset the timer label and stop the timer
-        self.timer_label.setText('Time until refresh:')
-        self.timer.stop()
-        self.update_timer.stop()
-        
-        if not self.stock_ticker:
-            self.log_output.append("Please enter a valid stock ticker.")
-            return
-        
-        ## Check if the stock market is open (between 9:30 AM and 4:00 PM EST) ##
-        
-        # Define EST timezone
-        est = pytz.timezone("US/Eastern")
-        current_time = datetime.now(est)
-
-        # Define market open and close times
-        market_open_time = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close_time = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
-
-        if current_time < market_open_time or current_time >= market_close_time:
-            self.log_output.append("The stock market is currently closed. Timer set to next market open.")
-
-            # Calculate time until market opens
-            if current_time < market_open_time:
-                time_until_open = (market_open_time - current_time).total_seconds()
-            else:  # After market close, calculate time until next day's open
-                next_day_open = market_open_time + timedelta(days=1)
-                time_until_open = (next_day_open - current_time).total_seconds()
-
-            # Convert seconds to milliseconds for the timer
-            self.timer.setInterval(int(time_until_open * 1000))
-            self.timer.start()
-            self.update_timer.start()
-            return            
-
-        # Reset the UI
-        self.recommendation_label.setText('Recommendation:')
-        #self.log_output.clear()
-
-        # Clear the graph
-        self.figure.clear()
-
-        # Show progress bar while training
-        self.progress_bar.setVisible(True)
-        
-        # Start training the model
-        self.train_and_predict()
-
-    def train_and_predict(self):
-        # Fetch historical data for the selected stock and train the model
-        trading_mode = self.trading_mode_dropdown.currentText()
-        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
-        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
-
-        data = fetch_and_prepare_data(
-            self.stock_ticker, 
-            period=self.training_period_dropdown.currentText(), 
-            interval=self.prediction_period_dropdown.currentText(),
-            trading_mode=trading_mode,
-            custom_buy_threshold=custom_buy_threshold,
-            custom_sell_threshold=custom_sell_threshold
-        )
-
-        # Simulate the training process (this would normally take time)
-        # Start the training process in a separate thread
-        self.worker = TrainingWorker(data)
-        self.worker.finished.connect(self.on_training_finished)
-        self.worker.start()
-
-    def on_training_finished(self):
-        # After training is complete, hide the progress bar and update the UI
-        self.progress_bar.setVisible(False)
-
-        # Make predictions with the newly trained model
-        trading_mode = self.trading_mode_dropdown.currentText()
-        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
-        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
-
-        predictions = predict(
-            self.stock_ticker, 
-            period=self.training_period_dropdown.currentText(), 
-            interval=self.prediction_period_dropdown.currentText(),
-            trading_mode=trading_mode,
-            custom_buy_threshold=custom_buy_threshold,
-            custom_sell_threshold=custom_sell_threshold
-        )
-        
-        # Start the countdown timer for the refresh
-        # set the timer based on the prediction period dropdown (we need to manually define these values)
-        if self.prediction_period_dropdown.currentText() == '1m':
-            self.timer.start(60000)
-        elif self.prediction_period_dropdown.currentText() == '5m':
-            self.timer.start(300000)
-        elif self.prediction_period_dropdown.currentText() == '15m':
-            self.timer.start(900000)
-        elif self.prediction_period_dropdown.currentText() == '30m':
-            self.timer.start(1800000)
-        elif self.prediction_period_dropdown.currentText() == '60m':
-            self.timer.start(360000) # 1 hour
-        else:
-            self.timer.start(60000)
-
-        # Start the update_timer to update the label
-        self.update_timer.start()
-
-        # Update the graph and recommendation label with results
-        self.update_graph_and_predictions(predictions)
-
-    def update_stock_data(self):
-        # Fetch the latest stock data and update the graph and recommendations
-        trading_mode = self.trading_mode_dropdown.currentText()
-        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
-        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
-
-        predictions = predict(
-            self.stock_ticker, 
-            period=self.training_period_dropdown.currentText(), 
-            interval=self.prediction_period_dropdown.currentText(),
-            trading_mode=trading_mode,
-            custom_buy_threshold=custom_buy_threshold,
-            custom_sell_threshold=custom_sell_threshold
-        )
-        self.update_graph_and_predictions(predictions)
-
-    def update_graph_and_predictions(self, predictions=None):
-        # Fetch data and make predictions if needed
-        trading_mode = self.trading_mode_dropdown.currentText()
-        custom_buy_threshold = float(self.custom_buy_threshold.text()) if self.custom_buy_threshold.text() else None
-        custom_sell_threshold = float(self.custom_sell_threshold.text()) if self.custom_sell_threshold.text() else None
-
-        if not predictions:
-            predictions = predict(self.stock_ticker, period=self.training_period_dropdown.currentText(), interval=self.prediction_period_dropdown.currentText(), trading_mode=self.trading_mode_dropdown.currentText())        
-        # Fetch historical data for graphing
-        data = fetch_and_prepare_data(
-            self.stock_ticker, 
-            period=self.training_period_dropdown.currentText(), 
-            interval=self.prediction_period_dropdown.currentText(),
-            trading_mode=trading_mode,
-            custom_buy_threshold=custom_buy_threshold,
-            custom_sell_threshold=custom_sell_threshold
-        )
-
-        # Plot the stock price data on the graph
-        ax = self.figure.add_subplot(111)
-        ax.clear()
-        ax.plot(data['Close'], label=f'{self.stock_ticker} Closing Prices', color='blue')
-        ax.set_title(f'{self.stock_ticker} Stock Price History')
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Price ($)')
-        ax.legend()
-        self.canvas.draw()
-
-        # Display the latest recommendation
-        last_prediction = predictions[-1]
-        self.recommendation_label.setText(f'Recommendation: {last_prediction["action"]} ({last_prediction["confidence"]:.2f})')
-        self.recommendation_label.setStyleSheet(f'font-size: 24px; color: {"green" if last_prediction["action"] == "BUY" else "red" if last_prediction["action"] == "SELL" else "navy"};')
-
-        # Log the recommendation with time and description
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        self.log_output.append(f"{timestamp} | Prediction: {last_prediction['action']} | Confidence: {last_prediction['confidence']:.2f} | Price: ${last_prediction['close_price']:.2f}")
-
-        # Log the new metrics
-        last_row = data.iloc[-1]
-        self.log_output.append(f"BBands: ({last_row['BBL_20_2.0']:.2f}, {last_row['BBM_20_2.0']:.2f}, {last_row['BBU_20_2.0']:.2f}) | MACD: {last_row['MACD_12_26_9']:.2f} | RSI: {last_row['RSI_14']:.2f} | News Sentiment: {np.mean([vader_analyzer.polarity_scores(h)['compound'] for h in fetch_news(self.stock_ticker)]) if fetch_news(self.stock_ticker) else 0:.2f}")
-
-# Worker thread for training model asynchronously
+from core.data import fetch_intraday, get_all_features
+from core.model import train_lgbm, predict_lgbm
+from core.risk import RiskManager
+from core.signals import write_signal
+from core.labeling import LABEL_NAMES
+from core.chart import (
+    style_axis, plot_buy_sell_markers, BG_DARK,
+    COLOR_PRICE, COLOR_VWAP, COLOR_EMA_FAST, COLOR_EMA_SLOW,
+    COLOR_BUY, COLOR_SELL, COLOR_HOLD,
+)
+from core.style import APP_STYLESHEET, log_html
+
+
+# ─── Background training thread ─────────────────────────────────────────────
 class TrainingWorker(QThread):
-    finished = pyqtSignal()
+    """Trains LightGBM in a background thread so the UI stays responsive."""
+    finished = pyqtSignal(object, list, object)  # (model, features, data)
 
-    def __init__(self, data):
+    def __init__(self, data, ticker):
         super().__init__()
         self.data = data
+        self.ticker = ticker
 
     def run(self):
-        # Train the model in the background
-        train_model(self.data)
-        self.finished.emit()
+        model, features = train_lgbm(self.data, get_all_features("intraday"), self.ticker)
+        self.finished.emit(model, features, self.data)
 
-if __name__ == '__main__':
+
+# ─── Main Window ─────────────────────────────────────────────────────────────
+class DayTraderApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Stocky Day Trader — LightGBM + FinBERT")
+        self.setGeometry(100, 100, 1300, 900)
+        self.setStyleSheet(APP_STYLESHEET)
+
+        self.model = None
+        self.features = []
+        self.risk_manager = RiskManager()
+        self.stock_ticker = ""
+
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout()
+
+        # ── Controls ──
+        controls = QGroupBox("Trading Controls")
+        grid = QGridLayout()
+
+        self.ticker_input = QLineEdit()
+        self.ticker_input.setPlaceholderText("Ticker (e.g. AAPL, TSLA, SPY)")
+        grid.addWidget(QLabel("Ticker:"), 0, 0)
+        grid.addWidget(self.ticker_input, 0, 1)
+
+        self.period_combo = QComboBox()
+        self.period_combo.addItems(["5d", "3d", "2d", "1d"])
+        grid.addWidget(QLabel("Training Data:"), 0, 2)
+        grid.addWidget(self.period_combo, 0, 3)
+
+        self.interval_combo = QComboBox()
+        self.interval_combo.addItems(["1m", "5m", "15m", "30m"])
+        grid.addWidget(QLabel("Interval:"), 0, 4)
+        grid.addWidget(self.interval_combo, 0, 5)
+
+        self.run_btn = QPushButton("ANALYZE & PREDICT")
+        self.run_btn.clicked.connect(self._on_run)
+        grid.addWidget(self.run_btn, 1, 0, 1, 6)
+
+        controls.setLayout(grid)
+        layout.addWidget(controls)
+
+        # ── Signal display ──
+        signal_box = QGroupBox("Current Signal")
+        sig_layout = QHBoxLayout()
+
+        self.signal_label = QLabel("WAITING")
+        self.signal_label.setFont(QFont("Consolas", 28, QFont.Bold))
+        self.signal_label.setAlignment(Qt.AlignCenter)
+        self.signal_label.setStyleSheet("color: #666; padding: 10px;")
+        sig_layout.addWidget(self.signal_label)
+
+        self.stats_label = QLabel("")
+        self.stats_label.setFont(QFont("Consolas", 11))
+        self.stats_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        sig_layout.addWidget(self.stats_label)
+
+        signal_box.setLayout(sig_layout)
+        layout.addWidget(signal_box)
+
+        # ── Price chart ──
+        self.figure = plt.Figure(figsize=(10, 5), dpi=100, facecolor=BG_DARK)
+        self.canvas = FigureCanvas(self.figure)
+        layout.addWidget(self.canvas)
+
+        # ── Activity log ──
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setFixedHeight(180)
+        layout.addWidget(self.log_box)
+
+        # ── Progress bar ──
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
+
+        # ── Refresh timer ──
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._on_run)
+        self.tick_timer = QTimer()
+        self.tick_timer.timeout.connect(self._update_countdown)
+        self.tick_timer.setInterval(1000)
+        self.countdown_label = QLabel("")
+        layout.addWidget(self.countdown_label)
+
+        self.setLayout(layout)
+
+    # ── Logging helper ────────────────────────────────────────────────────
+
+    def _log(self, msg, level="info"):
+        self.log_box.append(log_html(msg, level))
+
+    # ── Countdown display ─────────────────────────────────────────────────
+
+    def _update_countdown(self):
+        remaining = self.timer.remainingTime() / 1000
+        if remaining > 0:
+            self.countdown_label.setText(
+                f"Next refresh in {time.strftime('%M:%S', time.gmtime(remaining))}"
+            )
+        else:
+            self.tick_timer.stop()
+
+    # ── Main analysis flow ────────────────────────────────────────────────
+
+    def _on_run(self):
+        self.stock_ticker = self.ticker_input.text().strip().upper()
+        self.timer.stop()
+        self.tick_timer.stop()
+
+        if not self.stock_ticker:
+            self._log("Enter a valid ticker.", "warn")
+            return
+
+        # Check if market is open (9:30 AM - 4:00 PM ET, weekdays)
+        est = pytz.timezone("US/Eastern")
+        now = datetime.now(est)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        if now.weekday() >= 5:
+            self._log("Market closed (weekend).", "warn")
+            return
+
+        if now < market_open or now >= market_close:
+            self._log("Market closed. Timer set for next open.", "warn")
+            wait = market_open - now if now < market_open else (market_open + timedelta(days=1)) - now
+            self.timer.start(int(wait.total_seconds() * 1000))
+            self.tick_timer.start()
+            return
+
+        # Fetch data
+        self.run_btn.setEnabled(False)
+        self.progress.setVisible(True)
+        self._log(f"Fetching {self.stock_ticker} data...")
+
+        data = fetch_intraday(
+            self.stock_ticker,
+            period=self.period_combo.currentText(),
+            interval=self.interval_combo.currentText(),
+        )
+
+        if data.empty or len(data) < 30:
+            self._log("Not enough data — try a longer period.", "error")
+            self.run_btn.setEnabled(True)
+            self.progress.setVisible(False)
+            return
+
+        self._log(f"Got {len(data)} bars. Training model...")
+
+        # Train in background thread
+        self._worker = TrainingWorker(data, self.stock_ticker)
+        self._worker.finished.connect(self._on_training_done)
+        self._worker.start()
+
+    def _on_training_done(self, model, features, data):
+        self.progress.setVisible(False)
+        self.run_btn.setEnabled(True)
+
+        if model is None:
+            self._log("Training failed — not enough usable data.", "error")
+            return
+
+        self.model = model
+        self.features = features
+        self._log(f"Model trained with {len(features)} features.")
+
+        # Run predictions on the full dataset
+        actions, confidences, probs = predict_lgbm(model, data, features)
+
+        # Extract latest prediction
+        last_action_name = LABEL_NAMES[actions[-1]]
+        last_conf = confidences[-1]
+        last_price = data["Close"].iloc[-1]
+        last_probs = probs[-1]
+        atr = data["ATRr_14"].iloc[-1] if "ATRr_14" in data.columns else last_price * 0.01
+
+        # Risk management calculations
+        can_trade, reason = self.risk_manager.can_trade()
+        size = self.risk_manager.position_size(last_price, atr)
+        side = "buy" if last_action_name == "BUY" else "sell"
+        sl = self.risk_manager.stop_loss(last_price, atr, side)
+        tp = self.risk_manager.take_profit(last_price, atr, side)
+
+        # Update signal display
+        colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
+        self.signal_label.setText(last_action_name)
+        self.signal_label.setStyleSheet(f"color: {colors[last_action_name]}; font-size: 28px;")
+
+        self.stats_label.setText(
+            f"Price: ${last_price:.2f}  |  ATR: ${atr:.2f}\n"
+            f"Confidence: {last_conf:.1%}\n"
+            f"Probs: SELL {last_probs[0]:.1%}  HOLD {last_probs[1]:.1%}  BUY {last_probs[2]:.1%}\n"
+            f"Size: {size} shares  |  SL: ${sl:.2f}  |  TP: ${tp:.2f}\n"
+            f"Can Trade: {'Yes' if can_trade else f'No — {reason}'}"
+        )
+
+        self._log(
+            f"SIGNAL: {last_action_name} | Conf: {last_conf:.1%} | "
+            f"${last_price:.2f} | {size} shr | SL ${sl:.2f} | TP ${tp:.2f}",
+            "trade",
+        )
+
+        # Write signal for StockExecuter
+        write_signal(self.stock_ticker, last_action_name, last_conf,
+                     last_price, size, sl, tp, atr)
+
+        # Update chart
+        self._update_chart(data, actions)
+
+        # Schedule next refresh based on interval
+        ms_map = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000}
+        self.timer.start(ms_map.get(self.interval_combo.currentText(), 300_000))
+        self.tick_timer.start()
+
+    # ── Chart ─────────────────────────────────────────────────────────────
+
+    def _update_chart(self, data, actions):
+        self.figure.clear()
+        self.figure.set_facecolor(BG_DARK)
+        ax = self.figure.add_subplot(111)
+
+        x = range(len(data))
+        closes = data["Close"].values
+
+        # Price + overlays
+        ax.plot(x, closes, color=COLOR_PRICE, linewidth=1.5, label="Price")
+
+        if "vwap" in data.columns:
+            ax.plot(x, data["vwap"].values, color=COLOR_VWAP, linewidth=1, alpha=0.7, label="VWAP")
+        if "EMA_9" in data.columns:
+            ax.plot(x, data["EMA_9"].values, color=COLOR_EMA_FAST, linewidth=0.8, alpha=0.6, label="EMA 9")
+        if "EMA_21" in data.columns:
+            ax.plot(x, data["EMA_21"].values, color=COLOR_EMA_SLOW, linewidth=0.8, alpha=0.6, label="EMA 21")
+        if "BBU_20_2.0" in data.columns:
+            ax.fill_between(x, data["BBL_20_2.0"].values, data["BBU_20_2.0"].values, alpha=0.1, color="white")
+
+        # Buy/Sell markers
+        plot_buy_sell_markers(ax, x, closes, actions)
+        style_axis(ax, f"{self.stock_ticker} — Intraday Analysis")
+
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = StockPredictionApp()
+    window = DayTraderApp()
     window.show()
     sys.exit(app.exec_())

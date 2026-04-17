@@ -1,0 +1,71 @@
+name: Build & Release Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'          # Trigger on version tags like v1.0.0
+  workflow_dispatch:    # Allow manual trigger from GitHub UI
+
+permissions:
+  contents: write       # Needed to create releases
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: python build_exe.py
+
+      - name: Zip release folder
+        run: |
+          Compress-Archive -Path dist\StockyAiTrader\* -DestinationPath StockyAiTrader-Windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StockyAiTrader-Windows
+          path: StockyAiTrader-Windows.zip
+
+      # Create a GitHub Release when triggered by a tag
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: StockyAiTrader ${{ github.ref_name }}
+          body: |
+            ## StockyAiTrader ${{ github.ref_name }}
+
+            **Windows standalone build** — no Python installation required.
+
+            ### First Launch
+            1. Extract the zip
+            2. Run `StockyAiTrader.exe`
+            3. Click **Download** in the Model Manager to fetch FinBERT (~300MB)
+            4. Enter your Alpaca API keys in Settings
+            5. Launch Day Trader and start analyzing
+
+            ### What's included
+            - LightGBM + FinBERT + TimeGPT + StockTwits sentiment
+            - ATR-based risk management with bracket orders
+            - Alpaca paper trading integration
+
+            ### What's NOT included (downloaded on first use)
+            - FinBERT model (~300MB) — download via Model Manager
+            - Twitter-RoBERTa model (~500MB) — optional, download via Model Manager
+          files: StockyAiTrader-Windows.zip
+          draft: false
+          prerelease: false
