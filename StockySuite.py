@@ -183,7 +183,7 @@ class DashboardPanel(QWidget):
             btn = QPushButton(f"  {label}")
             btn.setIcon(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY))
             btn.setStyleSheet(f"""
-                QPushButton {{ background-color: {theme.color('bg_card') if hasattr(theme, 'color') else BG_PANEL};
+                QPushButton {{ background-color: {BG_PANEL};
                     border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; font-size: 12px; }}
                 QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; }}
             """)
@@ -1642,90 +1642,7 @@ class StockySuite(QMainWindow):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SPLASH SCREEN
-# ═════════════════════════════════════════════════════════════════════════════
-
-def create_splash_pixmap():
-    """Generate a premium splash screen image programmatically."""
-    w, h = 580, 360
-    pixmap = QPixmap(w, h)
-    pixmap.fill(QColor(0, 0, 0, 0))
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-
-    # Background gradient (dark blue -> near black)
-    grad = QLinearGradient(0, 0, w, h)
-    grad.setColorAt(0, QColor(15, 17, 23))
-    grad.setColorAt(0.5, QColor(20, 25, 40))
-    grad.setColorAt(1, QColor(10, 12, 18))
-    painter.setBrush(grad)
-    painter.setPen(Qt.NoPen)
-    painter.drawRoundedRect(0, 0, w, h, 16, 16)
-
-    # Subtle border
-    painter.setPen(QPen(QColor(42, 45, 58), 1))
-    painter.setBrush(Qt.NoBrush)
-    painter.drawRoundedRect(1, 1, w-2, h-2, 16, 16)
-
-    # Accent line at top
-    accent_grad = QLinearGradient(0, 0, w, 0)
-    accent_grad.setColorAt(0, QColor(14, 165, 233, 0))
-    accent_grad.setColorAt(0.3, QColor(14, 165, 233, 255))
-    accent_grad.setColorAt(0.7, QColor(16, 185, 129, 255))
-    accent_grad.setColorAt(1, QColor(16, 185, 129, 0))
-    painter.setPen(QPen(accent_grad, 3))
-    painter.drawLine(40, 4, w-40, 4)
-
-    # App icon (if exists)
-    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
-    if os.path.exists(icon_path):
-        icon = QPixmap(icon_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        painter.drawPixmap((w - 64) // 2, 40, icon)
-
-    # App name
-    painter.setPen(QColor(14, 165, 233))
-    painter.setFont(QFont("Segoe UI", 28, QFont.Bold))
-    painter.drawText(0, 115, w, 45, Qt.AlignCenter, APP_NAME)
-
-    # Tagline
-    painter.setPen(QColor(148, 163, 184))
-    painter.setFont(QFont("Segoe UI", 12))
-    painter.drawText(0, 160, w, 25, Qt.AlignCenter, APP_TAGLINE)
-
-    # Version
-    painter.setPen(QColor(100, 116, 139))
-    painter.setFont(QFont("Segoe UI", 10))
-    painter.drawText(0, 188, w, 20, Qt.AlignCenter, f"v{APP_VERSION}")
-
-    # Feature list
-    features = [
-        "LightGBM + FinBERT AI Engine",
-        "10 Signal Addons  |  38 Features",
-        "Multi-Stock Scanner  |  Auto-Invest",
-        "Risk Management  |  Tax Reports",
-    ]
-    painter.setFont(QFont("Segoe UI", 9))
-    for i, feat in enumerate(features):
-        painter.setPen(QColor(100, 116, 139))
-        painter.drawText(0, 225 + i * 20, w, 18, Qt.AlignCenter, feat)
-
-    # Loading text area (will be updated)
-    painter.setPen(QColor(14, 165, 233, 150))
-    painter.setFont(QFont("Segoe UI", 9))
-    painter.drawText(0, h - 30, w, 20, Qt.AlignCenter, "Loading...")
-
-    # Copyright
-    painter.setPen(QColor(64, 74, 91))
-    painter.setFont(QFont("Segoe UI", 8))
-    painter.drawText(0, h - 16, w, 14, Qt.AlignCenter, f"2024-2026 {APP_AUTHOR}  |  {APP_URL}")
-
-    painter.end()
-    return pixmap
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ABOUT DIALOG
+# ABOUT DIALOG (boot screen + setup wizard in core/ui/)
 # ═════════════════════════════════════════════════════════════════════════════
 
 class AboutDialog(QDialog):
@@ -1789,163 +1706,47 @@ class AboutDialog(QDialog):
         self.setLayout(layout)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# LOADING WINDOW (real progress bar, not just splash image)
-# ═════════════════════════════════════════════════════════════════════════════
-
-class LoadingWindow(QWidget):
-    """Premium boot screen with determinate progress bar showing each module loading."""
-
-    def __init__(self):
-        super().__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(540, 380)
-
-        # Center on screen
-        screen = QApplication.primaryScreen().geometry()
-        self.move((screen.width() - 540) // 2, (screen.height() - 380) // 2)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-
-        # Container with styled background
-        container = QWidget()
-        container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {BG_DARKEST};
-                border: 1px solid {BORDER};
-                border-radius: 12px;
-            }}
-        """)
-        inner = QVBoxLayout()
-        inner.setContentsMargins(30, 25, 30, 20)
-        inner.setSpacing(6)
-
-        # Icon
-        icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
-        if os.path.exists(icon_path):
-            icon_lbl = QLabel()
-            icon_lbl.setPixmap(QPixmap(icon_path).scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            icon_lbl.setAlignment(Qt.AlignCenter)
-            inner.addWidget(icon_lbl)
-
-        # App name
-        name = QLabel(APP_NAME)
-        name.setFont(QFont(FONT_FAMILY, 24, QFont.Bold))
-        name.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent; border: none;")
-        name.setAlignment(Qt.AlignCenter)
-        inner.addWidget(name)
-
-        # Tagline
-        tag = QLabel(APP_TAGLINE)
-        tag.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none; font-size: 11px;")
-        tag.setAlignment(Qt.AlignCenter)
-        inner.addWidget(tag)
-
-        # Version
-        ver = QLabel(f"v{APP_VERSION}")
-        ver.setStyleSheet(f"color: {BORDER}; background: transparent; border: none; font-size: 10px;")
-        ver.setAlignment(Qt.AlignCenter)
-        inner.addWidget(ver)
-
-        inner.addSpacing(15)
-
-        # Status message
-        self.status_lbl = QLabel("Initializing...")
-        self.status_lbl.setFont(QFont(FONT_MONO, 10))
-        self.status_lbl.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent; border: none;")
-        self.status_lbl.setAlignment(Qt.AlignLeft)
-        inner.addWidget(self.status_lbl)
-
-        # Progress bar
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(6)
-        self.progress.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: {BG_INPUT};
-                border: none;
-                border-radius: 3px;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {BRAND_PRIMARY}, stop:1 {BRAND_ACCENT});
-                border-radius: 3px;
-            }}
-        """)
-        inner.addWidget(self.progress)
-
-        # Detail log
-        self.detail_lbl = QLabel("")
-        self.detail_lbl.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none; font-size: 9px;")
-        self.detail_lbl.setAlignment(Qt.AlignLeft)
-        inner.addWidget(self.detail_lbl)
-
-        inner.addStretch()
-
-        # Copyright
-        copy_lbl = QLabel(f"2024-2026 {APP_AUTHOR}")
-        copy_lbl.setStyleSheet(f"color: {BORDER}; background: transparent; border: none; font-size: 8px;")
-        copy_lbl.setAlignment(Qt.AlignCenter)
-        inner.addWidget(copy_lbl)
-
-        container.setLayout(inner)
-        layout.addWidget(container)
-        self.setLayout(layout)
-
-    def set_progress(self, pct, status, detail=""):
-        self.progress.setValue(int(pct))
-        self.status_lbl.setText(status)
-        self.detail_lbl.setText(detail)
-        QApplication.processEvents()
-
-
 def boot_app():
-    """Boot sequence with real loading progress."""
+    """Boot sequence with premium animated loading screen."""
     app = QApplication(sys.argv)
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
 
-    # Show loading window
-    loader = LoadingWindow()
-    loader.show()
+    # Premium boot screen with animated orbs and gradient bar
+    from core.ui.boot_screen import BootScreen
+    boot = BootScreen()
+    boot.show()
     app.processEvents()
 
     def step(pct, msg, detail=""):
-        loader.set_progress(pct, msg, detail)
-        # Small delay so user can actually read each step
-        time.sleep(0.35)
+        boot.step(pct, msg, detail)
+        time.sleep(0.4)
 
-    # Boot steps
-    step(5,  "Loading core modules...",       "features, model, risk, broker, scanner")
-    step(15, "Checking dependencies...",      "lightgbm, ta, transformers, torch")
+    step(5,  "Loading core modules...",       "features · model · risk · broker · scanner")
+    step(15, "Checking dependencies...",      "lightgbm · ta · transformers · torch")
 
     step(25, "Discovering addons...",         "Scanning StockyApps/addons/")
     from addons import discover_addons, get_all_addons
     discover_addons()
     addons = get_all_addons()
     active = [a for a in addons if a.available and a.enabled]
-    step(40, f"Addons: {len(active)}/{len(addons)} active", ", ".join(a.name for a in active[:4]) + "...")
+    step(40, f"Loaded {len(active)} addons",  " · ".join(a.name for a in active[:5]))
 
-    step(50, "Initializing risk manager...",  "ATR sizing | 2% risk | 5% drawdown limit")
-
+    step(50, "Initializing risk engine...",   "ATR sizing · 2% risk · 5% drawdown limit")
     step(60, "Connecting to broker...",       "Alpaca paper trading API")
 
     from core.profiles import get_active_profile_name
-    profile = get_active_profile_name()
-    step(70, f"Hardware profile: {profile}",  "Addon configuration loaded")
+    step(70, f"Profile: {get_active_profile_name()}", "Hardware preset loaded")
 
-    step(80, "Building interface...",         "8 panels | event bus | signal routing")
+    step(80, "Building interface...",         "8 panels · event bus · signal routing")
     suite = StockySuite()
+
+    step(90, "Loading log history...",        "Decision logs · trade history")
 
     # ── Menu Bar ──
     from core.ui.icons import StockyIcons
-    from core.ui.setup_wizard import SetupWizard
+    from core.ui.setup_wizard import needs_setup, SetupWizard
 
-    # View menu
     view_menu = suite.menuBar().addMenu("View")
     for i, (name, icon_key) in enumerate([
         ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Day Trade", "bolt"),
@@ -1958,60 +1759,49 @@ def boot_app():
         action.setShortcut(f"Ctrl+{i+1}")
         view_menu.addAction(action)
 
-    # Tools menu
     tools_menu = suite.menuBar().addMenu("Tools")
-    zoom_in = QAction("Zoom In", suite)
-    zoom_in.setShortcut("Ctrl+=")
-    zoom_in.triggered.connect(lambda: suite._zoom(0.1))
-    tools_menu.addAction(zoom_in)
-    zoom_out = QAction("Zoom Out", suite)
-    zoom_out.setShortcut("Ctrl+-")
-    zoom_out.triggered.connect(lambda: suite._zoom(-0.1))
-    tools_menu.addAction(zoom_out)
-    zoom_reset = QAction("Reset Zoom", suite)
-    zoom_reset.setShortcut("Ctrl+0")
-    zoom_reset.triggered.connect(lambda: suite._reset_zoom())
-    tools_menu.addAction(zoom_reset)
+    for label, shortcut, fn in [
+        ("Zoom In", "Ctrl+=", lambda: suite._zoom(0.1)),
+        ("Zoom Out", "Ctrl+-", lambda: suite._zoom(-0.1)),
+        ("Reset Zoom", "Ctrl+0", lambda: suite._reset_zoom()),
+    ]:
+        a = QAction(label, suite)
+        a.setShortcut(shortcut)
+        a.triggered.connect(fn)
+        tools_menu.addAction(a)
     tools_menu.addSeparator()
-    rerun_setup = QAction("Run Setup Wizard...", suite)
-    rerun_setup.triggered.connect(lambda: SetupWizard(suite).exec_())
-    tools_menu.addAction(rerun_setup)
+    rerun = QAction("Run Setup Wizard...", suite)
+    rerun.triggered.connect(lambda: SetupWizard(suite).exec_())
+    tools_menu.addAction(rerun)
 
-    # Help menu
     help_menu = suite.menuBar().addMenu("Help")
     about_action = QAction(f"About {APP_NAME}", suite)
     about_action.triggered.connect(lambda: AboutDialog(suite).exec_())
     help_menu.addAction(about_action)
 
-    step(90, "Loading log history...",        "Decision logs, trade history")
-    step(95, "Checking first-run setup...",  "")
-
-    # Show setup wizard on first boot
-    from core.ui.setup_wizard import needs_setup, SetupWizard
+    # Setup wizard on first boot
+    step(95, "Checking first-run setup...", "")
     if needs_setup():
-        step(100, "Launching setup wizard...", "First-time configuration")
+        step(100, "Welcome!", "Launching setup wizard...")
         time.sleep(0.3)
-        loader.hide()
+        boot.hide()
         wizard = SetupWizard()
         wizard.setStyleSheet(get_stylesheet("auto"))
         wizard.exec_()
-        # Refresh broker after wizard may have set keys
         suite.broker = suite._init_broker()
-        if hasattr(suite, 'dashboard') and hasattr(suite.dashboard, 'refresh'):
-            suite.dashboard.broker = suite.broker
-        if hasattr(suite, 'scanner'):
-            suite.scanner.broker = suite.broker
+        for attr in ("dashboard", "scanner", "day_trade", "tax_reports", "testing"):
+            p = getattr(suite, attr, None)
+            if p and hasattr(p, "broker"):
+                p.broker = suite.broker
     else:
         step(100, "Ready.", f"{APP_NAME} v{APP_VERSION}")
-        time.sleep(0.4)
+        time.sleep(0.5)
 
-    # Hide loader and show main window
-    loader.hide()
-    loader.deleteLater()
+    # Fade out boot screen, show main window
+    boot.finish()
     suite.show()
     suite.raise_()
     suite.activateWindow()
-
     sys.exit(app.exec_())
 
 
