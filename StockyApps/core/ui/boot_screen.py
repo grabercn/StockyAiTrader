@@ -172,11 +172,20 @@ class BootScreen(QWidget):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(580, 420)
 
-        # Center on screen
-        screen = QApplication.primaryScreen().geometry()
-        self.move((screen.width() - 580) // 2, (screen.height() - 420) // 2)
+        # Scale to screen resolution
+        screen = QApplication.primaryScreen()
+        geo = screen.geometry()
+        dpi = screen.logicalDotsPerInch()
+        scale = 1.5 if geo.width() >= 2560 else (1.2 if geo.width() >= 1920 else 1.0)
+        if dpi > 120:
+            scale *= 1.1
+
+        bw = int(580 * scale)
+        bh = int(420 * scale)
+        self.setFixedSize(bw, bh)
+        self.move((geo.width() - bw) // 2, (geo.height() - bh) // 2)
+        self._scale = scale
 
         # Animated background
         self._bg = _AnimatedBackground(self)
@@ -204,7 +213,7 @@ class BootScreen(QWidget):
 
         # App name
         name = QLabel(APP_NAME)
-        name.setFont(QFont(FONT_FAMILY, 28, QFont.Bold))
+        name.setFont(QFont(FONT_FAMILY, int(28 * scale), QFont.Bold))
         name.setAlignment(Qt.AlignCenter)
         name.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent; letter-spacing: 2px;")
         inner.addWidget(name)
@@ -212,20 +221,20 @@ class BootScreen(QWidget):
         # Tagline
         tag = QLabel(APP_TAGLINE)
         tag.setAlignment(Qt.AlignCenter)
-        tag.setStyleSheet(f"color: #94a3b8; font-size: 11px; background: transparent;")
+        tag.setStyleSheet(f"color: #94a3b8; font-size: {int(11 * scale)}px; background: transparent;")
         inner.addWidget(tag)
 
         # Version
         ver = QLabel(f"v{APP_VERSION}")
         ver.setAlignment(Qt.AlignCenter)
-        ver.setStyleSheet(f"color: #475569; font-size: 9px; background: transparent;")
+        ver.setStyleSheet(f"color: #475569; font-size: {int(9 * scale)}px; background: transparent;")
         inner.addWidget(ver)
 
-        inner.addSpacing(30)
+        inner.addSpacing(int(30 * scale))
 
         # Status message
         self._status = QLabel("Initializing...")
-        self._status.setFont(QFont(FONT_FAMILY, 11, QFont.DemiBold))
+        self._status.setFont(QFont(FONT_FAMILY, int(11 * scale), QFont.DemiBold))
         self._status.setStyleSheet(f"color: {BRAND_PRIMARY}; background: transparent;")
         inner.addWidget(self._status)
 
@@ -255,6 +264,20 @@ class BootScreen(QWidget):
         content.setLayout(inner)
         layout.addWidget(content)
         self.setLayout(layout)
+
+        # Fade-in animation on show
+        self._content = content
+        effect = QGraphicsOpacityEffect(content)
+        content.setGraphicsEffect(effect)
+        self._fade_in = QPropertyAnimation(effect, b"opacity")
+        self._fade_in.setDuration(800)
+        self._fade_in.setStartValue(0.0)
+        self._fade_in.setEndValue(1.0)
+        self._fade_in.setEasingCurve(QEasingCurve.OutCubic)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fade_in.start()
 
     def resizeEvent(self, event):
         self._bg.resize(self.size())

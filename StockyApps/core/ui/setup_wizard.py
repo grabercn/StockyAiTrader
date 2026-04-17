@@ -11,7 +11,7 @@ import math
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QStackedWidget, QWidget, QFrame,
-    QGraphicsOpacityEffect, QSpacerItem, QSizePolicy,
+    QGraphicsOpacityEffect, QSpacerItem, QSizePolicy, QApplication,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QPointF, QSize,
@@ -54,10 +54,11 @@ class _WizardBackground(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._phase = 0.0
+        import random
+        self._phase = random.uniform(0, 10)  # Start at random phase so orbs are mid-motion
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(40)
+        self._timer.start(35)
 
     def _tick(self):
         self._phase += 0.02
@@ -228,8 +229,16 @@ class SetupWizard(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Welcome")
-        self.setFixedSize(620, 560)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        # Scale to screen resolution
+        screen = QApplication.primaryScreen()
+        geo = screen.geometry()
+        dpi = screen.logicalDotsPerInch()
+        self._scale = 1.5 if geo.width() >= 2560 else (1.2 if geo.width() >= 1920 else 1.0)
+        if dpi > 120:
+            self._scale *= 1.1
+        self.setFixedSize(int(620 * self._scale), int(560 * self._scale))
 
         # Background
         self._bg = _WizardBackground(self)
@@ -316,14 +325,15 @@ class SetupWizard(QDialog):
         return page, layout
 
     def _title(self, layout, text, icon_name=None):
+        s = getattr(self, '_scale', 1.0)
         row = QHBoxLayout()
         if icon_name:
             icon = QLabel()
-            icon.setPixmap(StockyIcons.get(icon_name, 28, BRAND_PRIMARY))
+            icon.setPixmap(StockyIcons.get(icon_name, int(28 * s), BRAND_PRIMARY))
             icon.setStyleSheet("background: transparent;")
             row.addWidget(icon)
         lbl = QLabel(text)
-        lbl.setFont(QFont(FONT_FAMILY, 20, QFont.Bold))
+        lbl.setFont(QFont(FONT_FAMILY, int(20 * s), QFont.Bold))
         lbl.setStyleSheet(f"color: {theme.color('text_heading')}; background: transparent;")
         row.addWidget(lbl)
         row.addStretch()

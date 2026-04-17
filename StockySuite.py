@@ -1519,9 +1519,12 @@ class StockySuite(QMainWindow):
         # Activity feed forwarding
         self.event_bus.log_entry.connect(self._on_log)
 
-        # UI scaling — load saved zoom or default to 130%
+        # UI scaling — load saved zoom or auto-detect from screen resolution
         settings = load_settings()
-        self._scale = settings.get("ui_zoom", 1.30)
+        if "ui_zoom" in settings:
+            self._scale = settings["ui_zoom"]
+        else:
+            self._scale = self._detect_ideal_scale()
         self._apply_scale()
 
         # Keyboard shortcuts for zoom
@@ -1624,6 +1627,27 @@ class StockySuite(QMainWindow):
         self.statusBar().showMessage(
             f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", 3000
         )
+
+    @staticmethod
+    def _detect_ideal_scale():
+        """Auto-detect ideal UI scale based on screen resolution and DPI."""
+        try:
+            screen = QApplication.primaryScreen()
+            w = screen.geometry().width()
+            dpi = screen.logicalDotsPerInch()
+            if w >= 2560:
+                scale = 1.5
+            elif w >= 1920:
+                scale = 1.3
+            elif w >= 1600:
+                scale = 1.15
+            else:
+                scale = 1.0
+            if dpi > 120:
+                scale *= 1.1
+            return round(scale, 2)
+        except Exception:
+            return 1.3
 
     def _zoom(self, delta):
         self._scale = max(0.7, min(2.0, round(self._scale + delta, 2)))
