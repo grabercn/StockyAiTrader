@@ -16,6 +16,7 @@ from PyQt5.QtGui import (
     QPainter, QColor, QLinearGradient, QRadialGradient,
     QPen, QBrush, QPainterPath, QFont,
 )
+from .theme import theme
 
 
 class GlassPanel(QWidget):
@@ -43,10 +44,11 @@ class GlassPanel(QWidget):
 
         r = self.rect().adjusted(1, 1, -1, -1)
 
-        # Glass background
+        # Glass background — adapts to current theme
+        bg = theme.qcolor("bg_card")
         grad = QLinearGradient(0, 0, 0, r.height())
-        grad.setColorAt(0, QColor(30, 33, 48, 220))
-        grad.setColorAt(1, QColor(20, 22, 35, 240))
+        grad.setColorAt(0, QColor(bg.red(), bg.green(), bg.blue(), 220))
+        grad.setColorAt(1, QColor(bg.red(), bg.green(), bg.blue(), 240))
         painter.setBrush(grad)
 
         # Border with accent tint
@@ -108,14 +110,14 @@ class GradientHeader(QWidget):
         painter.drawLine(0, h - 1, w, h - 1)
 
         # Title text
-        painter.setPen(QColor(226, 232, 240))
+        painter.setPen(theme.qcolor("text_heading"))
         painter.setFont(QFont("Segoe UI", 15, QFont.Bold))
         y = 12 if self._subtitle else (h - 20) // 2
         painter.drawText(20, y, w - 40, 24, Qt.AlignLeft | Qt.AlignVCenter, self._title)
 
         # Subtitle
         if self._subtitle:
-            painter.setPen(QColor(148, 163, 184))
+            painter.setPen(theme.qcolor("text_secondary"))
             painter.setFont(QFont("Segoe UI", 10))
             painter.drawText(20, y + 22, w - 40, 18, Qt.AlignLeft | Qt.AlignVCenter, self._subtitle)
 

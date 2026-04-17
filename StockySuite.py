@@ -142,9 +142,16 @@ class DashboardPanel(QWidget):
 
     def _build(self):
         from core.widgets import StatCard, GradientDivider, SectionHeader
+        from core.ui.backgrounds import GradientHeader
+        from core.ui.charts import GaugeWidget, AreaSparkline
 
         layout = QVBoxLayout()
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        # Header
+        header = GradientHeader(f"Dashboard", "Portfolio overview and recent activity")
+        layout.addWidget(header)
 
         # Account stats row — premium stat cards
         cards_row = QHBoxLayout()
@@ -160,6 +167,30 @@ class DashboardPanel(QWidget):
         cards_row.addWidget(self.card_cash)
         cards_row.addWidget(self.card_pnl)
         layout.addLayout(cards_row)
+
+        layout.addWidget(GradientDivider())
+
+        # Quick actions row
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+        quick_actions = [
+            ("Scan Stocks", "scan", lambda: self.bus.log_entry.emit("Switch to Scanner tab", "info")),
+            ("Day Trade", "bolt", lambda: self.bus.log_entry.emit("Switch to Day Trade tab", "info")),
+            ("View Logs", "log", lambda: self.bus.log_entry.emit("Switch to Logs tab", "info")),
+        ]
+        for label, icon_key, callback in quick_actions:
+            from core.ui.icons import StockyIcons
+            btn = QPushButton(f"  {label}")
+            btn.setIcon(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY))
+            btn.setStyleSheet(f"""
+                QPushButton {{ background-color: {theme.color('bg_card') if hasattr(theme, 'color') else BG_PANEL};
+                    border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; font-size: 12px; }}
+                QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; }}
+            """)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(callback)
+            actions_row.addWidget(btn)
+        layout.addLayout(actions_row)
 
         layout.addWidget(GradientDivider())
 
@@ -186,7 +217,25 @@ class DashboardPanel(QWidget):
         pos_box.setLayout(pl)
         layout.addWidget(pos_box)
 
+        # Recent activity feed
+        layout.addWidget(GradientDivider())
+        activity_box = QGroupBox("Recent Activity")
+        al = QVBoxLayout()
+        self.activity_feed = QTextEdit()
+        self.activity_feed.setReadOnly(True)
+        self.activity_feed.setFixedHeight(120)
+        al.addWidget(self.activity_feed)
+        activity_box.setLayout(al)
+        layout.addWidget(activity_box)
+
+        # Forward log entries to dashboard activity feed
+        self.bus.log_entry.connect(self._on_activity)
+
         self.setLayout(layout)
+
+    def _on_activity(self, msg, level):
+        from core.branding import log_html
+        self.activity_feed.append(log_html(msg, level))
 
     def refresh(self):
         if not self.broker:
@@ -984,19 +1033,22 @@ class SettingsPanel(QWidget):
 
     def _change_theme(self, index):
         theme_map = {0: "auto", 1: "dark", 2: "light"}
-        theme = theme_map.get(index, "auto")
+        theme_name = theme_map.get(index, "auto")
         settings = load_settings()
-        settings["theme"] = theme
+        settings["theme"] = theme_name
         save_settings(settings)
+        # Refresh the theme provider so all custom widgets update
+        from core.ui.theme import theme as theme_provider
+        theme_provider.refresh()
         # Apply immediately to the main window
         main_window = self.window()
         if main_window:
-            main_window.setStyleSheet(get_stylesheet(theme))
+            main_window.setStyleSheet(get_stylesheet(theme_name))
             if hasattr(main_window, '_theme'):
-                main_window._theme = theme
+                main_window._theme = theme_name
             if hasattr(main_window, '_apply_scale'):
                 main_window._apply_scale()
-        self.bus.log_entry.emit(f"Theme changed to: {theme}", "system")
+        self.bus.log_entry.emit(f"Theme changed to: {theme_name}", "system")
 
     def _save_keys(self):
         settings = load_settings()
@@ -1889,19 +1941,71 @@ def boot_app():
     step(80, "Building interface...",         "8 panels | event bus | signal routing")
     suite = StockySuite()
 
-    # Add Help > About menu
+    # ── Menu Bar ──
+    from core.ui.icons import StockyIcons
+    from core.ui.setup_wizard import SetupWizard
+
+    # View menu
+    view_menu = suite.menuBar().addMenu("View")
+    for i, (name, icon_key) in enumerate([
+        ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Day Trade", "bolt"),
+        ("Long Trade", "chart_up"), ("Logs", "log"), ("Tax Reports", "tax"),
+        ("Testing", "test"), ("Settings", "settings"),
+    ]):
+        action = QAction(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY), name, suite)
+        idx = i
+        action.triggered.connect(lambda _, x=idx: suite.tabs.setCurrentIndex(x))
+        action.setShortcut(f"Ctrl+{i+1}")
+        view_menu.addAction(action)
+
+    # Tools menu
+    tools_menu = suite.menuBar().addMenu("Tools")
+    zoom_in = QAction("Zoom In", suite)
+    zoom_in.setShortcut("Ctrl+=")
+    zoom_in.triggered.connect(lambda: suite._zoom(0.1))
+    tools_menu.addAction(zoom_in)
+    zoom_out = QAction("Zoom Out", suite)
+    zoom_out.setShortcut("Ctrl+-")
+    zoom_out.triggered.connect(lambda: suite._zoom(-0.1))
+    tools_menu.addAction(zoom_out)
+    zoom_reset = QAction("Reset Zoom", suite)
+    zoom_reset.setShortcut("Ctrl+0")
+    zoom_reset.triggered.connect(lambda: suite._reset_zoom())
+    tools_menu.addAction(zoom_reset)
+    tools_menu.addSeparator()
+    rerun_setup = QAction("Run Setup Wizard...", suite)
+    rerun_setup.triggered.connect(lambda: SetupWizard(suite).exec_())
+    tools_menu.addAction(rerun_setup)
+
+    # Help menu
     help_menu = suite.menuBar().addMenu("Help")
     about_action = QAction(f"About {APP_NAME}", suite)
     about_action.triggered.connect(lambda: AboutDialog(suite).exec_())
     help_menu.addAction(about_action)
 
     step(90, "Loading log history...",        "Decision logs, trade history")
-    step(100, "Ready.",                       f"{APP_NAME} v{APP_VERSION}")
-    time.sleep(0.5)
+    step(95, "Checking first-run setup...",  "")
+
+    # Show setup wizard on first boot
+    from core.ui.setup_wizard import needs_setup, SetupWizard
+    if needs_setup():
+        step(100, "Launching setup wizard...", "First-time configuration")
+        time.sleep(0.3)
+        loader.hide()
+        wizard = SetupWizard()
+        wizard.setStyleSheet(get_stylesheet("auto"))
+        wizard.exec_()
+        # Refresh broker after wizard may have set keys
+        suite.broker = suite._init_broker()
+        if hasattr(suite, 'dashboard') and hasattr(suite.dashboard, 'refresh'):
+            suite.dashboard.broker = suite.broker
+        if hasattr(suite, 'scanner'):
+            suite.scanner.broker = suite.broker
+    else:
+        step(100, "Ready.", f"{APP_NAME} v{APP_VERSION}")
+        time.sleep(0.4)
 
     # Hide loader and show main window
-    # IMPORTANT: hide() instead of close() to prevent Qt from exiting the app
-    # since close() on the last visible widget can trigger app quit
     loader.hide()
     loader.deleteLater()
     suite.show()

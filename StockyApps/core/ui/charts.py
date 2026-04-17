@@ -16,6 +16,7 @@ from PyQt5.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
     QPainterPath, QFont, QConicalGradient,
 )
+from .theme import theme
 
 
 class CandlestickChart(QWidget):
@@ -122,8 +123,8 @@ class GaugeWidget(QWidget):
         # Normalize value to 0-1
         norm = (self._value - self._min) / (self._max - self._min) if self._max != self._min else 0.5
 
-        # Background arc (gray track)
-        painter.setPen(QPen(QColor("#252836"), 8, Qt.SolidLine, Qt.RoundCap))
+        # Background arc (track)
+        painter.setPen(QPen(theme.qcolor("bg_input"), 8, Qt.SolidLine, Qt.RoundCap))
         arc_rect = QRectF(cx - radius, h - radius - 5, radius * 2, radius * 2)
         painter.drawArc(arc_rect, 180 * 16, -180 * 16)
 
@@ -150,7 +151,7 @@ class GaugeWidget(QWidget):
 
         # Label
         if self._label:
-            painter.setPen(QColor("#94a3b8"))
+            painter.setPen(theme.qcolor("text_muted"))
             painter.setFont(QFont("Segoe UI", 8))
             painter.drawText(0, h - 18, w, 16, Qt.AlignCenter, self._label)
 

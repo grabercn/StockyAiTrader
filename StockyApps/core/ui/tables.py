@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QColor, QPainter, QFont, QLinearGradient, QPen, QBrush
+from .theme import theme
 
 
 class PremiumTable(QTableWidget):
@@ -34,34 +35,38 @@ class PremiumTable(QTableWidget):
         # Custom delegate for cell rendering
         self.setItemDelegate(_PremiumDelegate())
 
-        self.setStyleSheet("""
-            QTableWidget {
-                background-color: #1e2130;
-                alternate-background-color: #222538;
-                gridline-color: #2a2d3a;
-                border: 1px solid #2a2d3a;
+        self._apply_theme()
+
+    def _apply_theme(self):
+        self.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {theme.color("bg_card")};
+                alternate-background-color: {theme.color("table_alt")};
+                gridline-color: {theme.color("border")};
+                border: 1px solid {theme.color("border")};
                 border-radius: 8px;
                 outline: none;
-            }
-            QTableWidget::item {
+                color: {theme.color("text_primary")};
+            }}
+            QTableWidget::item {{
                 padding: 6px 10px;
                 border: none;
-            }
-            QTableWidget::item:hover {
-                background-color: #0ea5e920;
-            }
-            QTableWidget::item:selected {
-                background-color: #0ea5e930;
-            }
-            QHeaderView::section {
-                background-color: #252836;
-                color: #94a3b8;
+            }}
+            QTableWidget::item:hover {{
+                background-color: {theme.color("primary")}20;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {theme.color("primary")}30;
+            }}
+            QHeaderView::section {{
+                background-color: {theme.color("bg_input")};
+                color: {theme.color("text_secondary")};
                 padding: 8px 10px;
                 border: none;
-                border-bottom: 2px solid #0ea5e9;
+                border-bottom: 2px solid {theme.color("primary")};
                 font-weight: 600;
                 font-size: 11px;
-            }
+            }}
         """)
 
     def add_signal_row(self, values, signal_col=None, pnl_col=None):
@@ -141,7 +146,7 @@ class ConfidenceBar(QWidget):
         bar_y = (h - bar_h) // 2
 
         # Track
-        painter.setBrush(QColor("#252836"))
+        painter.setBrush(theme.qcolor("bg_input"))
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(0, bar_y, w, bar_h, 3, 3)
 
@@ -166,7 +171,7 @@ class ConfidenceBar(QWidget):
             painter.drawRoundedRect(0, bar_y, fill_w, bar_h, 3, 3)
 
         # Value text
-        painter.setPen(QColor("#e2e8f0"))
+        painter.setPen(theme.qcolor("text_primary"))
         painter.setFont(QFont("Consolas", 8))
         painter.drawText(0, 0, w, h, Qt.AlignCenter, f"{self._value:.0%}")
 

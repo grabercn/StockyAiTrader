@@ -3,6 +3,8 @@ Custom Widget Library — premium UI components for Stocky Suite.
 
 Hand-crafted widgets with animations, gradients, and visual polish
 that make the app feel like a professional trading terminal.
+
+All widgets use core.ui.theme for colors so they adapt to light/dark mode.
 """
 
 from PyQt5.QtWidgets import (
@@ -13,6 +15,7 @@ from PyQt5.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, pyqtProperty,
     QTimer, QSize, QRect, QPoint,
 )
+from core.ui.theme import theme
 from PyQt5.QtGui import (
     QPainter, QColor, QLinearGradient, QPen, QFont, QBrush,
     QPainterPath, QRadialGradient,
@@ -41,7 +44,7 @@ class StatCard(QFrame):
         layout.setSpacing(4)
 
         self._title_lbl = QLabel(title)
-        self._title_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600; background: transparent; border: none;")
+        self._title_lbl.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 11px; font-weight: 600; background: transparent; border: none;")
         layout.addWidget(self._title_lbl)
 
         self._value_lbl = QLabel(value)
@@ -62,11 +65,10 @@ class StatCard(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Card background
         r = self.rect().adjusted(1, 1, -1, -1)
-        bg = QColor("#1e2130") if not self._hover else QColor("#252836")
-        painter.setBrush(bg)
-        painter.setPen(QPen(QColor("#2a2d3a"), 1))
+        bg_key = "bg_hover" if self._hover else "bg_card"
+        painter.setBrush(theme.qcolor(bg_key))
+        painter.setPen(QPen(theme.qcolor("border"), 1))
         painter.drawRoundedRect(r, 10, 10)
 
         # Accent bar on left
@@ -113,7 +115,7 @@ class GradientProgressBar(QWidget):
         h = self.height()
 
         # Track background
-        painter.setBrush(QColor("#252836"))
+        painter.setBrush(theme.qcolor("bg_input"))
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(0, 0, w, h, h // 2, h // 2)
 
@@ -208,6 +210,146 @@ class SignalBadge(QWidget):
 
 
 # ─── Divider Line ─────────────────────────────────────────────────────────────
+class DetailedProgressBar(QWidget):
+    """
+    A premium progress bar with:
+    - Gradient fill
+    - Status text
+    - Expandable log dropdown showing each step
+    - Animated transitions
+
+    Usage:
+        bar = DetailedProgressBar()
+        bar.set_progress(25, "Scanning AAPL...", "Fetching 5d of 5m data")
+        bar.add_log("AAPL: BUY (85%)")
+        bar.set_progress(50, "Scanning TSLA...")
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value = 0
+        self._max = 100
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # Status label
+        self._status = QLabel("")
+        self._status.setStyleSheet(f"color: {theme.color('primary')}; font-size: 11px; font-weight: 600; background: transparent;")
+        layout.addWidget(self._status)
+
+        # The gradient bar itself
+        self._bar = _GradientBar()
+        self._bar.setFixedHeight(6)
+        layout.addWidget(self._bar)
+
+        # Detail label (secondary info)
+        self._detail = QLabel("")
+        self._detail.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 9px; background: transparent;")
+        layout.addWidget(self._detail)
+
+        # Expandable log area (collapsed by default)
+        self._log_area = QTextEdit()
+        self._log_area.setReadOnly(True)
+        self._log_area.setFixedHeight(100)
+        self._log_area.setVisible(False)
+        self._log_area.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {theme.color('bg_input')};
+                border: 1px solid {theme.color('border')};
+                border-radius: 4px;
+                font-family: Consolas;
+                font-size: 9px;
+                color: {theme.color('text_secondary')};
+            }}
+        """)
+        layout.addWidget(self._log_area)
+
+        # Toggle button for log
+        self._toggle = QPushButton("Show details")
+        self._toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {theme.color('text_muted')};
+                font-size: 9px; border: none; padding: 2px; text-align: left;
+            }}
+            QPushButton:hover {{ color: {theme.color('primary')}; }}
+        """)
+        self._toggle.setCursor(Qt.PointingHandCursor)
+        self._toggle.clicked.connect(self._toggle_log)
+        self._toggle.setVisible(False)
+        layout.addWidget(self._toggle)
+
+        self.setLayout(layout)
+
+    def set_progress(self, value, status="", detail=""):
+        self._value = max(0, min(value, self._max))
+        self._bar.set_value(self._value / self._max)
+        if status:
+            self._status.setText(status)
+        if detail:
+            self._detail.setText(detail)
+
+    def add_log(self, msg):
+        """Add a line to the detail log."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S")
+        color = theme.color('primary')
+        self._log_area.append(f'<span style="color:{theme.color("text_muted")}">{ts}</span> <span style="color:{color}">{msg}</span>')
+        self._toggle.setVisible(True)
+
+    def set_visible(self, visible):
+        super().setVisible(visible)
+
+    def _toggle_log(self):
+        showing = self._log_area.isVisible()
+        self._log_area.setVisible(not showing)
+        self._toggle.setText("Hide details" if not showing else "Show details")
+
+    def reset(self):
+        self._value = 0
+        self._bar.set_value(0)
+        self._status.setText("")
+        self._detail.setText("")
+        self._log_area.clear()
+        self._toggle.setVisible(False)
+        self._log_area.setVisible(False)
+
+
+class _GradientBar(QWidget):
+    """Internal: the actual painted gradient bar."""
+
+    def __init__(self):
+        super().__init__()
+        self._pct = 0.0
+
+    def set_value(self, pct):
+        self._pct = max(0.0, min(1.0, pct))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        h = self.height()
+
+        # Track
+        painter.setBrush(theme.qcolor("bg_input"))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(0, 0, w, h, h // 2, h // 2)
+
+        # Fill
+        fill_w = int(w * self._pct)
+        if fill_w > 0:
+            from PyQt5.QtGui import QLinearGradient
+            grad = QLinearGradient(0, 0, fill_w, 0)
+            grad.setColorAt(0, QColor("#0ea5e9"))
+            grad.setColorAt(1, QColor("#10b981"))
+            painter.setBrush(grad)
+            painter.drawRoundedRect(0, 0, fill_w, h, h // 2, h // 2)
+        painter.end()
+
+
 class GradientDivider(QWidget):
     """A subtle gradient line divider."""
 
@@ -242,7 +384,7 @@ class SectionHeader(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         # Text
-        painter.setPen(QColor("#e2e8f0"))
+        painter.setPen(theme.qcolor("text_heading"))
         painter.setFont(QFont("Segoe UI", 13, QFont.Bold))
         painter.drawText(0, 0, self.width(), 24, Qt.AlignLeft | Qt.AlignVCenter, self._text)
 
