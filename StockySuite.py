@@ -1574,6 +1574,145 @@ class TestingPanel(QWidget):
 # MAIN WINDOW
 # ═════════════════════════════════════════════════════════════════════════════
 
+class _NotificationBar(QWidget):
+    """
+    Custom-painted notification bar with:
+    - Slow-moving gradient background
+    - Market open/closed indicator
+    - Icon that pulses briefly on new messages
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(32)
+        self.setMaximumHeight(34)
+        self._phase = 0.0
+        self._msg = f"{APP_NAME} v{APP_VERSION} — Ready"
+        self._time = ""
+        self._icon_name = "check"
+        self._icon_color = BRAND_PRIMARY
+        self._text_color = QColor(TEXT_SECONDARY)
+        self._icon_pulse = 0.0  # 0-1, decays over time
+        self._market_open = False
+
+        # Animation timer
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(50)
+
+        # Market status check
+        self._check_market()
+        self._market_timer = QTimer(self)
+        self._market_timer.timeout.connect(self._check_market)
+        self._market_timer.start(60000)  # Check every minute
+
+    def _check_market(self):
+        try:
+            est = pytz.timezone("US/Eastern")
+            now = datetime.now(est)
+            self._market_open = (
+                now.weekday() < 5
+                and now.hour >= 9 and (now.hour > 9 or now.minute >= 30)
+                and now.hour < 16
+            )
+        except Exception:
+            self._market_open = False
+
+    def _tick(self):
+        self._phase += 0.008
+        if self._icon_pulse > 0:
+            self._icon_pulse = max(0, self._icon_pulse - 0.03)
+        self.update()
+
+    def show_message(self, msg, level="info"):
+        from core.ui.icons import StockyIcons
+        icon_map = {
+            "info":   ("check",    BRAND_PRIMARY, TEXT_SECONDARY),
+            "trade":  ("bolt",     BRAND_ACCENT,  BRAND_ACCENT),
+            "warn":   ("warning",  COLOR_HOLD,    COLOR_HOLD),
+            "error":  ("x_mark",   COLOR_SELL,    COLOR_SELL),
+            "system": ("settings", TEXT_MUTED,    TEXT_MUTED),
+        }
+        self._icon_name, self._icon_color, text_hex = icon_map.get(level, ("check", TEXT_MUTED, TEXT_MUTED))
+        self._text_color = QColor(text_hex)
+        self._msg = msg
+        self._time = datetime.now().strftime("%H:%M:%S")
+        self._icon_pulse = 1.0  # Start pulse
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # Animated gradient background — slow dark-to-darker drift
+        import math
+        shift = (math.sin(self._phase) + 1) / 2
+        grad = QLinearGradient(0, 0, w, 0)
+        c1 = QColor(22, 25, 35)
+        c2 = QColor(28, 32, 45)
+        c3 = QColor(18, 20, 30)
+        grad.setColorAt(0, c1)
+        grad.setColorAt(0.3 + shift * 0.2, c2)
+        grad.setColorAt(0.7 - shift * 0.2, c1)
+        grad.setColorAt(1, c3)
+        painter.fillRect(0, 0, w, h, grad)
+
+        # Top border — subtle thin line
+        painter.setPen(QPen(QColor(BORDER), 1))
+        painter.drawLine(0, 0, w, 0)
+
+        x = 14
+
+        # Market status dot
+        dot_color = QColor(BRAND_ACCENT) if self._market_open else QColor(COLOR_SELL)
+        dot_color.setAlphaF(0.7 + math.sin(self._phase * 3) * 0.15)
+        painter.setBrush(dot_color)
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(int(x), int(h / 2 - 4), 8, 8)
+        x += 14
+
+        # Market label
+        painter.setPen(QColor(TEXT_MUTED))
+        painter.setFont(QFont(FONT_MONO, 8))
+        market_text = "OPEN" if self._market_open else "CLOSED"
+        painter.drawText(int(x), 0, 50, h, Qt.AlignVCenter, market_text)
+        x += 55
+
+        # Separator
+        painter.setPen(QPen(QColor(BORDER), 1))
+        painter.drawLine(int(x), 6, int(x), h - 6)
+        x += 12
+
+        # Icon with pulse glow
+        from core.ui.icons import StockyIcons
+        icon_px = StockyIcons.get(self._icon_name, 16, self._icon_color)
+
+        if self._icon_pulse > 0:
+            # Glow behind icon
+            glow_c = QColor(self._icon_color)
+            glow_c.setAlphaF(self._icon_pulse * 0.4)
+            painter.setBrush(glow_c)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(int(x - 2), int(h / 2 - 10), 20, 20)
+
+        painter.drawPixmap(int(x), int(h / 2 - 8), icon_px)
+        x += 22
+
+        # Message text
+        painter.setPen(self._text_color)
+        painter.setFont(QFont(FONT_FAMILY, 10))
+        painter.drawText(int(x), 0, w - x - 70, h, Qt.AlignVCenter, self._msg)
+
+        # Timestamp on right
+        if self._time:
+            painter.setPen(QColor(TEXT_MUTED))
+            painter.setFont(QFont(FONT_MONO, 8))
+            painter.drawText(w - 60, 0, 50, h, Qt.AlignVCenter | Qt.AlignRight, self._time)
+
+        painter.end()
+
+
 class StockySuite(QMainWindow):
     """Main application window — unified trading dashboard."""
 
@@ -1607,34 +1746,8 @@ class StockySuite(QMainWindow):
         # Build UI
         self._build()
 
-        # Notification bar — subtle, elegant status display
-        self._notif_bar = QWidget()
-        self._notif_bar.setMinimumHeight(30)
-        self._notif_bar.setMaximumHeight(32)
-        self._notif_bar.setStyleSheet(f"""
-            background-color: {BG_DARK};
-            border-top: 1px solid {BORDER};
-        """)
-        nb_layout = QHBoxLayout()
-        nb_layout.setContentsMargins(14, 3, 14, 3)
-        nb_layout.setSpacing(8)
-
-        from core.ui.icons import StockyIcons
-        self._notif_icon = QLabel()
-        self._notif_icon.setPixmap(StockyIcons.get("check", 14, BRAND_PRIMARY))
-        self._notif_icon.setStyleSheet("background: transparent;")
-        nb_layout.addWidget(self._notif_icon)
-
-        self._notif_text = QLabel(f"{APP_NAME} v{APP_VERSION} — Ready")
-        self._notif_text.setFont(QFont(FONT_FAMILY, 10))
-        self._notif_text.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
-        nb_layout.addWidget(self._notif_text, 1)
-
-        self._notif_detail = QLabel("")
-        self._notif_detail.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px; background: transparent;")
-        nb_layout.addWidget(self._notif_detail)
-
-        self._notif_bar.setLayout(nb_layout)
+        # Notification bar — animated gradient background + market status
+        self._notif_bar = _NotificationBar(self)
         self.statusBar().addPermanentWidget(self._notif_bar, 1)
         self.statusBar().setStyleSheet("border: none; padding: 0; margin: 0;")
 
@@ -1731,37 +1844,8 @@ class StockySuite(QMainWindow):
             self.dashboard.refresh()
 
     def _on_log(self, msg, level):
-        """Update the notification bar — subtle, elegant, color-coded."""
-        from core.ui.icons import StockyIcons
-        from core.ui.animations import FadeIn
-
-        icon_map = {
-            "info":   ("check",    BRAND_PRIMARY, TEXT_SECONDARY),
-            "trade":  ("bolt",     BRAND_ACCENT,  BRAND_ACCENT),
-            "warn":   ("warning",  COLOR_HOLD,    COLOR_HOLD),
-            "error":  ("x_mark",   COLOR_SELL,    COLOR_SELL),
-            "system": ("settings", TEXT_MUTED,    TEXT_MUTED),
-        }
-        icon_name, icon_color, text_color = icon_map.get(level, ("check", TEXT_MUTED, TEXT_MUTED))
-
-        self._notif_icon.setPixmap(StockyIcons.get(icon_name, 18, icon_color))
-        self._notif_text.setText(msg)
-        self._notif_text.setStyleSheet(f"color: {text_color}; background: transparent;")
-        self._notif_detail.setText(datetime.now().strftime("%H:%M:%S"))
-
-        # Subtle border accent that fades
-        accent = icon_color + "80"  # 50% opacity
-        self._notif_bar.setStyleSheet(f"""
-            background-color: {BG_DARK};
-            border-top: 1px solid {accent};
-        """)
-        QTimer.singleShot(4000, lambda: self._notif_bar.setStyleSheet(f"""
-            background-color: {BG_DARK};
-            border-top: 1px solid {BORDER};
-        """))
-
-        # Fade in the text smoothly
-        FadeIn(self._notif_text, duration=300)
+        """Update the notification bar."""
+        self._notif_bar.show_message(msg, level)
 
     # ── UI Scaling (Ctrl+/-, Ctrl+0 to reset) ─────────────────────────────
 
@@ -1779,7 +1863,8 @@ class StockySuite(QMainWindow):
             }}
             QTabBar {{ qproperty-expanding: 0; }}
         """)
-        self._on_log(f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", "system")
+        if hasattr(self, '_notif_bar'):
+            self._notif_bar.show_message(f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", "system")
 
     @staticmethod
     def _detect_ideal_scale():
