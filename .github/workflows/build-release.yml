@@ -10,7 +10,30 @@ permissions:
   contents: write       # Needed to create releases
 
 jobs:
+  # ── Tests must pass before building a release ──
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run test suite
+        run: python run_tests.py -v --tb=short
+
+  # ── Build EXE only after tests pass ──
   build:
+    needs: test        # Tests MUST pass before build runs
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -45,27 +68,33 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: StockyAiTrader ${{ github.ref_name }}
+          name: Stocky Suite ${{ github.ref_name }}
           body: |
-            ## StockyAiTrader ${{ github.ref_name }}
+            ## Stocky Suite ${{ github.ref_name }}
 
             **Windows standalone build** — no Python installation required.
+            All tests passed before this release was built.
 
             ### First Launch
             1. Extract the zip
             2. Run `StockyAiTrader.exe`
-            3. Click **Download** in the Model Manager to fetch FinBERT (~300MB)
+            3. Go to Settings > download FinBERT model (~300MB)
             4. Enter your Alpaca API keys in Settings
-            5. Launch Day Trader and start analyzing
+            5. Choose a hardware profile (Balanced recommended)
 
-            ### What's included
-            - LightGBM + FinBERT + TimeGPT + StockTwits sentiment
-            - ATR-based risk management with bracket orders
-            - Alpaca paper trading integration
+            ### Tabs
+            - **Dashboard** — Portfolio overview, positions, P&L chart
+            - **Scanner** — Multi-stock AI scanner with auto-invest
+            - **Day Trade** — Single-stock intraday analysis
+            - **Long Trade** — Long-term outlook
+            - **Logs** — Decision history with full reasoning
+            - **Tax Reports** — IRS Form 8949 / Schedule D export
+            - **Testing** — System diagnostics + unit test runner
+            - **Settings** — API keys, hardware profiles, addons, models
 
             ### What's NOT included (downloaded on first use)
-            - FinBERT model (~300MB) — download via Model Manager
-            - Twitter-RoBERTa model (~500MB) — optional, download via Model Manager
+            - FinBERT model (~300MB) — download via Settings
+            - FinBERT-Tone (~420MB) and Twitter-RoBERTa (~500MB) — optional
           files: StockyAiTrader-Windows.zip
           draft: false
           prerelease: false
