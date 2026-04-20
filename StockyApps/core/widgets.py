@@ -34,8 +34,9 @@ class StatCard(QFrame):
         super().__init__(parent)
         self._accent = QColor(accent_color)
         self._hover = False
-        self.setFixedHeight(90)
-        self.setMinimumWidth(160)
+        self.setMinimumHeight(70)
+        self.setMaximumHeight(100)
+        self.setMinimumWidth(130)
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("background: transparent; border: none;")
 
@@ -144,8 +145,9 @@ class SignalBadge(QWidget):
         self._color = QColor("#64748b")
         self._pulse = 0.0
         self._confidence = 0.0
-        self.setFixedHeight(70)
-        self.setMinimumWidth(200)
+        self.setMinimumHeight(55)
+        self.setMaximumHeight(80)
+        self.setMinimumWidth(160)
 
         # Pulse animation
         self._pulse_timer = QTimer()

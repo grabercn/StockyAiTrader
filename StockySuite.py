@@ -147,11 +147,11 @@ class DashboardPanel(QWidget):
         from core.ui.animations import FadeIn, StaggeredFadeIn
 
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
         # Header
-        header = GradientHeader("Dashboard", "Portfolio overview and recent activity", height=55)
+        header = GradientHeader("Dashboard", "Portfolio overview and recent activity")
         layout.addWidget(header)
 
         # Account stats row — premium stat cards
@@ -378,7 +378,7 @@ class ScannerPanel(QWidget):
         outer.setSpacing(8)
         outer.setContentsMargins(8, 6, 8, 6)
 
-        header = GradientHeader("Scanner", "Live market discovery + AI-ranked opportunities", height=60)
+        header = GradientHeader("Scanner", "Live market discovery + AI-ranked opportunities")
         outer.addWidget(header)
 
         # ── Splitter: left (controls+results) / right (detail panel) ──
@@ -387,8 +387,8 @@ class ScannerPanel(QWidget):
         # ── LEFT: Controls + Results ──
         left = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
         # Source selector row
         source_row = QHBoxLayout()
@@ -490,8 +490,8 @@ class ScannerPanel(QWidget):
         # ── RIGHT: Detail Panel (shows when a stock is clicked) ──
         self.detail_panel = QWidget()
         dp_layout = QVBoxLayout()
-        dp_layout.setSpacing(8)
-        dp_layout.setContentsMargins(8, 0, 0, 0)
+        dp_layout.setSpacing(6)
+        dp_layout.setContentsMargins(8, 4, 8, 4)
 
         self.detail_title = QLabel("Click a stock to view details")
         self.detail_title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
@@ -879,10 +879,10 @@ class DayTradePanel(QWidget):
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Day Trade", "Single-stock intraday analysis", height=65)
+        header = GradientHeader("Day Trade", "Single-stock intraday analysis")
         layout.addWidget(header)
 
         # Controls row
@@ -1047,10 +1047,10 @@ class LongTradePanel(QWidget):
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Long Trade", "Long-term stock outlook analysis", height=65)
+        header = GradientHeader("Long Trade", "Long-term stock outlook analysis")
         layout.addWidget(header)
 
         row = QHBoxLayout()
@@ -1173,10 +1173,10 @@ class LogsPanel(QWidget):
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Decision Logs", "Full history with reasoning and feature importances", height=65)
+        header = GradientHeader("Decision Logs", "Full history with reasoning and feature importances")
         layout.addWidget(header)
 
         # File selector
@@ -1288,10 +1288,10 @@ class PortfolioPanel(QWidget):
         from core.ui.icons import StockyIcons
 
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Portfolio", "Holdings, trade history, and performance", height=55)
+        header = GradientHeader("Portfolio", "Holdings, trade history, and performance")
         layout.addWidget(header)
 
         # Stats row
@@ -1575,10 +1575,10 @@ class SettingsPanel(QWidget):
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Settings", "API keys, profiles, addons, and models", height=65)
+        header = GradientHeader("Settings", "API keys, profiles, addons, and models")
         layout.addWidget(header)
 
         scroll = QScrollArea()
@@ -1922,9 +1922,9 @@ class TaxPanel(QWidget):
         from core.widgets import DetailedProgressBar
 
         layout = QVBoxLayout()
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
-        header = GradientHeader("Tax Reports", "IRS Form 8949 — Capital Gains & Losses", height=65)
+        header = GradientHeader("Tax Reports", "IRS Form 8949 — Capital Gains & Losses")
         layout.addWidget(header)
 
         desc = QLabel(
@@ -2015,10 +2015,10 @@ class TestingPanel(QWidget):
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("System Testing", "Diagnostics, addon checks, and unit test runner", height=65)
+        header = GradientHeader("System Testing", "Diagnostics, addon checks, and unit test runner")
         layout.addWidget(header)
 
         # Quick diagnostics
@@ -2569,7 +2569,7 @@ class AboutDialog(QDialog):
         self.setStyleSheet(SUITE_STYLESHEET)
 
         layout = QVBoxLayout()
-        layout.setSpacing(12)
+        layout.setSpacing(6)
 
         # Icon
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")

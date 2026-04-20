@@ -75,12 +75,15 @@ class GradientHeader(QWidget):
     Used at the top of panels for visual hierarchy.
     """
 
-    def __init__(self, title="", subtitle="", height=65, parent=None):
+    def __init__(self, title="", subtitle="", height=None, parent=None):
         super().__init__(parent)
         self._title = title
         self._subtitle = subtitle
         self._phase = 0.0
-        self.setFixedHeight(height)
+        # Dynamic height — use minimum, let layout stretch if needed
+        h = height or (50 if not subtitle else 58)
+        self.setMinimumHeight(h)
+        self.setMaximumHeight(h + 20)  # Allow some flex for zoom
 
         # Subtle animation
         self._timer = QTimer(self)
@@ -124,17 +127,21 @@ class GradientHeader(QWidget):
         painter.setPen(QPen(QBrush(line_grad), 2))
         painter.drawLine(0, h - 1, w, h - 1)
 
-        # Title text
-        painter.setPen(theme.qcolor("text_heading"))
-        painter.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        y = 14 if self._subtitle else (h - 22) // 2
-        painter.drawText(20, y, w - 40, 26, Qt.AlignLeft | Qt.AlignVCenter, self._title)
-
-        # Subtitle
+        # Title text — sizes relative to widget height
+        pad = 12
         if self._subtitle:
+            title_h = int(h * 0.45)
+            painter.setPen(theme.qcolor("text_heading"))
+            painter.setFont(QFont("Segoe UI", max(12, int(h * 0.26)), QFont.Bold))
+            painter.drawText(pad, 4, w - pad * 2, title_h, Qt.AlignLeft | Qt.AlignBottom, self._title)
+
             painter.setPen(theme.qcolor("text_secondary"))
-            painter.setFont(QFont("Segoe UI", 11))
-            painter.drawText(20, y + 26, w - 40, 20, Qt.AlignLeft | Qt.AlignVCenter, self._subtitle)
+            painter.setFont(QFont("Segoe UI", max(9, int(h * 0.17))))
+            painter.drawText(pad, 4 + title_h, w - pad * 2, h - title_h - 8, Qt.AlignLeft | Qt.AlignTop, self._subtitle)
+        else:
+            painter.setPen(theme.qcolor("text_heading"))
+            painter.setFont(QFont("Segoe UI", max(12, int(h * 0.3)), QFont.Bold))
+            painter.drawText(pad, 0, w - pad * 2, h, Qt.AlignLeft | Qt.AlignVCenter, self._title)
 
         painter.end()
 
