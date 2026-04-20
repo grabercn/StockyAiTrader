@@ -171,6 +171,26 @@ class StockySuite(QMainWindow):
 
         # Warn if addons are disabled by profile
         QTimer.singleShot(2000, self._check_profile_warnings)
+        QTimer.singleShot(5000, self._check_for_updates)
+
+    def _check_for_updates(self):
+        """Check GitHub for newer version in background."""
+        import threading
+        def _check():
+            try:
+                from core.updater import check_for_update
+                has_update, latest, download_url, release_url = check_for_update()
+                if has_update:
+                    url = download_url or release_url
+                    self.event_bus.log_entry.emit(
+                        f"Update available: v{APP_VERSION} → v{latest}  —  "
+                        f"Download: {url}",
+                        "warn",
+                    )
+                    log_event("update", f"New version v{latest} available at {url}")
+            except Exception:
+                pass
+        threading.Thread(target=_check, daemon=True).start()
 
     def _check_profile_warnings(self):
         """Warn user if their profiles have issues."""
