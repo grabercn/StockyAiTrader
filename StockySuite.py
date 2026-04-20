@@ -126,6 +126,93 @@ class DownloadWorker(QThread):
         self.finished.emit()
 
 
+class _DeepAnalyzeWorker(QThread):
+    """Runs deep analysis in background so UI doesn't freeze."""
+    progress_update = pyqtSignal(int, str, str)  # pct, status, detail
+    finished_signal = pyqtSignal(str, str)        # report_text, ticker
+
+    def __init__(self, scan_result):
+        super().__init__()
+        self.r = scan_result
+
+    def run(self):
+        r = self.r
+        report = []
+
+        self.progress_update.emit(10, "Building report header...", r.ticker)
+        report.append("=" * 60)
+        report.append(f"  DEEP ANALYSIS REPORT: {r.ticker}")
+        report.append(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append("=" * 60)
+        report.append("")
+        report.append(f"VERDICT: {r.action}  |  Confidence: {r.confidence:.1%}  |  Score: {r.score:.3f}")
+        report.append(f"Price: ${r.price:.2f}  |  ATR: ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)")
+
+        self.progress_update.emit(20, "Analyzing probabilities...", "")
+        report.append("")
+        report.append("-" * 60)
+        report.append("SIGNAL PROBABILITIES")
+        for label, prob, bar_char in [("SELL", r.probs[0], "X"), ("HOLD", r.probs[1], "="), ("BUY", r.probs[2], "#")]:
+            bar = bar_char * int(prob * 40)
+            report.append(f"  {label:5s}  {prob:6.1%}  [{bar:<40s}]")
+
+        self.progress_update.emit(35, "Calculating risk metrics...", "")
+        report.append("")
+        report.append("-" * 60)
+        report.append("RISK MANAGEMENT")
+        report.append(f"  Position Size:    {r.position_size} shares (${r.position_size * r.price:,.2f})")
+        report.append(f"  Stop Loss:        ${r.stop_loss:.2f} ({(r.price-r.stop_loss)/r.price*100:.1f}% risk)")
+        report.append(f"  Take Profit:      ${r.take_profit:.2f} ({(r.take_profit-r.price)/r.price*100:.1f}% target)")
+        if r.stop_loss < r.price:
+            rr = (r.take_profit - r.price) / (r.price - r.stop_loss)
+            report.append(f"  Risk/Reward:      1:{rr:.1f}")
+            report.append(f"  Max Loss:         ${r.position_size * (r.price - r.stop_loss):,.2f}")
+            report.append(f"  Max Gain:         ${r.position_size * (r.take_profit - r.price):,.2f}")
+
+        self.progress_update.emit(50, "Analyzing feature importances...", "")
+        if r.feature_importances:
+            report.append("")
+            report.append("-" * 60)
+            report.append("TOP FEATURE DRIVERS")
+            report.append("(What the AI model weighted most heavily)")
+            report.append("")
+            max_imp = max(r.feature_importances.values()) if r.feature_importances else 1
+            for feat, imp in sorted(r.feature_importances.items(), key=lambda x: -x[1])[:10]:
+                bar_len = int((imp / max_imp) * 30)
+                report.append(f"  {'#' * bar_len:<30s}  {feat}: {imp:.0f}")
+
+        self.progress_update.emit(65, "Generating LLM reasoning...", "")
+        try:
+            from core.llm_reasoner import generate_reasoning
+            llm_text = generate_reasoning(
+                r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
+                feature_importances=r.feature_importances,
+            )
+            report.append("")
+            report.append("-" * 60)
+            report.append("AI REASONING")
+            for part in llm_text.split(" | "):
+                report.append(f"  > {part}")
+        except Exception as e:
+            report.append(f"\n  (LLM reasoning unavailable: {e})")
+
+        self.progress_update.emit(80, "Computing final scores...", "")
+        report.append("")
+        report.append("-" * 60)
+        report.append("FINAL SCORES")
+        report.append(f"  Overall Score:     {r.score:.3f} / 1.000")
+        report.append(f"  Confidence:        {r.confidence:.1%}")
+        report.append(f"  Signal Strength:   {'STRONG' if r.confidence > 0.7 else 'MODERATE' if r.confidence > 0.4 else 'WEAK'}")
+        report.append(f"  Volatility:        {'HIGH' if r.atr/r.price > 0.02 else 'MODERATE' if r.atr/r.price > 0.01 else 'LOW'}")
+        report.append(f"  Direction:         {'BULLISH' if r.probs[2] > r.probs[0] else 'BEARISH'}")
+        report.append("")
+        report.append("=" * 60)
+
+        self.progress_update.emit(95, "Report complete", r.ticker)
+        import time; time.sleep(0.3)
+        self.finished_signal.emit("\n".join(report), r.ticker)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PANEL: DASHBOARD
 # ═════════════════════════════════════════════════════════════════════════════
@@ -461,8 +548,8 @@ class ScannerPanel(QWidget):
         interval_lbl.setToolTip("The time interval for each price bar.\n5min = one data point every 5 minutes.\nSmaller bars = more data points but noisier.")
         settings_row.addWidget(interval_lbl)
         self.interval_cb = QComboBox()
-        self.interval_cb.addItems(["5 min", "1 min", "15 min"])
-        self.interval_cb.setToolTip("Price bar interval — how frequently data points are sampled")
+        self.interval_cb.addItems(["Auto (Smart)", "5 min", "1 min", "15 min"])
+        self.interval_cb.setToolTip("Auto = AI picks best interval per stock based on volatility. Or pick fixed.")
         settings_row.addWidget(self.interval_cb)
 
         # Help note
@@ -713,9 +800,13 @@ class ScannerPanel(QWidget):
 
         # Map display text back to API values
         period_map = {"5 days": "5d", "3 days": "3d", "2 days": "2d", "1 day": "1d"}
-        interval_map = {"5 min": "5m", "1 min": "1m", "15 min": "15m"}
+        interval_map = {"Auto (Smart)": "5m", "5 min": "5m", "1 min": "1m", "15 min": "15m"}
         period = period_map.get(self.period_cb.currentText(), "5d")
         interval = interval_map.get(self.interval_cb.currentText(), "5m")
+        is_auto = self.interval_cb.currentText() == "Auto (Smart)"
+
+        if is_auto:
+            self.progress.add_log("Smart mode: AI will adapt interval per stock based on volatility")
 
         self._worker = ScanWorker(tickers, period, interval, self.rm)
         self._worker.progress.connect(self._on_progress)
@@ -784,9 +875,14 @@ class ScannerPanel(QWidget):
             monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
             self.table.setCellWidget(i, 8, monitor_btn)
 
-            # Reasoning (last column)
-            reason_it = QTableWidgetItem(r.reasoning[:80] if r.reasoning else r.error or "")
+            # Reasoning (last column) — red for errors, normal for reasoning
+            if r.error:
+                reason_it = QTableWidgetItem(f"FAILED: {r.error[:60]}")
+                reason_it.setForeground(QColor(COLOR_SELL))
+            else:
+                reason_it = QTableWidgetItem(r.reasoning[:80] if r.reasoning else "")
             reason_it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            reason_it.setToolTip(r.reasoning or r.error or "")
             self.table.setItem(i, 9, reason_it)
 
         buys = sum(1 for r in results if r.action == "BUY")
@@ -992,73 +1088,49 @@ class ScannerPanel(QWidget):
             QTimer.singleShot(2000, lambda: self._show_detail(r))
 
     def _deep_analyze(self):
-        """Open a full technical report popup for the selected stock."""
+        """Run deep analysis in background thread — doesn't freeze UI."""
         if not self._selected_result:
             self.bus.log_entry.emit("Select a stock first", "warn")
             return
 
         r = self._selected_result
+        self.bus.log_entry.emit(f"Deep analyzing {r.ticker}...", "info")
+        self.progress.setVisible(True)
+        self.progress.reset()
+        self.progress.set_progress(5, f"Deep analyzing {r.ticker}...", "Fetching extended data")
+        self.progress.add_log(f"Starting deep analysis for {r.ticker}")
+        self.detail_analyze_btn.setEnabled(False)
 
-        # Build a comprehensive report
-        report = []
-        report.append(f"{'='*60}")
-        report.append(f"  DEEP ANALYSIS REPORT — {r.ticker}")
-        report.append(f"  Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report.append(f"{'='*60}")
-        report.append("")
-        report.append(f"SIGNAL: {r.action}  |  Confidence: {r.confidence:.1%}  |  Score: {r.score:.3f}")
-        report.append(f"Price: ${r.price:.2f}  |  ATR: ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)")
-        report.append("")
-        report.append(f"{'─'*60}")
-        report.append("PROBABILITIES")
-        report.append(f"  SELL:  {r.probs[0]:.1%}  {'█' * int(r.probs[0]*30)}")
-        report.append(f"  HOLD:  {r.probs[1]:.1%}  {'█' * int(r.probs[1]*30)}")
-        report.append(f"  BUY:   {r.probs[2]:.1%}  {'█' * int(r.probs[2]*30)}")
-        report.append("")
-        report.append(f"{'─'*60}")
-        report.append("RISK MANAGEMENT")
-        report.append(f"  Position Size:  {r.position_size} shares")
-        report.append(f"  Stop Loss:      ${r.stop_loss:.2f} ({(r.price-r.stop_loss)/r.price*100:.1f}% from entry)")
-        report.append(f"  Take Profit:    ${r.take_profit:.2f} ({(r.take_profit-r.price)/r.price*100:.1f}% from entry)")
-        report.append(f"  Risk/Reward:    1:{(r.take_profit-r.price)/(r.price-r.stop_loss):.1f}" if r.stop_loss < r.price else "")
-        report.append(f"  Max Loss:       ${r.position_size * (r.price - r.stop_loss):,.2f}")
-        report.append(f"  Max Gain:       ${r.position_size * (r.take_profit - r.price):,.2f}")
+        # Run in background
+        self._deep_worker = _DeepAnalyzeWorker(r)
+        self._deep_worker.progress_update.connect(
+            lambda pct, msg, detail: (self.progress.set_progress(pct, msg, detail), self.progress.add_log(msg))
+        )
+        self._deep_worker.finished_signal.connect(self._on_deep_done)
+        self._deep_worker.start()
 
-        if r.feature_importances:
-            report.append("")
-            report.append(f"{'─'*60}")
-            report.append("TOP FEATURE DRIVERS (what the AI focused on)")
-            for feat, imp in sorted(r.feature_importances.items(), key=lambda x: -x[1])[:10]:
-                bar = "█" * int(min(imp / 50, 30))
-                report.append(f"  {bar} {feat}: {imp:.0f}")
+    def _on_deep_done(self, report_text, ticker):
+        """Open the report popup when deep analysis completes."""
+        self.detail_analyze_btn.setEnabled(True)
+        self.progress.set_progress(100, f"Deep analysis complete", ticker)
+        self.bus.log_entry.emit(f"Deep analysis complete for {ticker}", "trade")
 
-        if r.reasoning:
-            report.append("")
-            report.append(f"{'─'*60}")
-            report.append("AI REASONING")
-            for part in r.reasoning.split(" | "):
-                report.append(f"  • {part}")
-
-        report.append("")
-        report.append(f"{'='*60}")
-
-        # Show in a dialog
+        from core.ui.theme import theme as _theme
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Deep Analysis — {r.ticker}")
-        dlg.setMinimumSize(600, 500)
-        bg = theme.color("bg_base") if hasattr(theme, 'color') else BG_DARKEST
-        dlg.setStyleSheet(f"QDialog {{ background-color: {bg}; }}")
+        dlg.setWindowTitle(f"Deep Analysis - {ticker}")
+        dlg.setMinimumSize(650, 550)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
+
         lay = QVBoxLayout()
         txt = QTextEdit()
         txt.setReadOnly(True)
         txt.setFont(QFont(FONT_MONO, 10))
-        txt.setPlainText("\n".join(report))
+        txt.setPlainText(report_text)
         lay.addWidget(txt)
 
-        # Also send to Day Trade
         btn_row = QHBoxLayout()
         day_btn = QPushButton("Open in Day Trade")
-        day_btn.clicked.connect(lambda: (self.bus.ticker_selected.emit(r.ticker), dlg.accept()))
+        day_btn.clicked.connect(lambda: (self.bus.ticker_selected.emit(ticker), dlg.accept()))
         btn_row.addWidget(day_btn)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dlg.accept)
@@ -1067,8 +1139,6 @@ class ScannerPanel(QWidget):
 
         dlg.setLayout(lay)
         dlg.exec_()
-
-    # ── Auto-Trade Monitoring ───────────────────────────────────────────
 
     def _get_auto_service(self):
         """Get or create the auto-trader service."""
