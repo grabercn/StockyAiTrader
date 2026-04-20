@@ -513,42 +513,126 @@ class ScannerPanel(QWidget):
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
-        # Stats
         lines = []
-        lines.append(f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence)')
-        lines.append(f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)')
-        lines.append(f'<b>Position:</b> {r.position_size} shares')
-        lines.append(f'<b>Stop Loss:</b> ${r.stop_loss:.2f}  |  <b>Take Profit:</b> ${r.take_profit:.2f}')
-        lines.append(f'<b>Score:</b> {r.score:.3f}')
-        lines.append("")
-        lines.append(f'<b style="color:{BRAND_PRIMARY}">Probabilities</b>')
-        lines.append(f'  <span style="color:{COLOR_SELL}">SELL: {r.probs[0]:.1%}</span>'
-                     f'  <span style="color:{COLOR_HOLD}">HOLD: {r.probs[1]:.1%}</span>'
-                     f'  <span style="color:{COLOR_BUY}">BUY: {r.probs[2]:.1%}</span>')
 
+        # ── Stock Description ──
+        try:
+            import threading
+            def _fetch_desc():
+                try:
+                    info = yf.Ticker(r.ticker).info
+                    desc = info.get("longBusinessSummary", "")
+                    name = info.get("shortName", r.ticker)
+                    sector = info.get("sector", "")
+                    industry = info.get("industry", "")
+                    mkt_cap = info.get("marketCap", 0)
+                    cap_str = f"${mkt_cap/1e9:.1f}B" if mkt_cap > 1e9 else f"${mkt_cap/1e6:.0f}M" if mkt_cap > 1e6 else ""
+                    self._stock_info = {"name": name, "desc": desc, "sector": sector, "industry": industry, "cap": cap_str}
+                except Exception:
+                    self._stock_info = {}
+            if not hasattr(self, '_stock_info') or True:
+                self._stock_info = {}
+                t = threading.Thread(target=_fetch_desc, daemon=True)
+                t.start()
+                t.join(timeout=3)  # Wait up to 3s
+        except Exception:
+            pass
+
+        info = getattr(self, '_stock_info', {})
+        if info.get("name"):
+            lines.append(f'<b style="color:{BRAND_PRIMARY};font-size:13px">{info["name"]}</b>')
+            meta = []
+            if info.get("sector"):
+                meta.append(info["sector"])
+            if info.get("industry"):
+                meta.append(info["industry"])
+            if info.get("cap"):
+                meta.append(info["cap"])
+            if meta:
+                lines.append(f'<span style="color:{TEXT_MUTED}">{" · ".join(meta)}</span>')
+            if info.get("desc"):
+                short = info["desc"][:200] + ("..." if len(info["desc"]) > 200 else "")
+                lines.append(f'<span style="color:{TEXT_SECONDARY};font-size:10px">{short}</span>')
+            lines.append("")
+
+        # ── Signal Overview ──
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence, score {r.score:.3f})')
+        lines.append(f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)')
+        lines.append(f'<b>Position:</b> {r.position_size} shares  |  <b>SL:</b> ${r.stop_loss:.2f}  |  <b>TP:</b> ${r.take_profit:.2f}')
+        lines.append("")
+
+        # ── Probabilities ──
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Probabilities</b>')
+        for label, prob, color in [("SELL", r.probs[0], COLOR_SELL), ("HOLD", r.probs[1], COLOR_HOLD), ("BUY", r.probs[2], COLOR_BUY)]:
+            bar_w = int(prob * 20)
+            bar = "█" * bar_w + "░" * (20 - bar_w)
+            lines.append(f'  <span style="color:{color}">{label} {prob:.0%}</span> <span style="color:{TEXT_MUTED}">{bar}</span>')
+
+        # ── Key Indicators ──
         if r.feature_importances:
             lines.append("")
-            lines.append(f'<b style="color:{BRAND_PRIMARY}">Key Drivers</b>')
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">Key Indicators</b>')
+            max_imp = max(r.feature_importances.values()) if r.feature_importances else 1
             for feat, imp in sorted(r.feature_importances.items(), key=lambda x: -x[1])[:8]:
-                bar_len = int(min(imp / 100, 20))
+                bar_len = int((imp / max_imp) * 15)
                 bar = "█" * bar_len
                 lines.append(f'  <span style="color:{BRAND_ACCENT}">{bar}</span> {feat}: {imp:.0f}')
 
-        # Trade metadata — show what the AI actually used for this stock
+        # ── Addon Signals ──
+        # Collect active addon contributions for this stock
         lines.append("")
-        lines.append(f'<b style="color:{BRAND_PRIMARY}">Scan Settings</b>')
-        trade_type = "Intraday (Day Trade)" if r.atr and r.atr / r.price < 0.03 else "Swing Trade"
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Addon Signals</b>')
+        try:
+            from addons import get_all_addons
+            active_addons = [a for a in get_all_addons() if a.available and a.enabled]
+            if active_addons:
+                for addon in active_addons:
+                    try:
+                        features = addon.get_features(r.ticker)
+                        if features and isinstance(features, dict):
+                            # Show which features this addon contributed
+                            feat_strs = []
+                            for k, v in list(features.items())[:3]:
+                                if isinstance(v, float):
+                                    feat_strs.append(f"{k}: {v:.2f}")
+                                else:
+                                    feat_strs.append(f"{k}: {v}")
+                            if feat_strs:
+                                lines.append(f'  <b>{addon.name}:</b> {" · ".join(feat_strs)}')
+                    except Exception:
+                        pass
+                if len(active_addons) == 0 or all(not a.enabled for a in active_addons):
+                    lines.append(f'  <span style="color:{TEXT_MUTED}">No addons active — enable in Settings > Hardware Profile</span>')
+            else:
+                lines.append(f'  <span style="color:{TEXT_MUTED}">No addons active</span>')
+            lines.append(f'  <span style="color:{TEXT_MUTED}">Add custom addons: drop a .py file in StockyApps/addons/</span>')
+        except Exception:
+            lines.append(f'  <span style="color:{TEXT_MUTED}">Addon data unavailable</span>')
+
+        # ── Advanced Statistics ──
+        lines.append("")
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Advanced Statistics</b>')
+        vol = "High" if r.atr / r.price > 0.02 else "Moderate" if r.atr / r.price > 0.01 else "Low"
+        direction = "Bullish" if r.probs[2] > r.probs[0] else "Bearish"
+        strength = "Strong" if r.confidence > 0.7 else "Moderate" if r.confidence > 0.4 else "Weak"
+        if r.stop_loss and r.stop_loss < r.price:
+            rr = (r.take_profit - r.price) / (r.price - r.stop_loss)
+            max_loss = r.position_size * (r.price - r.stop_loss)
+            max_gain = r.position_size * (r.take_profit - r.price)
+            lines.append(f'  Risk/Reward: <b>1:{rr:.1f}</b>  |  Max Loss: ${max_loss:,.0f}  |  Max Gain: ${max_gain:,.0f}')
+        lines.append(f'  Volatility: {vol}  |  Direction: {direction}  |  Strength: {strength}')
+
         period_used = getattr(r, 'period_used', '5d')
         interval_used = getattr(r, 'interval_used', '5m')
-        lines.append(f'  Type: {trade_type}')
-        lines.append(f'  Training Data: {period_used}  |  Bar Interval: {interval_used}')
-        lines.append(f'  Volatility: {"High" if r.atr/r.price > 0.02 else "Moderate" if r.atr/r.price > 0.01 else "Low"} ({r.atr/r.price*100:.1f}% ATR)')
+        trade_type = "Intraday" if r.atr and r.atr / r.price < 0.03 else "Swing"
+        lines.append(f'  Type: {trade_type}  |  Data: {period_used}/{interval_used}')
         if period_used != "5d" or interval_used != "5m":
-            lines.append(f'  <i style="color:{BRAND_ACCENT}">AI auto-selected these settings for this stock</i>')
+            lines.append(f'  <i style="color:{BRAND_ACCENT}">AI auto-selected settings for this stock</i>')
 
+        # ── AI Reasoning ──
         if r.reasoning:
             lines.append("")
-            lines.append(f'<b style="color:{BRAND_PRIMARY}">Reasoning</b>')
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">AI Reasoning</b>')
             for part in r.reasoning.split(" | "):
                 lines.append(f'  {part}')
 

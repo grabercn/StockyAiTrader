@@ -270,24 +270,58 @@ class DashboardPanel(QWidget):
             self._plot(hist)
 
     def _plot(self, hist):
-        self.figure.clear()
-        cc = chart_colors(); self.figure.set_facecolor(cc["fig_bg"])
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor(cc["ax_bg"])
-        eq = [e for e in hist["equity"] if e is not None]
-        ts = [datetime.fromtimestamp(t) for t, e in zip(hist["timestamp"], hist["equity"]) if e is not None]
-        ax.plot(ts, eq, color=BRAND_PRIMARY, linewidth=1.5)
-        ax.fill_between(ts, eq, alpha=0.08, color=BRAND_PRIMARY)
-        ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
-        ax.tick_params(colors=cc["muted"], labelsize=8)
-        ax.grid(True, alpha=0.15, color=cc["grid"])
-        ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%m/%d"))
-        self.figure.tight_layout()
-        self.canvas.draw()
+        try:
+            self.figure.clear()
+            cc = chart_colors()
+            self.figure.set_facecolor(cc["fig_bg"])
+            ax = self.figure.add_subplot(111)
+            ax.set_facecolor(cc["ax_bg"])
 
-        # Add hover tooltip
-        from core.ui.chart_tooltip import ChartTooltip
-        self._tooltip = ChartTooltip(self.canvas, ax, ts, eq)
+            eq = [e for e in hist["equity"] if e is not None]
+            ts = [datetime.fromtimestamp(t) for t, e in zip(hist["timestamp"], hist["equity"]) if e is not None]
+
+            if not eq or not ts:
+                ax.text(0.5, 0.5, "No equity data available", ha="center", va="center",
+                        color=cc["muted"], fontsize=12, transform=ax.transAxes)
+                self.canvas.draw()
+                return
+
+            # Plot equity line
+            ax.plot(ts, eq, color=BRAND_PRIMARY, linewidth=2)
+            ax.fill_between(ts, eq, alpha=0.1, color=BRAND_PRIMARY)
+
+            # Color the line based on P/L (green if up, red if down)
+            if eq[-1] >= eq[0]:
+                ax.plot(ts, eq, color=COLOR_PROFIT, linewidth=2)
+                ax.fill_between(ts, eq, alpha=0.08, color=COLOR_PROFIT)
+            else:
+                ax.plot(ts, eq, color=COLOR_LOSS, linewidth=2)
+                ax.fill_between(ts, eq, alpha=0.08, color=COLOR_LOSS)
+
+            # Show current value as annotation
+            ax.annotate(f"${eq[-1]:,.2f}", xy=(ts[-1], eq[-1]),
+                        fontsize=9, fontweight="bold",
+                        color=COLOR_PROFIT if eq[-1] >= eq[0] else COLOR_LOSS,
+                        xytext=(-60, 10), textcoords="offset points")
+
+            ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
+            ax.tick_params(colors=cc["muted"], labelsize=7)
+            ax.grid(True, alpha=0.15, color=cc["grid"])
+            ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%m/%d %H:%M"))
+            for label in ax.get_xticklabels():
+                label.set_rotation(30)
+                label.set_ha("right")
+
+            # Format y-axis as dollars
+            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+
+            self.figure.subplots_adjust(left=0.12, right=0.96, top=0.90, bottom=0.22)
+            self.canvas.draw()
+
+            from core.ui.chart_tooltip import ChartTooltip
+            self._tooltip = ChartTooltip(self.canvas, ax, ts, eq)
+        except Exception as e:
+            self.bus.log_entry.emit(f"Chart error: {e}", "error")
 
     def _sell_position(self, symbol, max_qty):
         """Sell a specific position with qty picker. Uses close_position endpoint."""
