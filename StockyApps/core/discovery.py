@@ -45,29 +45,60 @@ def _set_cache(key, data):
 
 # ─── Live Discovery Sources ──────────────────────────────────────────────────
 
+def _yahoo_screener(screen_id, limit=25):
+    """Fetch from Yahoo Finance screener API. Works for most_actives, day_gainers, day_losers."""
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+        params = {"scrIds": screen_id, "count": limit}
+        headers = {"User-Agent": "Mozilla/5.0 StockyAiTrader/4.0"}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
+            return [q["symbol"] for q in quotes if q.get("symbol") and "." not in q["symbol"]][:limit]
+    except Exception:
+        pass
+    return []
+
+
+def _yf_volume_sort(universe, limit, reverse=True):
+    """Sort tickers by today's volume, return top N."""
+    results = []
+    def check(t):
+        try:
+            h = yf.Ticker(t).history(period="1d")
+            if not h.empty:
+                return (t, float(h["Volume"].iloc[-1]), float(h["Close"].pct_change().iloc[-1] if len(h) > 1 else 0))
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for r in ex.map(check, universe[:60]):
+            if r:
+                results.append(r)
+    return results
+
+
 def get_most_active(limit=25):
-    """Fetch today's most actively traded stocks from Yahoo Finance."""
+    """Most actively traded stocks today."""
     cached = _cached("most_active")
     if cached:
         return cached
 
-    try:
-        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
-        params = {"scrIds": "most_actives", "count": limit}
-        headers = {"User-Agent": "StockyAiTrader/2.0"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+    # Try Yahoo screener first
+    tickers = _yahoo_screener("most_actives", limit)
+    if tickers:
+        _set_cache("most_active", tickers)
+        return tickers
 
-        if r.status_code == 200:
-            data = r.json()
-            quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
-            tickers = [q["symbol"] for q in quotes if q.get("symbol") and "." not in q["symbol"]]
-            _set_cache("most_active", tickers[:limit])
-            return tickers[:limit]
-    except Exception:
-        pass
-
-    # Fallback: use yfinance trending
-    return _yf_screen("most_active", limit)
+    # Fallback: sort S&P 500 by volume
+    universe = _get_sp500_tickers()
+    results = _yf_volume_sort(universe, limit)
+    results.sort(key=lambda x: x[1], reverse=True)
+    tickers = [t for t, _, _ in results[:limit]]
+    _set_cache("most_active", tickers)
+    return tickers
 
 
 def get_day_gainers(limit=20):
@@ -76,7 +107,17 @@ def get_day_gainers(limit=20):
     if cached:
         return cached
 
-    tickers = _yf_screen("day_gainers", limit)
+    # Try Yahoo screener
+    tickers = _yahoo_screener("day_gainers", limit)
+    if tickers:
+        _set_cache("gainers", tickers)
+        return tickers
+
+    # Fallback: sort by % change
+    universe = _get_sp500_tickers()
+    results = _yf_volume_sort(universe, limit)
+    results.sort(key=lambda x: x[2], reverse=True)  # Sort by pct change desc
+    tickers = [t for t, _, pct in results if pct > 0][:limit]
     _set_cache("gainers", tickers)
     return tickers
 
@@ -87,58 +128,81 @@ def get_day_losers(limit=20):
     if cached:
         return cached
 
-    tickers = _yf_screen("day_losers", limit)
+    tickers = _yahoo_screener("day_losers", limit)
+    if tickers:
+        _set_cache("losers", tickers)
+        return tickers
+
+    # Fallback: sort by % change ascending
+    universe = _get_sp500_tickers()
+    results = _yf_volume_sort(universe, limit)
+    results.sort(key=lambda x: x[2])  # Sort by pct change asc (biggest losers first)
+    tickers = [t for t, _, pct in results if pct < 0][:limit]
     _set_cache("losers", tickers)
     return tickers
 
 
 def get_trending_social(limit=15):
-    """Trending tickers from StockTwits (social momentum)."""
+    """Trending tickers from StockTwits + Yahoo trending."""
     cached = _cached("trending_social")
     if cached:
         return cached
 
+    tickers = []
+
+    # Try StockTwits
     try:
         r = requests.get(
             "https://api.stocktwits.com/api/2/trending/symbols.json",
-            headers={"User-Agent": "StockyAiTrader/2.0"},
+            headers={"User-Agent": "Mozilla/5.0 StockyAiTrader/4.0"},
             timeout=10,
         )
         if r.status_code == 200:
             symbols = r.json().get("symbols", [])
-            tickers = [s["symbol"] for s in symbols if s.get("symbol")][:limit]
-            _set_cache("trending_social", tickers)
-            return tickers
+            tickers.extend([s["symbol"] for s in symbols if s.get("symbol")])
     except Exception:
         pass
-    return []
+
+    # Also try Yahoo trending
+    try:
+        r2 = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/trending/US",
+            headers={"User-Agent": "Mozilla/5.0 StockyAiTrader/4.0"},
+            timeout=10,
+        )
+        if r2.status_code == 200:
+            quotes = r2.json().get("finance", {}).get("result", [{}])[0].get("quotes", [])
+            tickers.extend([q["symbol"] for q in quotes if q.get("symbol") and "." not in q["symbol"]])
+    except Exception:
+        pass
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for t in tickers:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+
+    if unique:
+        _set_cache("trending_social", unique[:limit])
+        return unique[:limit]
+
+    # Final fallback: popular retail tickers
+    fallback = ["TSLA", "NVDA", "AAPL", "AMD", "PLTR", "SOFI", "NIO", "GME", "AMC", "COIN",
+                "META", "GOOGL", "AMZN", "MSFT", "BA", "DIS", "NFLX", "RIVN", "HOOD"]
+    return fallback[:limit]
 
 
 def get_high_volume(min_volume=5_000_000, limit=20):
-    """Screen for high-volume stocks using yfinance."""
+    """Screen for high-volume stocks."""
     cached = _cached("high_volume")
     if cached:
         return cached
 
-    # Use a broad universe and filter
-    universe = _get_sp500_tickers()[:100]
-    results = []
-
-    def check(t):
-        try:
-            info = yf.Ticker(t).fast_info
-            vol = getattr(info, "last_volume", 0) or 0
-            if vol >= min_volume:
-                return (t, vol)
-        except Exception:
-            pass
-        return None
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        for result in ex.map(check, universe):
-            if result:
-                results.append(result)
-
+    universe = _get_sp500_tickers()
+    results = _yf_volume_sort(universe, limit)
+    results = [(t, v) for t, v, _ in results if v >= min_volume]
     results.sort(key=lambda x: x[1], reverse=True)
     tickers = [t for t, _ in results[:limit]]
     _set_cache("high_volume", tickers)
@@ -258,23 +322,40 @@ def _yf_screen(screen_id, limit):
 
 
 def _get_sp500_tickers():
-    """Get S&P 500 tickers from Wikipedia (cached heavily)."""
-    cached = _cached("sp500", ttl=86400)  # Cache for 24 hours
+    """Get S&P 500 tickers. Tries Wikipedia, falls back to curated list."""
+    cached = _cached("sp500", ttl=86400)
     if cached:
         return cached
 
+    # Try Wikipedia
     try:
         import pandas as pd
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         tables = pd.read_html(url, attrs={"id": "constituents"})
-        if tables:
+        if tables and len(tables[0]) > 100:
             tickers = tables[0]["Symbol"].str.replace(".", "-", regex=False).tolist()
             _set_cache("sp500", tickers)
             return tickers
     except Exception:
         pass
 
-    # Hardcoded fallback of top 50 by market cap (only used if Wikipedia fails)
+    # Try alternative: fetch from datahub
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+            headers={"User-Agent": "StockyAiTrader/4.0"}, timeout=10,
+        )
+        if r.status_code == 200:
+            import io, csv
+            reader = csv.DictReader(io.StringIO(r.text))
+            tickers = [row["Symbol"].replace(".", "-") for row in reader if row.get("Symbol")]
+            if len(tickers) > 100:
+                _set_cache("sp500", tickers)
+                return tickers
+    except Exception:
+        pass
+
+    # Curated fallback — top 100 by market cap
     fallback = [
         "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
         "UNH", "JNJ", "JPM", "V", "XOM", "PG", "MA", "HD", "CVX", "MRK",
@@ -282,6 +363,12 @@ def _get_sp500_tickers():
         "CSCO", "MCD", "CRM", "ACN", "ABT", "DHR", "LIN", "AMD", "ADBE",
         "TXN", "NFLX", "WFC", "PM", "NEE", "UNP", "BMY", "RTX", "QCOM",
         "ORCL", "HON", "LOW", "UPS", "INTC",
+        "INTU", "AMAT", "GS", "MS", "BLK", "SCHW", "AXP", "C", "CAT",
+        "DE", "GE", "BA", "LMT", "RTX", "IBM", "PYPL", "SQ", "SHOP",
+        "SNOW", "UBER", "ABNB", "CRWD", "DDOG", "ZS", "PANW", "FTNT",
+        "NOW", "WDAY", "TEAM", "MDB", "NET", "COIN", "HOOD", "SOFI",
+        "PLTR", "RIVN", "NIO", "LCID", "F", "GM", "TSLA", "DIS",
+        "NFLX", "ROKU",
     ]
     _set_cache("sp500", fallback)
     return fallback
