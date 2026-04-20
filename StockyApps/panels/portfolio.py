@@ -156,6 +156,22 @@ class PortfolioPanel(QWidget):
         watchlist_w.setLayout(wl)
         inner_tabs.addTab(watchlist_w, StockyIcons.get_icon("chart_up", 16, BRAND_PRIMARY), "Watchlist")
 
+        # ── Open Orders Tab ──
+        orders_w = QWidget()
+        ol = QVBoxLayout()
+        ol.setContentsMargins(0, 4, 0, 0)
+        self.open_orders_table = QTableWidget()
+        self.open_orders_table.setColumnCount(8)
+        self.open_orders_table.setHorizontalHeaderLabels(
+            ["Symbol", "Side", "Qty", "Type", "Price", "Status", "Submitted", ""])
+        for c in range(7):
+            self.open_orders_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self.open_orders_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        self.open_orders_table.verticalHeader().setVisible(False)
+        ol.addWidget(self.open_orders_table)
+        orders_w.setLayout(ol)
+        inner_tabs.addTab(orders_w, StockyIcons.get_icon("refresh", 16, BRAND_PRIMARY), "Open Orders")
+
         # ── Performance Chart Tab ──
         perf_w = QWidget()
         perf_l = QVBoxLayout()
@@ -187,6 +203,16 @@ class PortfolioPanel(QWidget):
             show_equity_popup(self.broker, self)
         elif kind == "pnl":
             show_pnl_popup(self.broker, self)
+
+    def _cancel_order(self, order_id):
+        if not self.broker:
+            return
+        result = self.broker.cancel_order(order_id)
+        if "error" in result:
+            self.bus.log_entry.emit(f"Cancel failed: {result['error']}", "error")
+        else:
+            self.bus.log_entry.emit(f"Order cancelled: {order_id[:12]}", "trade")
+            QTimer.singleShot(1000, self.refresh)
 
     def _sell_holding(self, symbol, max_qty):
         """Sell shares of a specific holding."""
@@ -335,10 +361,39 @@ class PortfolioPanel(QWidget):
             self.card_positions.set_value("0")
             self.holdings_table.setRowCount(0)
 
-        # Open orders
+        # Open orders — populate table with cancel buttons
         orders = self.broker.get_orders("open")
         if isinstance(orders, list):
             self.card_orders.set_value(str(len(orders)))
+            self.open_orders_table.setRowCount(len(orders))
+            for i, o in enumerate(orders):
+                price_str = "market"
+                if o.get("type") == "limit" and o.get("limit_price"):
+                    price_str = f"${float(o['limit_price']):.2f}"
+                elif o.get("type") == "stop" and o.get("stop_price"):
+                    price_str = f"${float(o['stop_price']):.2f}"
+                vals = [
+                    o.get("symbol", ""), o.get("side", ""),
+                    o.get("qty", "0"), o.get("type", ""),
+                    price_str, o.get("status", ""),
+                    (o.get("submitted_at", "") or "")[:16],
+                ]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(str(v))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    if j == 1:
+                        item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
+                    self.open_orders_table.setItem(i, j, item)
+                # Cancel button
+                oid = o.get("id", "")
+                cancel_btn = QPushButton("Cancel")
+                cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
+                cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
+                self.open_orders_table.setCellWidget(i, 7, cancel_btn)
+        else:
+            self.card_orders.set_value("0")
+            self.open_orders_table.setRowCount(0)
 
         # Trade history with running totals
         limit_map = {"Last 20": 20, "Last 50": 50, "Last 100": 100, "All": 500}

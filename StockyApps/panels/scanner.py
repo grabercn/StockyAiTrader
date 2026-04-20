@@ -215,6 +215,24 @@ class ScannerPanel(QWidget):
         qty_row.addWidget(self.detail_qty_label, 1)
         tbl.addLayout(qty_row)
 
+        # Order type: Market vs Limit
+        order_row = QHBoxLayout()
+        order_row.addWidget(QLabel("Order:"))
+        self.order_type_cb = QComboBox()
+        self.order_type_cb.addItems(["Market", "Limit"])
+        self.order_type_cb.setToolTip("Market = instant at current price. Limit = set a price ceiling (buy) or floor (sell).")
+        order_row.addWidget(self.order_type_cb)
+        order_row.addWidget(QLabel("Price:"))
+        self.limit_price_input = QLineEdit()
+        self.limit_price_input.setPlaceholderText("e.g. 150.00")
+        self.limit_price_input.setStyleSheet(f"padding: 4px; min-width: 80px;")
+        self.limit_price_input.setEnabled(False)
+        order_row.addWidget(self.limit_price_input)
+        self.order_type_cb.currentTextChanged.connect(
+            lambda t: self.limit_price_input.setEnabled(t == "Limit")
+        )
+        tbl.addLayout(order_row)
+
         # Buy button
         buy_row = QHBoxLayout()
         self.detail_buy_btn = QPushButton("  BUY")
@@ -726,27 +744,45 @@ class ScannerPanel(QWidget):
             self.bus.log_entry.emit(f"Set quantity to at least 1 share", "warn")
             return
 
-        cost = qty * r.price
+        # Determine order type and limit price
+        is_limit = self.order_type_cb.currentText() == "Limit"
+        limit_price = None
+        if is_limit:
+            try:
+                limit_price = float(self.limit_price_input.text())
+            except (ValueError, TypeError):
+                self.bus.log_entry.emit("Enter a valid limit price", "warn")
+                return
+
+        order_type = "limit" if is_limit else "market"
+        price_str = f"${limit_price:.2f} (limit)" if limit_price else f"${r.price:.2f} (market)"
+        cost = qty * (limit_price or r.price)
+
         confirm = QMessageBox.question(
             self, f"Confirm {side.upper()}",
             f"{side.upper()} {qty} shares of {r.ticker}\n"
-            f"Price: ${r.price:.2f}\n"
-            f"Total: ${cost:,.2f}\n"
-            f"Stop Loss: ${r.stop_loss:.2f}\n"
-            f"Take Profit: ${r.take_profit:.2f}\n\n"
-            f"Proceed?",
+            f"Order Type: {order_type.upper()}\n"
+            f"Price: {price_str}\n"
+            f"Estimated Total: ${cost:,.2f}\n"
+            + (f"Stop Loss: ${r.stop_loss:.2f}\n"
+               f"Take Profit: ${r.take_profit:.2f}\n" if not is_limit else "")
+            + f"\nProceed?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
             return
 
-        # Use close_position for sells (avoids 403 short sell restriction)
-        # Use place_order for buys
-        if side == "sell":
+        # Use close_position for market sells (avoids 403)
+        # Use place_order for buys and limit sells
+        if side == "sell" and not is_limit:
             result = self.broker.close_position(r.ticker, qty=qty)
         else:
-            result = self.broker.place_order(r.ticker, qty, side,
-                                             stop_loss=r.stop_loss, take_profit=r.take_profit)
+            result = self.broker.place_order(
+                r.ticker, qty, side, order_type=order_type,
+                stop_loss=r.stop_loss if not is_limit else None,
+                take_profit=r.take_profit if not is_limit else None,
+                limit_price=limit_price,
+            )
         if "error" in result:
             self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} failed: {result['error']}", "error")
         else:

@@ -209,36 +209,71 @@ def get_high_volume(min_volume=5_000_000, limit=20):
     return tickers
 
 
+def _fetch_sector_map():
+    """
+    Dynamically build sector → tickers map from the S&P 500 universe.
+    Uses the GitHub CSV which has a 'GICS Sector' column.
+    Falls back to yfinance info if CSV doesn't have sectors.
+    Cached for 24 hours.
+    """
+    cached = _cached("sector_map", ttl=86400)
+    if cached:
+        return cached
+
+    sector_map = {}
+
+    # Try GitHub CSV first (has GICS Sector column)
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+            headers={"User-Agent": "StockyAiTrader/5.0"}, timeout=10,
+        )
+        if r.status_code == 200:
+            import io, csv
+            reader = csv.DictReader(io.StringIO(r.text))
+            for row in reader:
+                sym = row.get("Symbol", "").replace(".", "-")
+                sector = row.get("Sector", "")
+                if sym and sector:
+                    sector_map.setdefault(sector, []).append(sym)
+    except Exception:
+        pass
+
+    # If CSV didn't have sectors or failed, use hardcoded fallback
+    if not sector_map:
+        sector_map = {
+            "Information Technology": ["AAPL", "MSFT", "NVDA", "AMD", "AVGO", "ADBE", "CRM", "ORCL", "INTC", "CSCO", "TXN", "QCOM", "NOW", "AMAT", "MU"],
+            "Health Care":     ["JNJ", "UNH", "PFE", "ABBV", "MRK", "LLY", "TMO", "ABT", "DHR", "BMY", "AMGN", "GILD", "CVS", "MDT", "ISRG"],
+            "Financials":      ["JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "SPGI", "CB", "PGR", "MET", "USB", "BK"],
+            "Energy":          ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "HAL", "DVN", "FANG", "HES", "BKR"],
+            "Consumer Discretionary": ["AMZN", "TSLA", "HD", "NKE", "MCD", "SBUX", "TGT", "LOW", "COST", "GM", "F"],
+            "Consumer Staples": ["WMT", "PG", "KO", "PEP", "CL", "MDLZ", "MO", "PM", "EL", "GIS", "KHC", "SYY", "STZ", "HSY", "K"],
+            "Real Estate":     ["AMT", "PLD", "CCI", "EQIX", "SPG", "O", "DLR", "WELL", "AVB", "EQR", "VTR", "ARE", "MAA", "UDR", "ESS"],
+            "Industrials":     ["CAT", "DE", "UNP", "BA", "HON", "RTX", "LMT", "GE", "UPS", "FDX", "WM", "EMR", "ITW", "ETN"],
+            "Utilities":       ["NEE", "DUK", "SO", "D", "AEP", "SRE", "EXC", "XEL", "WEC", "ED", "ES", "AWK", "ATO", "CMS", "DTE"],
+            "Materials":       ["LIN", "APD", "SHW", "ECL", "FCX", "NEM", "NUE", "VMC", "MLM", "DOW", "DD", "PPG", "ALB", "CF", "MOS"],
+            "Communication Services": ["META", "GOOGL", "T", "VZ", "TMUS", "DIS", "NFLX", "CMCSA", "CHTR", "WBD", "PARA"],
+        }
+
+    # Always add curated special categories (not in S&P but useful)
+    sector_map["ETFs"] = ["SPY", "QQQ", "IWM", "DIA", "VTI", "ARKK", "XLF", "XLE", "XLK", "XLV", "XLI", "XLC", "XLY", "XLP", "XLRE"]
+    sector_map["Meme / Retail"] = ["GME", "AMC", "SOFI", "PLTR", "RIVN", "NIO", "LCID", "CLOV", "BB", "HOOD", "COIN", "MARA", "RIOT"]
+    sector_map["Crypto-Related"] = ["COIN", "MARA", "RIOT", "MSTR", "BITF", "HUT", "CLSK", "SQ", "PYPL", "HOOD"]
+
+    _set_cache("sector_map", sector_map)
+    return sector_map
+
+
 def get_sector_tickers(sector, limit=15):
-    """Get tickers for a specific sector."""
-    sector_map = {
-        "Technology":     ["AAPL", "MSFT", "GOOGL", "NVDA", "AMD", "META", "CRM", "ORCL", "ADBE", "INTC", "CSCO", "AVGO", "TXN", "QCOM", "NOW"],
-        "Healthcare":     ["JNJ", "UNH", "PFE", "ABBV", "MRK", "LLY", "TMO", "ABT", "DHR", "BMY", "AMGN", "GILD", "CVS", "MDT", "ISRG"],
-        "Finance":        ["JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "SPGI", "CB", "PGR", "MET", "USB", "BK"],
-        "Energy":         ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "PXD", "HAL", "DVN", "FANG", "HES", "BKR"],
-        "Consumer":       ["AMZN", "TSLA", "HD", "NKE", "MCD", "SBUX", "TGT", "LOW", "COST", "WMT", "PG", "KO", "PEP", "CL", "EL"],
-        "Real Estate":    ["AMT", "PLD", "CCI", "EQIX", "SPG", "O", "DLR", "WELL", "AVB", "EQR", "VTR", "ARE", "MAA", "UDR", "ESS"],
-        "Industrials":    ["CAT", "DE", "UNP", "BA", "HON", "RTX", "LMT", "GE", "MMM", "UPS", "FDX", "WM", "EMR", "ITW", "ETN"],
-        "ETFs":           ["SPY", "QQQ", "IWM", "DIA", "VTI", "ARKK", "XLF", "XLE", "XLK", "XLV", "XLI", "XLC", "XLY", "XLP", "XLRE"],
-        "Meme / Retail":  ["GME", "AMC", "BBBY", "SOFI", "PLTR", "RIVN", "NIO", "LCID", "WISH", "CLOV", "BB", "HOOD", "COIN", "MARA", "RIOT"],
-        "Crypto-Related": ["COIN", "MARA", "RIOT", "MSTR", "BITF", "HUT", "CLSK", "SI", "SQ", "PYPL", "V", "MA", "HOOD", "GBTC", "ETHE"],
-        "Defense":        ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "TXT", "LDOS", "BWXT", "KTOS", "PLTR", "AVAV", "SPR", "TDG"],
-        "Utilities":      ["NEE", "DUK", "SO", "D", "AEP", "SRE", "EXC", "XEL", "WEC", "ED", "ES", "AWK", "ATO", "CMS", "DTE"],
-        "Materials":      ["LIN", "APD", "SHW", "ECL", "FCX", "NEM", "NUE", "VMC", "MLM", "DOW", "DD", "PPG", "ALB", "CF", "MOS"],
-        "Telecom":        ["T", "VZ", "TMUS", "LUMN", "USM", "SHEN", "GSAT", "LBRDA", "CHTR", "CMCSA", "DISH", "ATUS", "WBD", "PARA", "NXST"],
-        "Semiconductors": ["NVDA", "AMD", "AVGO", "QCOM", "TXN", "INTC", "MU", "MRVL", "LRCX", "AMAT", "KLAC", "ON", "SWKS", "MCHP", "ADI"],
-    }
-    return sector_map.get(sector, [])[:limit]
+    """Get tickers for a specific sector (dynamically fetched)."""
+    sm = _fetch_sector_map()
+    return sm.get(sector, [])[:limit]
 
 
 def get_all_sectors():
-    """List available sector names."""
-    return [
-        "Technology", "Healthcare", "Finance", "Energy", "Consumer",
-        "Real Estate", "Industrials", "Defense", "Semiconductors",
-        "Utilities", "Materials", "Telecom",
-        "ETFs", "Meme / Retail", "Crypto-Related",
-    ]
+    """List available sector names (dynamically discovered)."""
+    sm = _fetch_sector_map()
+    return sorted(sm.keys())
 
 
 # ─── Watchlists ──────────────────────────────────────────────────────────────

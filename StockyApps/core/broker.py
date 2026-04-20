@@ -130,22 +130,36 @@ class AlpacaBroker:
         """List orders by status (open, closed, all)."""
         return self._get("orders", {"status": status})
 
-    def place_order(self, symbol, qty, side, order_type="market",
-                    time_in_force="day", stop_loss=None, take_profit=None):
-        """
-        Place an order, optionally as a bracket order with SL/TP.
+    def cancel_order(self, order_id):
+        """Cancel a specific order by ID."""
+        try:
+            r = requests.delete(f"{self.base_url}/orders/{order_id}", headers=self.headers)
+            r.raise_for_status()
+            return {"status": "cancelled", "id": order_id}
+        except requests.RequestException as e:
+            return {"error": str(e)}
 
-        Bracket orders automatically attach a stop-loss and take-profit
-        so the exit is managed by the broker, not our code.
+    def place_order(self, symbol, qty, side, order_type="market",
+                    time_in_force="day", stop_loss=None, take_profit=None,
+                    limit_price=None):
+        """
+        Place an order with full support for market, limit, and bracket orders.
+
+        Order types:
+            market:  Execute immediately at current price
+            limit:   Execute only at limit_price or better
+                     Buy limit = price ceiling (won't pay more than this)
+                     Sell limit = price floor (won't sell for less than this)
 
         Args:
-            symbol:       Ticker (e.g. "AAPL")
-            qty:          Number of shares
-            side:         "buy" or "sell"
-            order_type:   "market", "limit", etc.
+            symbol:        Ticker (e.g. "AAPL")
+            qty:           Number of shares
+            side:          "buy" or "sell"
+            order_type:    "market" or "limit"
             time_in_force: "day" (close at EOD) or "gtc" (good til cancelled)
-            stop_loss:    Stop-loss price (triggers bracket order if set with take_profit)
-            take_profit:  Take-profit price (triggers bracket order if set with stop_loss)
+            stop_loss:     Stop-loss price (bracket order)
+            take_profit:   Take-profit price (bracket order)
+            limit_price:   Price ceiling (buy) or floor (sell) for limit orders
         """
         order = {
             "symbol": symbol,
@@ -155,11 +169,26 @@ class AlpacaBroker:
             "time_in_force": time_in_force,
         }
 
+        # Limit order: set the price
+        if order_type == "limit" and limit_price:
+            order["limit_price"] = f"{limit_price:.2f}"
+
         # Bracket order: market entry + automatic SL + TP
         if stop_loss and take_profit and order_type == "market":
             order["order_class"] = "bracket"
             order["stop_loss"] = {"stop_price": f"{stop_loss:.2f}"}
             order["take_profit"] = {"limit_price": f"{take_profit:.2f}"}
+
+        # Simulate real market delay if enabled in settings
+        try:
+            import json
+            settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+            with open(settings_path) as f:
+                if json.load(f).get("sim_trade_delay"):
+                    import time
+                    time.sleep(10)
+        except Exception:
+            pass
 
         result = self._post("orders", order)
 

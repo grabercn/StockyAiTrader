@@ -82,6 +82,39 @@ class TestingPanel(QWidget):
         diag_box.setLayout(dg)
         layout.addWidget(diag_box)
 
+        # Trading simulation controls
+        sim_box = QGroupBox("Trading Simulation")
+        sl = QVBoxLayout()
+        sl.addWidget(QLabel("Simulate real market conditions for testing the order queue and pending orders UI."))
+
+        sim_row = QHBoxLayout()
+        self.sim_delay_cb = QCheckBox("Enable fake trade delay (10s)")
+        self.sim_delay_cb.setToolTip("Adds a 10-second delay before paper trades execute so you can test the pending orders queue and cancel flow.")
+        settings = load_settings()
+        self.sim_delay_cb.setChecked(settings.get("sim_trade_delay", False))
+        self.sim_delay_cb.toggled.connect(self._toggle_sim_delay)
+        sim_row.addWidget(self.sim_delay_cb)
+
+        test_buy_btn = QPushButton("Test Buy 1 AAPL")
+        test_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 10px;")
+        test_buy_btn.clicked.connect(lambda: self._test_trade("buy", "AAPL", 1))
+        sim_row.addWidget(test_buy_btn)
+
+        test_sell_btn = QPushButton("Test Sell 1 AAPL")
+        test_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 10px;")
+        test_sell_btn.clicked.connect(lambda: self._test_trade("sell", "AAPL", 1))
+        sim_row.addWidget(test_sell_btn)
+
+        test_limit_btn = QPushButton("Test Limit Buy AAPL @$1")
+        test_limit_btn.setToolTip("Places a limit buy at $1 (will never fill) so you can test the pending queue and cancel it.")
+        test_limit_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 10px;")
+        test_limit_btn.clicked.connect(lambda: self._test_trade("buy", "AAPL", 1, limit=1.00))
+        sim_row.addWidget(test_limit_btn)
+
+        sl.addLayout(sim_row)
+        sim_box.setLayout(sl)
+        layout.addWidget(sim_box)
+
         # Unit test runner
         test_box = QGroupBox("Unit Tests (pytest)")
         tl = QVBoxLayout()
@@ -98,6 +131,30 @@ class TestingPanel(QWidget):
         layout.addWidget(test_box)
 
         self.setLayout(layout)
+
+    def _toggle_sim_delay(self, checked):
+        settings = load_settings()
+        settings["sim_trade_delay"] = checked
+        save_settings(settings)
+        self.bus.log_entry.emit(
+            f"Trade delay simulation {'enabled (10s delay)' if checked else 'disabled'}",
+            "system",
+        )
+
+    def _test_trade(self, side, ticker, qty, limit=None):
+        if not self.broker:
+            self.diag_output.append("ERROR: Alpaca not connected — set keys in Settings")
+            return
+        if limit:
+            result = self.broker.place_order(ticker, qty, side, order_type="limit", limit_price=limit)
+            self.diag_output.append(f"Limit {side.upper()} {ticker} x{qty} @ ${limit:.2f}: {result}")
+        elif side == "sell":
+            result = self.broker.close_position(ticker, qty=qty)
+            self.diag_output.append(f"SELL {ticker} x{qty}: {result}")
+        else:
+            result = self.broker.place_order(ticker, qty, side)
+            self.diag_output.append(f"BUY {ticker} x{qty}: {result}")
+        self.bus.log_entry.emit(f"Test trade: {side.upper()} {ticker} x{qty}", "trade")
 
     def _d(self, msg, ok=True):
         icon = "PASS" if ok else "FAIL"

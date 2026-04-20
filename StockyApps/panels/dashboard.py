@@ -123,11 +123,13 @@ class DashboardPanel(QWidget):
         rl.addWidget(orders_label)
 
         self.orders_table = QTableWidget()
-        self.orders_table.setColumnCount(5)
-        self.orders_table.setHorizontalHeaderLabels(["Symbol", "Side", "Qty", "Type", "Status"])
-        self.orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.orders_table.setColumnCount(7)
+        self.orders_table.setHorizontalHeaderLabels(["Symbol", "Side", "Qty", "Type", "Price", "Status", ""])
+        for c in range(6):
+            self.orders_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self.orders_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.orders_table.verticalHeader().setVisible(False)
-        self.orders_table.setMaximumHeight(100)
+        self.orders_table.setMaximumHeight(120)
         rl.addWidget(self.orders_table)
 
         # Activity feed
@@ -246,15 +248,22 @@ class DashboardPanel(QWidget):
                 sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_position(s, q))
                 self.pos_table.setCellWidget(i, 7, sell_btn)
 
-        # Active orders
+        # Active orders with cancel buttons
         open_orders = self.broker.get_orders("open")
         if isinstance(open_orders, list):
             self.orders_table.setRowCount(len(open_orders))
             for i, o in enumerate(open_orders):
+                # Show limit price if limit order, else "market"
+                price_str = "market"
+                if o.get("type") == "limit" and o.get("limit_price"):
+                    price_str = f"${float(o['limit_price']):.2f}"
+                elif o.get("type") == "stop" and o.get("stop_price"):
+                    price_str = f"${float(o['stop_price']):.2f}"
+
                 vals = [
                     o.get("symbol", ""), o.get("side", ""),
                     o.get("qty", "0"), o.get("type", ""),
-                    o.get("status", ""),
+                    price_str, o.get("status", ""),
                 ]
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(str(v))
@@ -263,6 +272,13 @@ class DashboardPanel(QWidget):
                     if j == 1:
                         item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
                     self.orders_table.setItem(i, j, item)
+
+                # Cancel button
+                oid = o.get("id", "")
+                cancel_btn = QPushButton("Cancel")
+                cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
+                cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
+                self.orders_table.setCellWidget(i, 6, cancel_btn)
         else:
             self.orders_table.setRowCount(0)
 
@@ -332,6 +348,17 @@ class DashboardPanel(QWidget):
             self._tooltip = ChartTooltip(self.canvas, ax, ts, eq)
         except Exception as e:
             self.bus.log_entry.emit(f"Chart error: {e}", "error")
+
+    def _cancel_order(self, order_id):
+        """Cancel a pending order."""
+        if not self.broker:
+            return
+        result = self.broker.cancel_order(order_id)
+        if "error" in result:
+            self.bus.log_entry.emit(f"Cancel failed: {result['error']}", "error")
+        else:
+            self.bus.log_entry.emit(f"Order cancelled: {order_id[:12]}", "trade")
+            QTimer.singleShot(1000, self.refresh)
 
     def _sell_position(self, symbol, max_qty):
         """Sell a specific position with qty picker. Uses close_position endpoint."""
