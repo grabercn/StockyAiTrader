@@ -2121,6 +2121,32 @@ class SettingsPanel(QWidget):
         profile_box.setLayout(pl)
         inner_layout.addWidget(profile_box)
 
+        # Trading Aggressivity
+        aggr_box = QGroupBox("Trading Aggressivity")
+        ag_layout = QVBoxLayout()
+        ag_row = QHBoxLayout()
+        ag_row.addWidget(QLabel("Style:"))
+        self.aggr_combo = QComboBox()
+        from core.intelligent_trader import AGGRESSIVITY_PROFILES
+        for name, prof in AGGRESSIVITY_PROFILES.items():
+            self.aggr_combo.addItem(f"{name} — {prof['description'][:50]}", name)
+        # Load saved
+        saved_aggr = settings.get("aggressivity", "Default")
+        idx_map = {n: i for i, n in enumerate(AGGRESSIVITY_PROFILES)}
+        self.aggr_combo.setCurrentIndex(idx_map.get(saved_aggr, 1))
+        self.aggr_combo.currentIndexChanged.connect(self._change_aggressivity)
+        ag_row.addWidget(self.aggr_combo, 1)
+        ag_layout.addLayout(ag_row)
+
+        self.aggr_desc = QLabel("")
+        self.aggr_desc.setWordWrap(True)
+        self.aggr_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        ag_layout.addWidget(self.aggr_desc)
+        self._update_aggr_desc()
+
+        aggr_box.setLayout(ag_layout)
+        inner_layout.addWidget(aggr_box)
+
         # Appearance
         appear_box = QGroupBox("Appearance")
         al2 = QHBoxLayout()
@@ -2205,6 +2231,26 @@ class SettingsPanel(QWidget):
         layout.addWidget(scroll)
         self.setLayout(layout)
         self._refresh()
+
+    def _change_aggressivity(self, index):
+        name = self.aggr_combo.currentData()
+        settings = load_settings()
+        settings["aggressivity"] = name
+        save_settings(settings)
+        self._update_aggr_desc()
+        self.bus.log_entry.emit(f"Trading aggressivity set to: {name}", "system")
+
+    def _update_aggr_desc(self):
+        from core.intelligent_trader import get_aggressivity
+        name = self.aggr_combo.currentData() or "Default"
+        p = get_aggressivity(name)
+        self.aggr_desc.setText(
+            f"Min confidence: {p['min_confidence']:.0%}  |  "
+            f"Position size: {p['size_multiplier']:.1f}x  |  "
+            f"Max trades/day: {p['max_trades_per_day']}  |  "
+            f"Stop: {p['atr_stop_mult']:.1f}x ATR  |  "
+            f"Target: {p['atr_profit_mult']:.1f}x ATR"
+        )
 
     def _change_theme(self, index):
         theme_map = {0: "auto", 1: "dark", 2: "light"}
@@ -2989,13 +3035,14 @@ class StockySuite(QMainWindow):
             self._scale = self._detect_ideal_scale()
         self._apply_scale()
 
-        # Keyboard shortcuts for zoom
+        # Keyboard shortcuts for zoom (using QShortcut for reliable capture)
         from PyQt5.QtWidgets import QShortcut
         from PyQt5.QtGui import QKeySequence
-        QShortcut(QKeySequence("Ctrl+="), self, lambda: self._zoom(0.1))
-        QShortcut(QKeySequence("Ctrl++"), self, lambda: self._zoom(0.1))
-        QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-0.1))
-        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._reset_zoom())
+        # Multiple key combos for zoom-in to handle different keyboard layouts
+        for key in ["Ctrl+=", "Ctrl+Shift+=", "Ctrl++"]:
+            QShortcut(QKeySequence(key), self, lambda: self._zoom(0.1), context=Qt.ApplicationShortcut)
+        QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-0.1), context=Qt.ApplicationShortcut)
+        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._reset_zoom(), context=Qt.ApplicationShortcut)
 
         # System tray agent — minimize to tray on close, toast notifications
         from core.tray_agent import TrayAgent
