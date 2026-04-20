@@ -142,67 +142,59 @@ class DashboardPanel(QWidget):
         self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
 
     def _build(self):
-        from core.widgets import StatCard, GradientDivider, SectionHeader
+        from core.widgets import StatCard, GradientDivider
         from core.ui.backgrounds import GradientHeader
-        from core.ui.charts import GaugeWidget, AreaSparkline
+        from core.ui.animations import FadeIn, StaggeredFadeIn
 
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
 
         # Header
-        header = GradientHeader("Dashboard", "Portfolio overview and recent activity", height=70)
+        header = GradientHeader("Dashboard", "Portfolio overview and recent activity", height=55)
         layout.addWidget(header)
 
         # Account stats row — premium stat cards
         cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)
-
+        cards_row.setSpacing(8)
         self.card_portfolio = StatCard("Portfolio Value", "--", BRAND_PRIMARY)
         self.card_buying = StatCard("Buying Power", "--", BRAND_SECONDARY)
         self.card_cash = StatCard("Cash", "--", TEXT_SECONDARY)
         self.card_pnl = StatCard("Day P&L", "--", BRAND_ACCENT)
-
-        cards_row.addWidget(self.card_portfolio)
-        cards_row.addWidget(self.card_buying)
-        cards_row.addWidget(self.card_cash)
-        cards_row.addWidget(self.card_pnl)
+        self._stat_cards = [self.card_portfolio, self.card_buying, self.card_cash, self.card_pnl]
+        for card in self._stat_cards:
+            cards_row.addWidget(card)
         layout.addLayout(cards_row)
 
-        layout.addWidget(GradientDivider())
+        # Splitter: chart (top, stretchy) + positions/activity (bottom)
+        splitter = QSplitter(Qt.Vertical)
 
-        # Quick actions row
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(8)
-        quick_actions = [
-            ("Scan Stocks", "scan", lambda: self.bus.log_entry.emit("Switch to Scanner tab", "info")),
-            ("Day Trade", "bolt", lambda: self.bus.log_entry.emit("Switch to Day Trade tab", "info")),
-            ("View Logs", "log", lambda: self.bus.log_entry.emit("Switch to Logs tab", "info")),
-        ]
-        for label, icon_key, callback in quick_actions:
-            from core.ui.icons import StockyIcons
-            btn = QPushButton(f"  {label}")
-            btn.setIcon(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY))
-            btn.setStyleSheet(f"""
-                QPushButton {{ background-color: transparent; color: {TEXT_SECONDARY};
-                    border: 1px solid {BORDER}; padding: 10px 16px; border-radius: 8px; }}
-                QPushButton:hover {{ background-color: {BRAND_PRIMARY}20; border-color: {BRAND_PRIMARY}; color: {BRAND_PRIMARY}; }}
-            """)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(callback)
-            actions_row.addWidget(btn)
-        layout.addLayout(actions_row)
-
-        layout.addWidget(GradientDivider())
-
-        # Chart
-        self.figure = plt.Figure(figsize=(8, 3), dpi=100, facecolor=BG_DARKEST)
+        # Chart — takes priority space
+        chart_widget = QWidget()
+        cl = QVBoxLayout()
+        cl.setContentsMargins(0, 4, 0, 0)
+        self.figure = plt.Figure(dpi=100, facecolor=BG_DARKEST)
         self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas)
+        self.canvas.setMinimumHeight(140)
+        cl.addWidget(self.canvas)
+        chart_widget.setLayout(cl)
+        splitter.addWidget(chart_widget)
 
-        # Positions table
-        pos_box = QGroupBox("Open Positions")
+        # Bottom: positions + activity side by side
+        bottom = QWidget()
+        bl = QHBoxLayout()
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(8)
+
+        # Positions
+        pos_widget = QWidget()
         pl = QVBoxLayout()
+        pl.setContentsMargins(0, 0, 0, 0)
+        pos_label = QLabel("Open Positions")
+        pos_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        pos_label.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        pl.addWidget(pos_label)
+
         self.pos_table = QTableWidget()
         self.pos_table.setColumnCount(7)
         self.pos_table.setHorizontalHeaderLabels(
@@ -211,28 +203,40 @@ class DashboardPanel(QWidget):
         self.pos_table.verticalHeader().setVisible(False)
         pl.addWidget(self.pos_table)
 
-        close_btn = QPushButton("Close All Positions")
-        close_btn.setStyleSheet(f"background-color: {COLOR_SELL};")
+        from core.ui.icons import StockyIcons
+        close_btn = QPushButton("  Close All Positions")
+        close_btn.setIcon(StockyIcons.get_icon("x_mark", 14, "white"))
+        close_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px; padding: 6px;")
         close_btn.clicked.connect(self._close_all)
         pl.addWidget(close_btn)
-        pos_box.setLayout(pl)
-        layout.addWidget(pos_box)
+        pos_widget.setLayout(pl)
+        bl.addWidget(pos_widget, 3)
 
-        # Recent activity feed
-        layout.addWidget(GradientDivider())
-        activity_box = QGroupBox("Recent Activity")
+        # Activity feed
+        act_widget = QWidget()
         al = QVBoxLayout()
+        al.setContentsMargins(0, 0, 0, 0)
+        act_label = QLabel("Recent Activity")
+        act_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        act_label.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        al.addWidget(act_label)
+
         self.activity_feed = QTextEdit()
         self.activity_feed.setReadOnly(True)
-        self.activity_feed.setMinimumHeight(120)
         al.addWidget(self.activity_feed)
-        activity_box.setLayout(al)
-        layout.addWidget(activity_box)
+        act_widget.setLayout(al)
+        bl.addWidget(act_widget, 2)
 
-        # Forward log entries to dashboard activity feed
+        bottom.setLayout(bl)
+        splitter.addWidget(bottom)
+        splitter.setSizes([300, 200])
+
+        layout.addWidget(splitter)
         self.bus.log_entry.connect(self._on_activity)
-
         self.setLayout(layout)
+
+        # Staggered fade-in animation for stat cards on first show
+        QTimer.singleShot(200, lambda: StaggeredFadeIn(self._stat_cards, delay_ms=100, duration=400))
 
     def _on_activity(self, msg, level):
         from core.branding import log_html
@@ -303,11 +307,49 @@ class DashboardPanel(QWidget):
 
     def _close_all(self):
         if not self.broker:
+            self.bus.log_entry.emit("Alpaca API not connected — configure in Settings", "error")
             return
-        if QMessageBox.question(self, "Confirm", "Close ALL positions?",
-                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            self.broker.close_all_positions()
-            self.bus.log_entry.emit("All positions closed", "trade")
+
+        # Show positions in the confirmation dialog
+        positions = self.broker.get_positions()
+        if not isinstance(positions, list) or len(positions) == 0:
+            self.bus.log_entry.emit("No open positions to close", "info")
+            return
+
+        pos_lines = []
+        total_pnl = 0
+        for p in positions:
+            sym = p.get("symbol", "?")
+            qty = float(p.get("qty", 0))
+            pnl = float(p.get("unrealized_pl", 0))
+            total_pnl += pnl
+            sign = "+" if pnl >= 0 else ""
+            pos_lines.append(f"  {sym}  x{qty:.0f}  ({sign}${pnl:,.2f})")
+
+        msg = (
+            f"This will CLOSE all {len(positions)} open positions:\n\n"
+            + "\n".join(pos_lines) +
+            f"\n\nTotal unrealized P&L: {'+'if total_pnl>=0 else ''}${total_pnl:,.2f}\n\n"
+            "All positions will be sold/covered at market price.\n"
+            "This cannot be undone."
+        )
+
+        reply = QMessageBox.warning(
+            self, "Close All Positions", msg,
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+
+        if reply == QMessageBox.Yes:
+            result = self.broker.close_all_positions()
+            if "error" in result:
+                self.bus.log_entry.emit(f"Failed to close positions: {result['error']}", "error")
+            else:
+                self.bus.log_entry.emit(f"Closed {len(positions)} positions (P&L: ${total_pnl:+,.2f})", "trade")
+
+            # Force refresh after a short delay to let Alpaca process
+            QTimer.singleShot(1500, self.refresh)
+            QTimer.singleShot(3000, self.refresh)  # Double-tap in case first is too early
             self.bus.positions_changed.emit()
 
 
@@ -1226,6 +1268,298 @@ class LogsPanel(QWidget):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PANEL: PORTFOLIO PROFILE
+# ═════════════════════════════════════════════════════════════════════════════
+
+class PortfolioPanel(QWidget):
+    """Detailed portfolio view: holdings, trade history, watchlist, performance."""
+
+    def __init__(self, broker, event_bus):
+        super().__init__()
+        self.broker = broker
+        self.bus = event_bus
+        self._build()
+        self.bus.positions_changed.connect(self.refresh)
+        self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
+
+    def _build(self):
+        from core.ui.backgrounds import GradientHeader
+        from core.widgets import StatCard, GradientDivider
+        from core.ui.icons import StockyIcons
+
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
+
+        header = GradientHeader("Portfolio", "Holdings, trade history, and performance", height=55)
+        layout.addWidget(header)
+
+        # Stats row
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(8)
+        self.card_equity = StatCard("Equity", "--", BRAND_PRIMARY)
+        self.card_pnl_today = StatCard("Today", "--", BRAND_ACCENT)
+        self.card_positions = StatCard("Positions", "--", BRAND_SECONDARY)
+        self.card_orders = StatCard("Open Orders", "--", TEXT_SECONDARY)
+        stats_row.addWidget(self.card_equity)
+        stats_row.addWidget(self.card_pnl_today)
+        stats_row.addWidget(self.card_positions)
+        stats_row.addWidget(self.card_orders)
+        layout.addLayout(stats_row)
+
+        # Main content — tabs within the tab
+        inner_tabs = QTabWidget()
+        inner_tabs.setStyleSheet(f"""
+            QTabBar::tab {{ padding: 6px 14px; font-size: 11px; }}
+        """)
+
+        # ── Holdings Tab ──
+        holdings_w = QWidget()
+        hl = QVBoxLayout()
+        self.holdings_table = QTableWidget()
+        self.holdings_table.setColumnCount(8)
+        self.holdings_table.setHorizontalHeaderLabels([
+            "Symbol", "Side", "Qty", "Avg Cost", "Current", "Market Value", "P&L", "P&L %"
+        ])
+        self.holdings_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.holdings_table.verticalHeader().setVisible(False)
+        hl.addWidget(self.holdings_table)
+        holdings_w.setLayout(hl)
+        inner_tabs.addTab(holdings_w, StockyIcons.get_icon("wallet", 16, BRAND_PRIMARY), "Holdings")
+
+        # ── Trade History Tab ──
+        history_w = QWidget()
+        htl = QVBoxLayout()
+        hist_ctrl = QHBoxLayout()
+        hist_ctrl.addWidget(QLabel("Show:"))
+        self.hist_count = QComboBox()
+        self.hist_count.addItems(["Last 20", "Last 50", "Last 100", "All"])
+        hist_ctrl.addWidget(self.hist_count)
+        refresh_btn = QPushButton("  Refresh")
+        refresh_btn.setIcon(StockyIcons.get_icon("scan", 14, "white"))
+        refresh_btn.setStyleSheet(f"font-size: 11px; padding: 5px;")
+        refresh_btn.clicked.connect(self.refresh)
+        hist_ctrl.addWidget(refresh_btn)
+        hist_ctrl.addStretch()
+        htl.addLayout(hist_ctrl)
+
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(7)
+        self.history_table.setHorizontalHeaderLabels([
+            "Symbol", "Side", "Qty", "Price", "Status", "Time", "Order ID"
+        ])
+        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.history_table.verticalHeader().setVisible(False)
+        htl.addWidget(self.history_table)
+        history_w.setLayout(htl)
+        inner_tabs.addTab(history_w, StockyIcons.get_icon("log", 16, BRAND_PRIMARY), "Trade History")
+
+        # ── Watchlist Tab ──
+        watchlist_w = QWidget()
+        wl = QVBoxLayout()
+        wl_ctrl = QHBoxLayout()
+        self.wl_select = QComboBox()
+        self._refresh_wl_combo()
+        wl_ctrl.addWidget(QLabel("Watchlist:"))
+        wl_ctrl.addWidget(self.wl_select, 1)
+        wl_ctrl.addStretch()
+
+        wl_add_input = QLineEdit()
+        wl_add_input.setPlaceholderText("Add ticker")
+        wl_add_input.setFixedWidth(100)
+        wl_ctrl.addWidget(wl_add_input)
+        add_btn = QPushButton("Add")
+        add_btn.setStyleSheet(f"font-size: 11px; padding: 5px; background-color: {BRAND_ACCENT};")
+        add_btn.clicked.connect(lambda: self._add_to_watchlist(wl_add_input.text()))
+        wl_ctrl.addWidget(add_btn)
+        self._wl_add_input = wl_add_input
+        wl.addLayout(wl_ctrl)
+
+        self.wl_table = QTableWidget()
+        self.wl_table.setColumnCount(3)
+        self.wl_table.setHorizontalHeaderLabels(["Ticker", "Last Price", ""])
+        self.wl_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.wl_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.wl_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.wl_table.verticalHeader().setVisible(False)
+        wl.addWidget(self.wl_table)
+        watchlist_w.setLayout(wl)
+        inner_tabs.addTab(watchlist_w, StockyIcons.get_icon("chart_up", 16, BRAND_PRIMARY), "Watchlist")
+
+        # ── Performance Chart Tab ──
+        perf_w = QWidget()
+        perf_l = QVBoxLayout()
+        perf_ctrl = QHBoxLayout()
+        perf_ctrl.addWidget(QLabel("Period:"))
+        self.perf_period = QComboBox()
+        self.perf_period.addItems(["1 Week", "1 Month", "3 Months", "1 Year"])
+        self.perf_period.currentIndexChanged.connect(lambda _: self._refresh_perf_chart())
+        perf_ctrl.addWidget(self.perf_period)
+        perf_ctrl.addStretch()
+        perf_l.addLayout(perf_ctrl)
+
+        self.perf_figure = plt.Figure(dpi=100, facecolor=BG_DARKEST)
+        self.perf_canvas = FigureCanvas(self.perf_figure)
+        self.perf_canvas.setMinimumHeight(200)
+        perf_l.addWidget(self.perf_canvas)
+        perf_w.setLayout(perf_l)
+        inner_tabs.addTab(perf_w, StockyIcons.get_icon("dashboard", 16, BRAND_PRIMARY), "Performance")
+
+        layout.addWidget(inner_tabs)
+        self.setLayout(layout)
+
+    def refresh(self):
+        if not self.broker:
+            return
+
+        # Account stats
+        acct = self.broker.get_account()
+        if "error" not in acct:
+            eq = float(acct.get("equity", 0))
+            leq = float(acct.get("last_equity", eq))
+            pnl = eq - leq
+            pct = (pnl / leq * 100) if leq > 0 else 0
+            self.card_equity.set_value(f"${eq:,.2f}")
+            self.card_pnl_today.set_value(
+                f"${pnl:+,.2f} ({pct:+.1f}%)",
+                COLOR_PROFIT if pnl >= 0 else COLOR_LOSS,
+            )
+
+        # Holdings
+        positions = self.broker.get_positions()
+        if isinstance(positions, list):
+            self.card_positions.set_value(str(len(positions)))
+            self.holdings_table.setRowCount(len(positions))
+            for i, p in enumerate(positions):
+                qty = float(p.get("qty", 0))
+                avg = float(p.get("avg_entry_price", 0))
+                cur = float(p.get("current_price", 0))
+                mv = qty * cur
+                pnl = float(p.get("unrealized_pl", 0))
+                pnl_pct = float(p.get("unrealized_plpc", 0)) * 100
+                vals = [
+                    p.get("symbol", ""), p.get("side", ""),
+                    f"{qty:.0f}", f"${avg:.2f}", f"${cur:.2f}",
+                    f"${mv:,.2f}", f"${pnl:+,.2f}", f"{pnl_pct:+.2f}%",
+                ]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j >= 6:
+                        item.setForeground(QColor(COLOR_PROFIT if pnl >= 0 else COLOR_LOSS))
+                    self.holdings_table.setItem(i, j, item)
+        else:
+            self.card_positions.set_value("0")
+            self.holdings_table.setRowCount(0)
+
+        # Open orders
+        orders = self.broker.get_orders("open")
+        if isinstance(orders, list):
+            self.card_orders.set_value(str(len(orders)))
+
+        # Trade history
+        limit_map = {"Last 20": 20, "Last 50": 50, "Last 100": 100, "All": 500}
+        limit = limit_map.get(self.hist_count.currentText(), 20)
+        closed = self.broker.get_orders("closed")
+        if isinstance(closed, list):
+            closed = closed[:limit]
+            self.history_table.setRowCount(len(closed))
+            for i, o in enumerate(closed):
+                vals = [
+                    o.get("symbol", ""), o.get("side", ""),
+                    o.get("filled_qty", "0"), f"${float(o.get('filled_avg_price', 0)):.2f}",
+                    o.get("status", ""), o.get("filled_at", "")[:19] if o.get("filled_at") else "",
+                    o.get("id", "")[:12],
+                ]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(str(v))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j == 1:
+                        item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
+                    self.history_table.setItem(i, j, item)
+
+        self._refresh_perf_chart()
+        self._refresh_watchlist()
+
+    def _refresh_perf_chart(self):
+        if not self.broker:
+            return
+        period_map = {"1 Week": ("1W", "1H"), "1 Month": ("1M", "1D"),
+                      "3 Months": ("3M", "1D"), "1 Year": ("1A", "1D")}
+        p, tf = period_map.get(self.perf_period.currentText(), ("1W", "1H"))
+        hist = self.broker.get_portfolio_history(period=p, timeframe=tf)
+        if "error" in hist or not hist.get("equity"):
+            return
+
+        self.perf_figure.clear()
+        self.perf_figure.set_facecolor(BG_DARKEST)
+        ax = self.perf_figure.add_subplot(111)
+        ax.set_facecolor(BG_PANEL)
+        eq = hist["equity"]
+        ts = [datetime.fromtimestamp(t) for t in hist["timestamp"]]
+        trending_up = eq[-1] >= eq[0] if eq else True
+        color = COLOR_BUY if trending_up else COLOR_SELL
+        ax.plot(ts, eq, color=color, linewidth=1.5)
+        ax.fill_between(ts, eq, alpha=0.08, color=color)
+        ax.set_title(f"Portfolio — {self.perf_period.currentText()}", color=TEXT_SECONDARY, fontsize=10)
+        ax.tick_params(colors=TEXT_MUTED, labelsize=7)
+        ax.grid(True, alpha=0.1, color=BORDER)
+        self.perf_figure.tight_layout()
+        self.perf_canvas.draw()
+
+    def _refresh_wl_combo(self):
+        from core.discovery import get_watchlists
+        self.wl_select.clear()
+        for name in get_watchlists():
+            self.wl_select.addItem(name)
+
+    def _refresh_watchlist(self):
+        from core.discovery import get_watchlists
+        name = self.wl_select.currentText()
+        wls = get_watchlists()
+        tickers = wls.get(name, [])
+        self.wl_table.setRowCount(len(tickers))
+        for i, t in enumerate(tickers):
+            self.wl_table.setItem(i, 0, QTableWidgetItem(t))
+            # Try to get price
+            try:
+                price = yf.Ticker(t).fast_info.last_price
+                self.wl_table.setItem(i, 1, QTableWidgetItem(f"${price:.2f}"))
+            except Exception:
+                self.wl_table.setItem(i, 1, QTableWidgetItem("--"))
+            # Remove button
+            rm_btn = QPushButton("Remove")
+            rm_btn.setStyleSheet(f"font-size: 9px; padding: 2px; background-color: {BG_INPUT};")
+            rm_btn.clicked.connect(lambda _, tk=t: self._remove_from_watchlist(tk))
+            self.wl_table.setCellWidget(i, 2, rm_btn)
+
+    def _add_to_watchlist(self, ticker):
+        from core.discovery import get_watchlists, save_watchlist
+        ticker = ticker.strip().upper()
+        if not ticker:
+            return
+        name = self.wl_select.currentText() or "My Watchlist"
+        wls = get_watchlists()
+        tickers = wls.get(name, [])
+        if ticker not in tickers:
+            tickers.append(ticker)
+            save_watchlist(name, tickers)
+            self._refresh_watchlist()
+            self.bus.log_entry.emit(f"Added {ticker} to {name}", "info")
+        self._wl_add_input.clear()
+
+    def _remove_from_watchlist(self, ticker):
+        from core.discovery import get_watchlists, save_watchlist
+        name = self.wl_select.currentText()
+        wls = get_watchlists()
+        tickers = wls.get(name, [])
+        if ticker in tickers:
+            tickers.remove(ticker)
+            save_watchlist(name, tickers)
+            self._refresh_watchlist()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PANEL: SETTINGS
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -2113,6 +2447,7 @@ class StockySuite(QMainWindow):
         panels = [
             ("Dashboard",   "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
             ("Scanner",     "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Portfolio",   "wallet",    lambda: PortfolioPanel(self.broker, self.event_bus)),
             ("Day Trade",   "bolt",      lambda: DayTradePanel(self.broker, self.risk_manager, self.event_bus)),
             ("Long Trade",  "chart_up",  lambda: LongTradePanel(self.event_bus)),
             ("Logs",        "log",       lambda: LogsPanel(self.event_bus)),
@@ -2192,9 +2527,9 @@ class StockySuite(QMainWindow):
             # Qt high DPI scaling is active — ratio > 1 means it's already scaling
             # Just add a slight comfort bump
             if ratio >= 1.5:
-                return 1.0   # Qt already scaled 1.5x — don't double-scale
+                return 0.95  # Qt already scaled 1.5x — slight reduction for chart room
             elif ratio > 1.0:
-                return 1.05
+                return 1.0
             else:
                 w = screen.geometry().width()
                 if w >= 2560:
@@ -2336,9 +2671,9 @@ def boot_app():
 
     view_menu = suite.menuBar().addMenu("View")
     for i, (name, icon_key) in enumerate([
-        ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Day Trade", "bolt"),
-        ("Long Trade", "chart_up"), ("Logs", "log"), ("Tax Reports", "tax"),
-        ("Testing", "test"), ("Settings", "settings"),
+        ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Portfolio", "wallet"),
+        ("Day Trade", "bolt"), ("Long Trade", "chart_up"), ("Logs", "log"),
+        ("Tax Reports", "tax"), ("Testing", "test"), ("Settings", "settings"),
     ]):
         action = QAction(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY), name, suite)
         idx = i
@@ -2376,7 +2711,7 @@ def boot_app():
         wizard.setStyleSheet(get_stylesheet("auto"))
         wizard.exec_()
         suite.broker = suite._init_broker()
-        for attr in ("dashboard", "scanner", "day_trade", "tax_reports", "testing"):
+        for attr in ("dashboard", "scanner", "portfolio", "day_trade", "tax_reports", "testing"):
             p = getattr(suite, attr, None)
             if p and hasattr(p, "broker"):
                 p.broker = suite.broker
