@@ -309,10 +309,18 @@ class DashboardPanel(QWidget):
             ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
             ax.tick_params(colors=cc["muted"], labelsize=7)
             ax.grid(True, alpha=0.15, color=cc["grid"])
-            ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%m/%d %H:%M"))
-            for label in ax.get_xticklabels():
-                label.set_rotation(30)
-                label.set_ha("right")
+
+            # X-axis: use simple string labels instead of matplotlib date handling
+            # (matplotlib date formatting breaks with timezone-naive datetime objects)
+            n = len(ts)
+            if n > 8:
+                step = max(1, n // 6)
+                tick_idx = list(range(0, n, step))
+            else:
+                tick_idx = list(range(n))
+            ax.set_xticks([ts[i] for i in tick_idx])
+            ax.set_xticklabels([ts[i].strftime("%m/%d %H:%M") for i in tick_idx],
+                               rotation=30, ha="right", fontsize=7)
 
             # Format y-axis as dollars
             ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
