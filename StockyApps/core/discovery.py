@@ -209,6 +209,71 @@ def get_high_volume(min_volume=5_000_000, limit=20):
     return tickers
 
 
+def _get_penny_stocks(limit=25):
+    """
+    Fetch penny stocks (under $5) from multiple sources.
+    Tries Yahoo screener, then falls back to WSB-popular + curated list.
+    """
+    cached = _cached("penny_stocks")
+    if cached:
+        return cached
+
+    tickers = []
+
+    # Try Yahoo small cap screener
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+        params = {"scrIds": "small_cap_gainers", "count": 30}
+        r = requests.get(url, params=params,
+                         headers={"User-Agent": "Mozilla/5.0 StockyAiTrader/5.0"}, timeout=10)
+        if r.status_code == 200:
+            quotes = r.json().get("finance", {}).get("result", [{}])[0].get("quotes", [])
+            for q in quotes:
+                price = q.get("regularMarketPrice", 999)
+                sym = q.get("symbol", "")
+                if sym and "." not in sym and price < 5:
+                    tickers.append(sym)
+    except Exception:
+        pass
+
+    # WSB-popular penny stocks + known active pennies
+    wsb_pennies = [
+        "SNDL", "CLOV", "WISH", "BB", "NOK", "PLTR", "SOFI",
+        "TELL", "GSAT", "ASTS", "DNA", "IONQ", "OPEN", "SKLZ",
+        "MNMD", "SIRI", "PLUG", "SNAP", "VALE", "NU",
+        "GRAB", "RKLB", "JOBY", "AFRM", "HOOD",
+    ]
+    for t in wsb_pennies:
+        if t not in tickers:
+            tickers.append(t)
+
+    # Filter to only those actually under $10 (generous for "penny-adjacent")
+    verified = []
+    def check(t):
+        try:
+            h = yf.Ticker(t).history(period="1d")
+            if not h.empty and float(h["Close"].iloc[-1]) < 10:
+                return t
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for result in ex.map(check, tickers[:30]):
+            if result:
+                verified.append(result)
+
+    if verified:
+        _set_cache("penny_stocks", verified[:limit])
+        return verified[:limit]
+
+    # Final fallback
+    fallback = ["SNDL", "CLOV", "WISH", "NOK", "GSAT", "TELL", "DNA", "IONQ", "OPEN", "MNMD",
+                "PLUG", "SNAP", "VALE", "NU", "GRAB", "RKLB"]
+    _set_cache("penny_stocks", fallback)
+    return fallback
+
+
 def _fetch_sector_map():
     """
     Dynamically build sector → tickers map from the S&P 500 universe.
@@ -259,6 +324,15 @@ def _fetch_sector_map():
     sector_map["ETFs"] = ["SPY", "QQQ", "IWM", "DIA", "VTI", "ARKK", "XLF", "XLE", "XLK", "XLV", "XLI", "XLC", "XLY", "XLP", "XLRE"]
     sector_map["Meme / Retail"] = ["GME", "AMC", "SOFI", "PLTR", "RIVN", "NIO", "LCID", "CLOV", "BB", "HOOD", "COIN", "MARA", "RIOT"]
     sector_map["Crypto-Related"] = ["COIN", "MARA", "RIOT", "MSTR", "BITF", "HUT", "CLSK", "SQ", "PYPL", "HOOD"]
+    sector_map["Defense & Aerospace"] = ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "TXT", "LDOS", "BWXT", "KTOS", "PLTR", "AVAV", "SPR", "TDG", "HEI", "AXON"]
+    sector_map["Semiconductors"] = ["NVDA", "AMD", "AVGO", "QCOM", "TXN", "INTC", "MU", "MRVL", "LRCX", "AMAT", "KLAC", "ON", "SWKS", "MCHP", "ADI", "ASML", "TSM"]
+    sector_map["AI & Cloud"] = ["NVDA", "MSFT", "GOOGL", "AMZN", "META", "CRM", "SNOW", "PLTR", "AI", "PATH", "DDOG", "MDB", "NET", "CRWD", "ZS", "PANW"]
+    sector_map["Cannabis"] = ["TLRY", "CGC", "ACB", "SNDL", "CRON", "OGI", "HEXO", "VFF", "GRWG", "IIPR"]
+    sector_map["EV & Clean Energy"] = ["TSLA", "RIVN", "LCID", "NIO", "XPEV", "LI", "FSR", "ENPH", "SEDG", "FSLR", "RUN", "PLUG", "BE", "CHPT", "BLNK"]
+    sector_map["Biotech"] = ["MRNA", "BNTX", "REGN", "VRTX", "BIIB", "GILD", "SGEN", "ALNY", "BMRN", "EXEL", "IONS", "NBIX", "PCVX", "SRPT", "RARE"]
+    sector_map["REITs"] = ["O", "AMT", "PLD", "CCI", "EQIX", "SPG", "DLR", "WELL", "AVB", "EQR", "VTR", "ARE", "MAA", "UDR", "ESS"]
+    sector_map["Banks"] = ["JPM", "BAC", "WFC", "C", "GS", "MS", "USB", "PNC", "TFC", "SCHW", "BK", "STT", "FITB", "KEY", "CFG"]
+    sector_map["Penny Stocks (Popular)"] = _get_penny_stocks()
 
     _set_cache("sector_map", sector_map)
     return sector_map

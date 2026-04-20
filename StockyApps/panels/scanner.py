@@ -573,6 +573,60 @@ class ScannerPanel(QWidget):
                 lines.append(f'<span style="color:{TEXT_SECONDARY};font-size:10px">{short}</span>')
             lines.append("")
 
+        # ── Your Position + Pending Orders ──
+        if self.broker:
+            try:
+                positions = self.broker.get_positions()
+                orders = self.broker.get_orders("open")
+                pos_qty = 0
+                pos_pnl = 0.0
+                if isinstance(positions, list):
+                    for p in positions:
+                        if p.get("symbol", "").upper() == r.ticker.upper():
+                            pos_qty = int(float(p.get("qty", 0)))
+                            pos_pnl = float(p.get("unrealized_pl", 0))
+                            break
+
+                pending = []
+                if isinstance(orders, list):
+                    for o in orders:
+                        if o.get("symbol", "").upper() == r.ticker.upper():
+                            side = o.get("side", "")
+                            oqty = o.get("qty", "0")
+                            otype = o.get("type", "market")
+                            status = o.get("status", "")
+                            price_s = ""
+                            if otype == "limit" and o.get("limit_price"):
+                                price_s = f" @ ${float(o['limit_price']):.2f}"
+                            pending.append(f"{side.upper()} {oqty}{price_s} [{status}]")
+
+                if pos_qty > 0 or pending:
+                    lines.append(f'<b style="color:{BRAND_ACCENT}">Your Position</b>')
+                    if pos_qty > 0:
+                        pnl_color = COLOR_PROFIT if pos_pnl >= 0 else COLOR_LOSS
+                        lines.append(f'  Holding: {pos_qty} shares  |  <span style="color:{pnl_color}">P&L: ${pos_pnl:+,.2f}</span>')
+                    if pending:
+                        for p in pending:
+                            lines.append(f'  Pending: {p}')
+                    lines.append("")
+            except Exception:
+                pass
+
+        # ── LLM Analysis ──
+        try:
+            from core.llm_reasoner import generate_reasoning
+            llm_text = generate_reasoning(
+                r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
+                feature_importances=r.feature_importances,
+            )
+            if llm_text:
+                lines.append(f'<b style="color:{BRAND_ACCENT}">AI Analysis</b>')
+                for part in llm_text.split(" | "):
+                    lines.append(f'  {part}')
+                lines.append("")
+        except Exception:
+            pass
+
         # ── Signal Overview ──
         lines.append(f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence, score {r.score:.3f})')
         lines.append(f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)')

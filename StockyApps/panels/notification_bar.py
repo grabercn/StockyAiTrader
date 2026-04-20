@@ -100,14 +100,16 @@ class _NotificationBar(QWidget):
     def set_click_url(self, url):
         """Set a URL that opens when the message area is clicked."""
         self._click_url = url
-        # setCursor must run on main thread — use QTimer
-        QTimer.singleShot(0, lambda: self.setCursor(Qt.PointingHandCursor if url else Qt.ArrowCursor))
-        QTimer.singleShot(0, self.update)
+        self.setCursor(Qt.PointingHandCursor if url else Qt.ArrowCursor)
+        self.update()
 
-    def show_message(self, msg, level="info"):
+    def show_message(self, msg, level="info", click_url=None):
         from core.ui.icons import StockyIcons
-        # Only clear click_url if this isn't an update message
-        if "click to download" not in msg:
+        # Set click URL if provided, otherwise clear unless this is an update message
+        if click_url:
+            self._click_url = click_url
+            self.setCursor(Qt.PointingHandCursor)
+        elif "click to download" not in msg:
             self._click_url = None
             self.setCursor(Qt.ArrowCursor)
         icon_map = {

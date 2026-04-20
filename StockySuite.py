@@ -188,13 +188,8 @@ class StockySuite(QMainWindow):
                 if has_update:
                     url = download_url or release_url
                     self._update_url = url
-                    self.event_bus.log_entry.emit(
-                        f"Update available: v{APP_VERSION} → v{latest} — click to download",
-                        "warn",
-                    )
-                    # Make the notification bar clickable — schedule on main thread
-                    if hasattr(self, '_notif_bar'):
-                        QTimer.singleShot(500, lambda u=url: self._notif_bar.set_click_url(u))
+                    # Show message and set click URL atomically via main thread
+                    QTimer.singleShot(0, lambda: self._show_update_notification(latest, url))
                     log_event("update", f"New version v{latest} available at {url}")
 
                     # Also send a toast notification with the link
@@ -207,6 +202,16 @@ class StockySuite(QMainWindow):
             except Exception:
                 pass
         threading.Thread(target=_check, daemon=True).start()
+
+    def _show_update_notification(self, latest, url):
+        """Show update notification on main thread with clickable URL."""
+        if hasattr(self, '_notif_bar'):
+            self._notif_bar.show_message(
+                f"Update available: v{APP_VERSION} → v{latest} — click to download",
+                "warn",
+                click_url=url,
+            )
+        log_event("update", f"New version v{latest} available at {url}")
 
     def _check_profile_warnings(self):
         """Warn user if their profiles have issues."""
