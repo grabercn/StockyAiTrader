@@ -56,7 +56,7 @@ class ScanWorker(QThread):
                 detail = result.action if result else "..."
             self.progress.emit(done, total, ticker, detail)
         results = scan_multiple(self.tickers, self.period, self.interval,
-                                self.risk_manager, max_workers=3, progress_callback=cb,
+                                self.risk_manager, max_workers=5, progress_callback=cb,
                                 auto_settings=self.auto_settings)
         self.finished.emit(results)
 

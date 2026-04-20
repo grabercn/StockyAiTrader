@@ -83,32 +83,43 @@ def auto_determine_settings(ticker):
 
     Returns: (period, interval, reason_str)
     """
+    # Use cached data from previous scans if available
+    cached_key = f"auto_{ticker}"
+    import time as _time
+    if cached_key in _auto_cache and _time.time() - _auto_cache[cached_key][1] < 300:
+        return _auto_cache[cached_key][0]
+
     try:
         import yfinance as yf
-        data = yf.Ticker(ticker).history(period="2d", interval="15m")
-        if data.empty or len(data) < 10:
-            return "5d", "5m", "default (not enough pre-check data)"
+        # Use a minimal fetch — just 1 day of daily data for quick vol check
+        data = yf.Ticker(ticker).history(period="5d", interval="1d")
+        if data.empty or len(data) < 2:
+            return "5d", "5m", "default"
 
         price = data["Close"].iloc[-1]
-        # Simple ATR proxy: average of high-low range
         avg_range = (data["High"] - data["Low"]).mean()
         atr_pct = avg_range / price if price > 0 else 0.01
         avg_volume = data["Volume"].mean()
 
-        high_vol = atr_pct > 0.015   # >1.5% average bar range
-        high_volume = avg_volume > 500000  # >500k shares per 15min bar
+        high_vol = atr_pct > 0.025
+        high_volume = avg_volume > 5_000_000
 
         if high_vol and high_volume:
-            return "2d", "1m", f"volatile+liquid (ATR {atr_pct:.1%}, vol {avg_volume/1e6:.1f}M)"
-        elif high_vol and not high_volume:
-            return "3d", "5m", f"volatile+thin (ATR {atr_pct:.1%}, vol {avg_volume/1e3:.0f}K)"
-        elif not high_vol and high_volume:
-            return "5d", "5m", f"calm+liquid (ATR {atr_pct:.1%}, vol {avg_volume/1e6:.1f}M)"
+            result = ("2d", "1m", f"volatile+liquid (ATR {atr_pct:.1%})")
+        elif high_vol:
+            result = ("3d", "5m", f"volatile (ATR {atr_pct:.1%})")
+        elif high_volume:
+            result = ("5d", "5m", f"liquid (vol {avg_volume/1e6:.1f}M)")
         else:
-            return "5d", "15m", f"calm+thin (ATR {atr_pct:.1%}, vol {avg_volume/1e3:.0f}K)"
+            result = ("5d", "15m", f"calm+thin")
+
+        _auto_cache[cached_key] = (result, _time.time())
+        return result
 
     except Exception:
-        return "5d", "5m", "default (pre-check failed)"
+        return "5d", "5m", "default"
+
+_auto_cache = {}  # {ticker: ((period, interval, reason), timestamp)}
 
 
 def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_settings=False):
