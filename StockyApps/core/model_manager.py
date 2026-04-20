@@ -53,6 +53,13 @@ MANAGED_MODELS = [
         size_estimate="~500 MB",
         required=False,
     ),
+    ModelInfo(
+        name="DistilGPT2",
+        description="Trade reasoning LLM (Default+ profiles)",
+        hf_repo="distilgpt2",
+        size_estimate="~340 MB",
+        required=True,
+    ),
 ]
 
 

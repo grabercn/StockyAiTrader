@@ -111,10 +111,17 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None):
                 if idx < len(feat_names):
                     importances[feat_names[idx]] = float(imp[idx])
 
-        # Generate reasoning string
-        reasoning = _generate_reasoning(
-            ticker, last_action, last_conf, last_price, atr, last_probs, importances, data
-        )
+        # Generate reasoning — use LLM if available, fallback to template
+        try:
+            from .llm_reasoner import generate_reasoning as llm_reason
+            reasoning = llm_reason(
+                ticker, last_action, last_conf, last_price, atr, last_probs,
+                feature_importances=importances,
+            )
+        except Exception:
+            reasoning = _generate_reasoning(
+                ticker, last_action, last_conf, last_price, atr, last_probs, importances, data
+            )
 
         # Composite score for ranking (higher = better opportunity)
         # Weights: confidence matters most, BUY/SELL bonus, volume factor

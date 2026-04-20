@@ -792,12 +792,34 @@ class ScannerPanel(QWidget):
         buys = sum(1 for r in results if r.action == "BUY")
         sells = sum(1 for r in results if r.action == "SELL")
         errors = sum(1 for r in results if r.error)
+        holds = len(results) - buys - sells - errors
         self.summary.setText(
-            f"{buys} BUY  |  {sells} SELL  |  {len(results)-buys-sells-errors} HOLD"
-            f"  |  {errors} errors  |  {elapsed:.1f}s"
+            f"{buys} BUY  |  {sells} SELL  |  {holds} HOLD  |  {errors} failed  |  {elapsed:.1f}s"
         )
+
+        # Log why stocks failed so user knows
+        if errors > 0:
+            failed = [r for r in results if r.error]
+            reasons = {}
+            for r in failed:
+                reason = r.error or "Unknown"
+                if "Not enough data" in reason or "not enough" in reason.lower():
+                    reasons["Not enough data"] = reasons.get("Not enough data", 0) + 1
+                elif "training" in reason.lower():
+                    reasons["Model training failed"] = reasons.get("Model training failed", 0) + 1
+                else:
+                    reasons[reason[:40]] = reasons.get(reason[:40], 0) + 1
+
+            reason_str = ", ".join(f"{v}x {k}" for k, v in reasons.items())
+            self.bus.log_entry.emit(
+                f"{errors}/{len(results)} stocks failed: {reason_str}. "
+                f"Try a longer training period (5d) or different bar size.",
+                "warn",
+            )
+            self.progress.add_log(f"<b style='color:{COLOR_HOLD}'>{errors} failed:</b> {reason_str}")
+
         self.bus.scan_completed.emit([{"ticker": r.ticker, "action": r.action} for r in results])
-        self.bus.log_entry.emit(f"Scan done: {buys} BUY, {sells} SELL in {elapsed:.1f}s", "trade")
+        self.bus.log_entry.emit(f"Scan done: {buys} BUY, {sells} SELL, {errors} failed in {elapsed:.1f}s", "trade")
 
     # ── Detail Panel ──────────────────────────────────────────────────────
 
@@ -3094,6 +3116,36 @@ class StockySuite(QMainWindow):
         )
 
         log_event("startup", f"{APP_NAME} v{APP_VERSION} launched")
+
+        # Warn if addons are disabled by profile
+        QTimer.singleShot(2000, self._check_profile_warnings)
+
+    def _check_profile_warnings(self):
+        """Warn user if their hardware profile limits addon coverage."""
+        try:
+            from addons import get_all_addons
+            all_addons = get_all_addons()
+            active = [a for a in all_addons if a.available and a.enabled]
+            inactive = [a for a in all_addons if a.available and not a.enabled]
+            unavailable = [a for a in all_addons if not a.available]
+
+            if inactive:
+                names = ", ".join(a.name for a in inactive[:3])
+                extra = f" +{len(inactive)-3} more" if len(inactive) > 3 else ""
+                self.event_bus.log_entry.emit(
+                    f"{len(inactive)} addons disabled by profile ({names}{extra}) — "
+                    f"check Settings > Hardware Profile for full accuracy",
+                    "warn",
+                )
+            if unavailable:
+                names = ", ".join(a.name for a in unavailable[:2])
+                self.event_bus.log_entry.emit(
+                    f"{len(unavailable)} addons need dependencies ({names}) — "
+                    f"install via Settings > Addons",
+                    "system",
+                )
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         """Minimize to tray instead of quitting."""

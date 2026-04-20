@@ -72,26 +72,51 @@ class RiskManager:
 
         return True, "OK"
 
-    def position_size(self, price, atr):
+    def position_size(self, price, atr, buying_power=None, existing_positions=0,
+                       confidence=0.5, aggressivity_mult=1.0):
         """
-        Calculate how many shares to buy based on ATR volatility.
+        Smart position sizing based on ATR, buying power, confidence, and portfolio state.
 
-        Logic: risk_amount / stop_distance = shares
-        This means wider stops (volatile stocks) → fewer shares,
-        and tighter stops (calm stocks) → more shares.
+        Factors in:
+        - ATR volatility (core: wider stops → fewer shares)
+        - Available buying power (never exceed what you can afford)
+        - Confidence (higher confidence → allow slightly larger position)
+        - Existing positions (more positions → smaller each to diversify)
+        - Aggressivity multiplier (from profile: Chill=0.5x, YOLO=2x)
+        - 10% portfolio cap per position
 
-        Also capped at 10% of portfolio per position to prevent concentration.
+        Returns number of shares (0 if conditions aren't met).
         """
         if atr <= 0 or price <= 0:
             return 0
 
+        # Base: ATR-based sizing
         risk_amount = self.portfolio_value * self.max_risk_per_trade
         stop_distance = atr * self.atr_stop_mult
         shares = int(risk_amount / stop_distance)
 
-        # Never put more than 10% of portfolio in one position
+        # Portfolio concentration cap (10% per position)
         max_shares = int((self.portfolio_value * 0.10) / price)
-        return min(shares, max_shares)
+        shares = min(shares, max_shares)
+
+        # Buying power cap (can't buy more than you can afford)
+        if buying_power is not None and buying_power > 0:
+            affordable = int(buying_power * 0.25 / price)  # Use max 25% of buying power per trade
+            shares = min(shares, affordable)
+
+        # Confidence scaling: high confidence = up to 1.3x, low = down to 0.7x
+        conf_mult = 0.7 + (confidence * 0.6)  # 0% → 0.7x, 100% → 1.3x
+        shares = int(shares * conf_mult)
+
+        # Diversification: reduce size when already holding many positions
+        if existing_positions >= 3:
+            diversity_mult = max(0.5, 1.0 - (existing_positions - 2) * 0.1)
+            shares = int(shares * diversity_mult)
+
+        # Aggressivity profile multiplier
+        shares = max(1, int(shares * aggressivity_mult))
+
+        return shares
 
     def stop_loss(self, price, atr, side="buy"):
         """Calculate stop-loss price based on ATR distance."""
