@@ -1,52 +1,37 @@
 """
 System Tray Agent — keeps the app running in the background when window is closed.
 
-When the user clicks X on the main window, the app minimizes to the system tray
-instead of quitting. The auto-trader service continues running in the background.
-
 Features:
-- Tray icon with context menu (Show, Quit)
-- Tray icon tooltip shows active monitoring count
+- Tray icon with context menu showing live stock monitoring status
+- Each monitored stock shows: ticker, signal, next check countdown
+- Animated tooltip cycles through monitored stocks when tasks are running
 - Windows toast notifications on trade events
 - Double-click tray icon to restore window
-
-Notification sync note:
-    Toast notifications use winotify (Windows 10/11 native toasts).
-    These are the same notifications that appear in Windows Action Center.
-    Future: could add sound, grouping, and action buttons.
 """
 
 import os
 from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QApplication
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 ICON_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "icon.ico")
 
 
 class TrayAgent:
-    """
-    System tray integration for StockySuite.
-
-    Usage:
-        tray = TrayAgent(main_window)
-        tray.setup()
-        # Now closing the window minimizes to tray instead of quitting
-    """
-
     def __init__(self, main_window):
         self.window = main_window
         self.tray = None
         self._notifications_enabled = True
+        self._monitored = {}  # {ticker: {signal, next_secs, ...}}
+        self._tooltip_cycle = 0
+        self._tasks_running = False
 
     def setup(self):
-        """Initialize the system tray icon and menu."""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return False
 
         self.tray = QSystemTrayIcon(self.window)
 
-        # Set icon
         if os.path.exists(ICON_FILE):
             self.tray.setIcon(QIcon(ICON_FILE))
         else:
@@ -54,55 +39,132 @@ class TrayAgent:
 
         self.tray.setToolTip("Stocky Suite — AI Trading")
 
-        # Context menu
-        menu = QMenu()
+        # Build context menu
+        self._menu = QMenu()
+        self._rebuild_menu()
 
-        show_action = QAction("Show Stocky Suite", self.window)
-        show_action.triggered.connect(self._show_window)
-        menu.addAction(show_action)
-
-        menu.addSeparator()
-
-        # Show monitoring status
-        self._status_action = QAction("No stocks monitored", self.window)
-        self._status_action.setEnabled(False)
-        menu.addAction(self._status_action)
-
-        menu.addSeparator()
-
-        quit_action = QAction("Quit", self.window)
-        quit_action.triggered.connect(self._quit)
-        menu.addAction(quit_action)
-
-        self.tray.setContextMenu(menu)
+        self.tray.setContextMenu(self._menu)
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
 
+        # Tooltip animation timer — cycles through stocks every 3 seconds
+        self._tooltip_timer = QTimer()
+        self._tooltip_timer.timeout.connect(self._animate_tooltip)
+        self._tooltip_timer.start(3000)
+
         return True
 
+    def _rebuild_menu(self):
+        """Rebuild context menu with current monitoring state."""
+        self._menu.clear()
+
+        show_action = QAction("Show Stocky Suite", self.window)
+        show_action.triggered.connect(self._show_window)
+        self._menu.addAction(show_action)
+
+        self._menu.addSeparator()
+
+        # Monitoring header
+        count = len(self._monitored)
+        if count > 0:
+            header = QAction(f"Monitoring {count} stocks", self.window)
+            header.setEnabled(False)
+            self._menu.addAction(header)
+
+            self._menu.addSeparator()
+
+            # Each stock as a menu item with signal + countdown
+            for ticker, info in self._monitored.items():
+                signal = info.get("signal", "HOLD")
+                next_secs = info.get("next_secs", 0)
+                price = info.get("price", 0)
+
+                mins = next_secs // 60
+                secs = next_secs % 60
+
+                icon_map = {"BUY": "^", "SELL": "v", "HOLD": "-"}
+                marker = icon_map.get(signal, "?")
+
+                if price > 0:
+                    label = f"  {marker} {ticker}  {signal}  ${price:.2f}  (next: {mins}m {secs}s)"
+                else:
+                    label = f"  {marker} {ticker}  {signal}  (next: {mins}m {secs}s)"
+
+                action = QAction(label, self.window)
+                action.setEnabled(False)
+                self._menu.addAction(action)
+        else:
+            idle = QAction("No stocks monitored", self.window)
+            idle.setEnabled(False)
+            self._menu.addAction(idle)
+
+        self._menu.addSeparator()
+
+        quit_action = QAction("Quit", self.window)
+        quit_action.triggered.connect(self._quit)
+        self._menu.addAction(quit_action)
+
+    def update_stock(self, ticker, signal, confidence, price, next_secs):
+        """Update a monitored stock's live status."""
+        self._monitored[ticker] = {
+            "signal": signal,
+            "confidence": confidence,
+            "price": price,
+            "next_secs": next_secs,
+        }
+        self._tasks_running = True
+        self._rebuild_menu()
+
+    def remove_stock(self, ticker):
+        self._monitored.pop(ticker, None)
+        if not self._monitored:
+            self._tasks_running = False
+        self._rebuild_menu()
+
     def update_status(self, monitored_count):
-        """Update the tray tooltip and menu with monitoring status."""
         if not self.tray:
             return
-
         if monitored_count > 0:
-            self.tray.setToolTip(f"Stocky Suite — Monitoring {monitored_count} stocks")
-            self._status_action.setText(f"Monitoring {monitored_count} stocks")
+            self._tasks_running = True
         else:
+            self._tasks_running = False
             self.tray.setToolTip("Stocky Suite — Idle")
-            self._status_action.setText("No stocks monitored")
+
+    def _animate_tooltip(self):
+        """Cycle tooltip through monitored stocks when tasks are running."""
+        if not self.tray or not self._monitored:
+            if self.tray:
+                self.tray.setToolTip("Stocky Suite — Idle")
+            return
+
+        tickers = list(self._monitored.keys())
+        if not tickers:
+            return
+
+        self._tooltip_cycle = (self._tooltip_cycle + 1) % len(tickers)
+        ticker = tickers[self._tooltip_cycle]
+        info = self._monitored[ticker]
+
+        signal = info.get("signal", "?")
+        price = info.get("price", 0)
+        next_secs = info.get("next_secs", 0)
+        conf = info.get("confidence", 0)
+        mins = next_secs // 60
+        secs = next_secs % 60
+
+        # Animated dots that cycle
+        dots = "." * ((self._tooltip_cycle % 3) + 1)
+
+        self.tray.setToolTip(
+            f"Stocky Suite — Monitoring {len(tickers)} stocks{dots}\n"
+            f"{ticker}: {signal} ({conf:.0%}) @ ${price:.2f}\n"
+            f"Next check: {mins}m {secs}s"
+        )
 
     def send_notification(self, title, message, level="info"):
-        """
-        Send a Windows toast notification.
-        Also shows as a tray balloon if winotify isn't available.
-
-        Levels: info, trade, warn, error
-        """
         if not self._notifications_enabled:
             return
 
-        # Try winotify first (native Windows 10/11 toast)
         try:
             from winotify import Notification, audio
             toast = Notification(
@@ -111,14 +173,14 @@ class TrayAgent:
                 msg=message,
                 duration="short",
             )
-            if os.path.exists(ICON_FILE.replace(".ico", ".png")):
+            icon_png = ICON_FILE.replace(".ico", ".png")
+            if os.path.exists(icon_png):
                 toast.set_audio(audio.Default, loop=False)
             toast.show()
             return
         except ImportError:
             pass
 
-        # Fallback: Qt tray balloon
         if self.tray:
             icon_map = {
                 "info": QSystemTrayIcon.Information,
@@ -135,7 +197,6 @@ class TrayAgent:
         self.window.setWindowState(self.window.windowState() & ~Qt.WindowMinimized)
 
     def _quit(self):
-        """Actually quit the application."""
         self.tray.hide()
         QApplication.quit()
 

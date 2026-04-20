@@ -167,6 +167,11 @@ class StockySuite(QMainWindow):
             )
         )
 
+        # Forward signal updates to tray for live monitoring display
+        self.event_bus.signal_generated.connect(
+            lambda t, a, d: self._tray.update_stock(t, a, d.get("conf", 0), d.get("price", 0), 0)
+        )
+
         log_event("startup", f"{APP_NAME} v{APP_VERSION} launched")
 
         # Warn if addons are disabled by profile
