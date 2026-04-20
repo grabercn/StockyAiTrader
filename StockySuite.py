@@ -42,7 +42,8 @@ from core.branding import get_stylesheet, detect_system_theme
 from core.event_bus import EventBus
 from core.risk import RiskManager
 from core.broker import AlpacaBroker
-from core.scanner import scan_multiple, DEFAULT_TICKERS, TECH_TICKERS, ETF_TICKERS, ScanResult
+import yfinance as yf
+from core.scanner import scan_multiple, ScanResult
 from core.data import fetch_intraday, fetch_longterm, get_all_features
 from core.model import train_lgbm, predict_lgbm
 from core.labeling import LABEL_NAMES
@@ -315,7 +316,7 @@ class DashboardPanel(QWidget):
 # ═════════════════════════════════════════════════════════════════════════════
 
 class ScannerPanel(QWidget):
-    """Multi-stock scanner with ranked recommendations and auto-invest."""
+    """Dynamic multi-stock scanner with live discovery, detail panel, and auto-invest."""
 
     def __init__(self, broker, risk_manager, event_bus):
         super().__init__()
@@ -328,47 +329,85 @@ class ScannerPanel(QWidget):
 
     def _build(self):
         from core.ui.backgrounds import GradientHeader
+        from core.widgets import DetailedProgressBar
+        from core.discovery import get_all_sectors
+
+        outer = QVBoxLayout()
+        outer.setSpacing(8)
+        outer.setContentsMargins(8, 6, 8, 6)
+
+        header = GradientHeader("Scanner", "Live market discovery + AI-ranked opportunities", height=60)
+        outer.addWidget(header)
+
+        # ── Splitter: left (controls+results) / right (detail panel) ──
+        splitter = QSplitter(Qt.Horizontal)
+
+        # ── LEFT: Controls + Results ──
+        left = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        header = GradientHeader("Scanner", "Multi-stock AI analysis with auto-invest", height=65)
-        layout.addWidget(header)
+        # Source selector row
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("Source:"))
+        self.source_cb = QComboBox()
+        self.source_cb.addItems([
+            "Custom Tickers",
+            "Most Active Today",
+            "Day Gainers",
+            "Day Losers",
+            "Trending (Social)",
+            "High Volume",
+        ])
+        # Add sectors
+        for sector in get_all_sectors():
+            self.source_cb.addItem(f"Sector: {sector}")
+        # Add watchlists
+        self._refresh_watchlist_items()
+        self.source_cb.currentIndexChanged.connect(self._on_source_changed)
+        source_row.addWidget(self.source_cb, 1)
 
-        # Controls
-        ctrl = QGroupBox("Scan Universe")
-        cg = QGridLayout()
+        # Watchlist management
+        self.wl_name = QLineEdit()
+        self.wl_name.setPlaceholderText("Watchlist name")
+        self.wl_name.setFixedWidth(120)
+        source_row.addWidget(self.wl_name)
+        save_wl = QPushButton("Save WL")
+        save_wl.setStyleSheet(f"font-size: 10px; padding: 5px; background-color: {BG_INPUT};")
+        save_wl.clicked.connect(self._save_watchlist)
+        source_row.addWidget(save_wl)
+        layout.addLayout(source_row)
+
+        # Ticker input (shown for Custom, hidden for live sources)
         self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText("AAPL, TSLA, NVDA... or use presets")
-        cg.addWidget(self.ticker_input, 0, 0, 1, 4)
+        self.ticker_input.setPlaceholderText("Enter tickers: AAPL, TSLA, NVDA, MSFT...")
+        layout.addWidget(self.ticker_input)
 
-        for i, (name, ticks) in enumerate([("Top 24", DEFAULT_TICKERS), ("Tech", TECH_TICKERS), ("ETFs", ETF_TICKERS)]):
-            b = QPushButton(name)
-            b.setStyleSheet(f"font-size: 11px; padding: 5px; background-color: {BG_INPUT};")
-            b.clicked.connect(lambda _, t=ticks: self.ticker_input.setText(", ".join(t)))
-            cg.addWidget(b, 1, i)
-
+        # Scan settings row
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(QLabel("Period:"))
         self.period_cb = QComboBox()
         self.period_cb.addItems(["5d", "3d", "2d", "1d"])
+        settings_row.addWidget(self.period_cb)
+        settings_row.addWidget(QLabel("Interval:"))
         self.interval_cb = QComboBox()
         self.interval_cb.addItems(["5m", "1m", "15m"])
-        cg.addWidget(QLabel("Period:"), 2, 0)
-        cg.addWidget(self.period_cb, 2, 1)
-        cg.addWidget(QLabel("Interval:"), 2, 2)
-        cg.addWidget(self.interval_cb, 2, 3)
+        settings_row.addWidget(self.interval_cb)
+        settings_row.addStretch()
 
-        self.scan_btn = QPushButton("SCAN & RANK")
-        self.scan_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 15px; padding: 12px;")
+        self.scan_btn = QPushButton("  SCAN & RANK")
+        from core.ui.icons import StockyIcons
+        self.scan_btn.setIcon(StockyIcons.get_icon("scan", 18, "white"))
+        self.scan_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 13px; padding: 10px 20px;")
         self.scan_btn.clicked.connect(self._start_scan)
-        cg.addWidget(self.scan_btn, 3, 0, 1, 4)
+        settings_row.addWidget(self.scan_btn)
+        layout.addLayout(settings_row)
 
-        from core.widgets import DetailedProgressBar
+        # Progress
         self.progress = DetailedProgressBar()
         self.progress.setVisible(False)
-        cg.addWidget(self.progress, 4, 0, 1, 4)
-
-        ctrl.setLayout(cg)
-        layout.addWidget(ctrl)
+        layout.addWidget(self.progress)
 
         # Results table
         self.table = QTableWidget()
@@ -379,6 +418,8 @@ class ScannerPanel(QWidget):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.cellClicked.connect(self._on_row_clicked)
         layout.addWidget(self.table)
 
         # Actions
@@ -390,31 +431,177 @@ class ScannerPanel(QWidget):
         desel_btn.setStyleSheet(f"background-color: {BG_INPUT};")
         desel_btn.clicked.connect(self._deselect)
         arow.addWidget(desel_btn)
-        self.invest_btn = QPushButton("AUTO-INVEST SELECTED")
-        self.invest_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 14px;")
+        self.invest_btn = QPushButton("  AUTO-INVEST SELECTED")
+        self.invest_btn.setIcon(StockyIcons.get_icon("bolt", 16, "white"))
+        self.invest_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 13px;")
         self.invest_btn.clicked.connect(self._auto_invest)
         arow.addWidget(self.invest_btn)
         layout.addLayout(arow)
 
         self.summary = QLabel("")
-        self.summary.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        self.summary.setStyleSheet(f"color: {BRAND_PRIMARY}; font-size: 11px;")
         layout.addWidget(self.summary)
 
-        self.setLayout(layout)
+        left.setLayout(layout)
+        splitter.addWidget(left)
+
+        # ── RIGHT: Detail Panel (shows when a stock is clicked) ──
+        self.detail_panel = QWidget()
+        dp_layout = QVBoxLayout()
+        dp_layout.setSpacing(8)
+        dp_layout.setContentsMargins(8, 0, 0, 0)
+
+        self.detail_title = QLabel("Click a stock to view details")
+        self.detail_title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        self.detail_title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        dp_layout.addWidget(self.detail_title)
+
+        # Mini chart
+        self.detail_figure = plt.Figure(figsize=(4, 2.5), dpi=100, facecolor=BG_DARKEST)
+        self.detail_canvas = FigureCanvas(self.detail_figure)
+        self.detail_canvas.setMinimumHeight(150)
+        dp_layout.addWidget(self.detail_canvas)
+
+        # Stats grid
+        self.detail_stats = QTextEdit()
+        self.detail_stats.setReadOnly(True)
+        self.detail_stats.setFont(QFont(FONT_MONO, 10))
+        dp_layout.addWidget(self.detail_stats)
+
+        # Quick-trade buttons for selected stock
+        trade_row = QHBoxLayout()
+        self.detail_buy_btn = QPushButton("  Quick BUY")
+        self.detail_buy_btn.setIcon(StockyIcons.get_icon("arrow_up", 14, "white"))
+        self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 11px;")
+        self.detail_buy_btn.clicked.connect(lambda: self._quick_trade("buy"))
+        trade_row.addWidget(self.detail_buy_btn)
+        self.detail_sell_btn = QPushButton("  Quick SELL")
+        self.detail_sell_btn.setIcon(StockyIcons.get_icon("arrow_down", 14, "white"))
+        self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px;")
+        self.detail_sell_btn.clicked.connect(lambda: self._quick_trade("sell"))
+        trade_row.addWidget(self.detail_sell_btn)
+        self.detail_analyze_btn = QPushButton("Deep Analyze")
+        self.detail_analyze_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px;")
+        self.detail_analyze_btn.clicked.connect(self._deep_analyze)
+        trade_row.addWidget(self.detail_analyze_btn)
+        dp_layout.addLayout(trade_row)
+
+        self.detail_panel.setLayout(dp_layout)
+        splitter.addWidget(self.detail_panel)
+        splitter.setSizes([600, 300])
+
+        outer.addWidget(splitter)
+        self.setLayout(outer)
+        self._selected_result = None
+
+    # ── Source handling ────────────────────────────────────────────────────
+
+    def _on_source_changed(self, idx):
+        text = self.source_cb.currentText()
+        # Show/hide ticker input based on source
+        is_custom = text == "Custom Tickers"
+        self.ticker_input.setVisible(is_custom)
+        if not is_custom:
+            self.ticker_input.clear()
+
+    def _refresh_watchlist_items(self):
+        from core.discovery import get_watchlists
+        wls = get_watchlists()
+        # Remove old watchlist entries from combo
+        # (they're after the sectors)
+        while self.source_cb.count() > 0 and self.source_cb.itemText(self.source_cb.count()-1).startswith("Watchlist:"):
+            self.source_cb.removeItem(self.source_cb.count()-1)
+        for name in wls:
+            if wls[name]:  # Only show non-empty watchlists
+                self.source_cb.addItem(f"Watchlist: {name}")
+
+    def _save_watchlist(self):
+        from core.discovery import save_watchlist
+        name = self.wl_name.text().strip()
+        if not name:
+            self.bus.log_entry.emit("Enter a watchlist name first", "warn")
+            return
+        tickers = self._get_tickers_from_input()
+        if not tickers:
+            self.bus.log_entry.emit("No tickers to save — scan first or enter tickers", "warn")
+            return
+        save_watchlist(name, tickers)
+        self._refresh_watchlist_items()
+        self.bus.log_entry.emit(f"Watchlist '{name}' saved with {len(tickers)} tickers", "info")
+
+    def _get_tickers_from_source(self):
+        """Resolve current source selection to a list of tickers."""
+        from core.discovery import (
+            get_most_active, get_day_gainers, get_day_losers,
+            get_trending_social, get_high_volume, get_sector_tickers,
+            get_watchlists,
+        )
+
+        source = self.source_cb.currentText()
+
+        if source == "Custom Tickers":
+            return self._get_tickers_from_input()
+        elif source == "Most Active Today":
+            return get_most_active(25)
+        elif source == "Day Gainers":
+            return get_day_gainers(20)
+        elif source == "Day Losers":
+            return get_day_losers(20)
+        elif source == "Trending (Social)":
+            return get_trending_social(15)
+        elif source == "High Volume":
+            return get_high_volume(5_000_000, 20)
+        elif source.startswith("Sector: "):
+            sector = source.replace("Sector: ", "")
+            return get_sector_tickers(sector, 15)
+        elif source.startswith("Watchlist: "):
+            wl_name = source.replace("Watchlist: ", "")
+            return get_watchlists().get(wl_name, [])
+        return []
+
+    def _get_tickers_from_input(self):
+        text = self.ticker_input.text().strip()
+        if text:
+            return [t.strip().upper() for t in text.replace(";", ",").split(",") if t.strip()]
+        # If no input but we have results, use those tickers
+        if self.results:
+            return [r.ticker for r in self.results]
+        return []
+
+    # ── Scanning ──────────────────────────────────────────────────────────
 
     def _start_scan(self):
-        text = self.ticker_input.text().strip()
-        if not text:
-            return
-        tickers = [t.strip().upper() for t in text.replace(";", ",").split(",") if t.strip()]
-        if not tickers:
-            return
+        source = self.source_cb.currentText()
+
+        if source == "Custom Tickers":
+            tickers = self._get_tickers_from_input()
+            if not tickers:
+                self.bus.log_entry.emit("Enter tickers to scan or choose a live source", "warn")
+                return
+        else:
+            # Fetch from live source
+            self.progress.setVisible(True)
+            self.progress.reset()
+            self.progress.set_progress(5, f"Fetching {source}...", "Discovering tickers from live market data")
+            self.progress.add_log(f"Source: {source}")
+            QApplication.processEvents()
+
+            tickers = self._get_tickers_from_source()
+            if not tickers:
+                self.progress.set_progress(100, "No tickers found", f"Source '{source}' returned no results")
+                self.bus.log_entry.emit(f"No tickers found from {source}", "warn")
+                return
+
+            self.progress.set_progress(10, f"Found {len(tickers)} tickers", ", ".join(tickers[:8]) + ("..." if len(tickers) > 8 else ""))
+            self.progress.add_log(f"Discovered {len(tickers)} tickers: {', '.join(tickers[:10])}")
+            # Also populate the input box so user can see/edit
+            self.ticker_input.setText(", ".join(tickers))
+            self.ticker_input.setVisible(True)
 
         self.scan_btn.setEnabled(False)
         self.progress.setVisible(True)
-        self.progress.reset()
         self.bus.scan_started.emit(len(tickers))
-        self.bus.log_entry.emit(f"Scanning {len(tickers)} tickers...", "info")
+        self.bus.log_entry.emit(f"Scanning {len(tickers)} tickers from {source}...", "info")
         self._t0 = time.time()
 
         self._worker = ScanWorker(tickers, self.period_cb.currentText(),
@@ -424,7 +611,7 @@ class ScannerPanel(QWidget):
         self._worker.start()
 
     def _on_progress(self, done, total, ticker, action):
-        pct = int(done / total * 100) if total > 0 else 0
+        pct = 10 + int(done / total * 85) if total > 0 else 0
         self.progress.set_progress(pct, f"Scanning {ticker}...", f"{done}/{total} complete")
         colors = {"BUY": "#10b981", "SELL": "#ef4444"}
         self.progress.add_log(f"{ticker}: <b style='color:{colors.get(action, '#94a3b8')}'>{action}</b>")
@@ -432,18 +619,16 @@ class ScannerPanel(QWidget):
     def _on_done(self, results):
         self.results = results
         elapsed = time.time() - self._t0
-        self.progress.setVisible(False)
+        self.progress.set_progress(100, f"Scan complete — {len(results)} stocks analyzed", f"{elapsed:.1f}s")
         self.scan_btn.setEnabled(True)
         self.selected.clear()
 
-        # Log each decision
         for r in results:
             if not r.error:
                 log_decision(r.ticker, r.action, r.confidence, r.price,
                              r.position_size, r.stop_loss, r.take_profit, r.atr,
                              r.probs, feature_importances=r.feature_importances,
                              reasoning=r.reasoning)
-
         log_scan_results(len(results),
                          [{"ticker": r.ticker, "action": r.action, "score": r.score} for r in results],
                          elapsed)
@@ -461,11 +646,11 @@ class ScannerPanel(QWidget):
                 (f"{r.confidence:.0%}", None), (f"${r.price:.2f}" if r.price else "--", None),
                 (str(r.position_size) if r.position_size else "--", None),
                 (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss else "--", None),
-                (f"{r.score:.2f}", None), (r.reasoning[:100] if r.reasoning else r.error or "", None),
+                (f"{r.score:.2f}", None), (r.reasoning[:80] if r.reasoning else r.error or "", None),
             ]
             for j, (val, color) in enumerate(items):
                 it = QTableWidgetItem(val)
-                it.setFlags(Qt.ItemIsEnabled)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 if color:
                     it.setForeground(QColor(color))
                     it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
@@ -475,9 +660,114 @@ class ScannerPanel(QWidget):
 
         buys = sum(1 for r in results if r.action == "BUY")
         sells = sum(1 for r in results if r.action == "SELL")
-        self.summary.setText(f"{buys} BUY | {sells} SELL | {len(results)-buys-sells} HOLD | {elapsed:.1f}s")
+        errors = sum(1 for r in results if r.error)
+        self.summary.setText(
+            f"{buys} BUY  |  {sells} SELL  |  {len(results)-buys-sells-errors} HOLD"
+            f"  |  {errors} errors  |  {elapsed:.1f}s"
+        )
         self.bus.scan_completed.emit([{"ticker": r.ticker, "action": r.action} for r in results])
-        self.bus.log_entry.emit(f"Scan done: {buys} BUY, {sells} SELL ({elapsed:.1f}s)", "trade")
+        self.bus.log_entry.emit(f"Scan done: {buys} BUY, {sells} SELL in {elapsed:.1f}s", "trade")
+
+    # ── Detail Panel ──────────────────────────────────────────────────────
+
+    def _on_row_clicked(self, row, col):
+        if row < 0 or row >= len(self.results):
+            return
+        r = self.results[row]
+        self._selected_result = r
+        self._show_detail(r)
+
+    def _show_detail(self, r):
+        """Show detailed breakdown for a scanned stock."""
+        self.detail_title.setText(f"{r.action}  {r.ticker}  —  ${r.price:.2f}")
+        colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
+        self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
+
+        # Stats
+        lines = []
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence)')
+        lines.append(f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)')
+        lines.append(f'<b>Position:</b> {r.position_size} shares')
+        lines.append(f'<b>Stop Loss:</b> ${r.stop_loss:.2f}  |  <b>Take Profit:</b> ${r.take_profit:.2f}')
+        lines.append(f'<b>Score:</b> {r.score:.3f}')
+        lines.append("")
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Probabilities</b>')
+        lines.append(f'  <span style="color:{COLOR_SELL}">SELL: {r.probs[0]:.1%}</span>'
+                     f'  <span style="color:{COLOR_HOLD}">HOLD: {r.probs[1]:.1%}</span>'
+                     f'  <span style="color:{COLOR_BUY}">BUY: {r.probs[2]:.1%}</span>')
+
+        if r.feature_importances:
+            lines.append("")
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">Key Drivers</b>')
+            for feat, imp in sorted(r.feature_importances.items(), key=lambda x: -x[1])[:8]:
+                bar_len = int(min(imp / 100, 20))
+                bar = "█" * bar_len
+                lines.append(f'  <span style="color:{BRAND_ACCENT}">{bar}</span> {feat}: {imp:.0f}')
+
+        if r.reasoning:
+            lines.append("")
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">Reasoning</b>')
+            for part in r.reasoning.split(" | "):
+                lines.append(f'  {part}')
+
+        self.detail_stats.setHtml("<br>".join(lines))
+
+        # Chart
+        self._draw_detail_chart(r.ticker)
+
+    def _draw_detail_chart(self, ticker):
+        """Fetch and draw a quick price chart for the detail panel."""
+        self.detail_figure.clear()
+        self.detail_figure.set_facecolor(BG_DARKEST)
+        try:
+            data = yf.Ticker(ticker).history(period="1mo", interval="1d")
+            if data.empty:
+                return
+            ax = self.detail_figure.add_subplot(111)
+            ax.set_facecolor(BG_PANEL)
+            closes = data["Close"].values
+            x = range(len(closes))
+
+            # Determine color by trend
+            trending_up = closes[-1] >= closes[0]
+            color = COLOR_BUY if trending_up else COLOR_SELL
+
+            ax.plot(x, closes, color=color, linewidth=1.5)
+            ax.fill_between(x, closes, alpha=0.08, color=color)
+            ax.set_title(f"{ticker} — 1 Month", color=TEXT_SECONDARY, fontsize=10)
+            ax.tick_params(colors=TEXT_MUTED, labelsize=7)
+            ax.grid(True, alpha=0.1, color=BORDER)
+            self.detail_figure.tight_layout()
+        except Exception:
+            pass
+        self.detail_canvas.draw()
+
+    def _quick_trade(self, side):
+        if not self._selected_result:
+            self.bus.log_entry.emit("Select a stock from the scan results first", "warn")
+            return
+        if not self.broker:
+            self.bus.log_entry.emit("Alpaca API not connected — go to Settings to configure", "error")
+            return
+        r = self._selected_result
+        if r.position_size <= 0:
+            self.bus.log_entry.emit(f"Position size is 0 for {r.ticker} — risk too high", "warn")
+            return
+        result = self.broker.place_order(r.ticker, r.position_size, side,
+                                         stop_loss=r.stop_loss, take_profit=r.take_profit)
+        if "error" in result:
+            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} failed: {result['error']}", "error")
+        else:
+            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{r.position_size} — order {result.get('id','?')}", "trade")
+            self.bus.positions_changed.emit()
+
+    def _deep_analyze(self):
+        """Send ticker to Day Trade panel for deep analysis."""
+        if self._selected_result:
+            self.bus.ticker_selected.emit(self._selected_result.ticker)
+            self.bus.log_entry.emit(f"Opening {self._selected_result.ticker} in Day Trade for deep analysis", "info")
+
+    # ── Selection / Invest ────────────────────────────────────────────────
 
     def _select_signals(self):
         self.selected.clear()
@@ -507,6 +797,10 @@ class ScannerPanel(QWidget):
             return
 
         actionable = [r for r in self.results if r.ticker in self.selected and r.action in ("BUY", "SELL") and r.position_size > 0]
+        if not actionable:
+            self.bus.log_entry.emit("No actionable signals in selection — all HOLD or 0 shares", "warn")
+            return
+
         for r in actionable:
             side = "buy" if r.action == "BUY" else "sell"
             result = self.broker.place_order(r.ticker, r.position_size, side,
