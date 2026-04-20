@@ -96,8 +96,13 @@ class _NotificationBar(QWidget):
             self._bell_pulse = max(0, self._bell_pulse - 0.02)
         self.update()
 
+    def set_click_url(self, url):
+        """Set a URL that opens when the message area is clicked."""
+        self._click_url = url
+
     def show_message(self, msg, level="info"):
         from core.ui.icons import StockyIcons
+        self._click_url = None  # Clear on new message unless explicitly set
         icon_map = {
             "info":   ("check",    BRAND_PRIMARY, TEXT_SECONDARY),
             "trade":  ("bolt",     BRAND_ACCENT,  BRAND_ACCENT),
@@ -232,10 +237,14 @@ class _NotificationBar(QWidget):
         painter.end()
 
     def mousePressEvent(self, event):
-        """Click on bell area opens notification overlay."""
+        """Click bell = notification overlay. Click message = open URL if set."""
         bell_x = self.width() - 32
         if event.x() >= bell_x - 5:
             self._show_notification_overlay()
+        elif hasattr(self, '_click_url') and self._click_url:
+            import webbrowser
+            webbrowser.open(self._click_url)
+            self._click_url = None
         super().mousePressEvent(event)
 
     def _show_notification_overlay(self):

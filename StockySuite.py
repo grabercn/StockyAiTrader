@@ -187,12 +187,23 @@ class StockySuite(QMainWindow):
                 has_update, latest, download_url, release_url = check_for_update()
                 if has_update:
                     url = download_url or release_url
+                    self._update_url = url
                     self.event_bus.log_entry.emit(
-                        f"Update available: v{APP_VERSION} → v{latest}  —  "
-                        f"Download: {url}",
+                        f"Update available: v{APP_VERSION} → v{latest} — click here to download",
                         "warn",
                     )
+                    # Make the notification bar clickable to open the download
+                    if hasattr(self, '_notif_bar'):
+                        self._notif_bar.set_click_url(url)
                     log_event("update", f"New version v{latest} available at {url}")
+
+                    # Also send a toast notification with the link
+                    if hasattr(self, '_tray') and self._tray:
+                        self._tray.send_notification(
+                            f"Stocky Suite v{latest} Available",
+                            f"Current: v{APP_VERSION} → New: v{latest}\nClick to download.",
+                            "info",
+                        )
             except Exception:
                 pass
         threading.Thread(target=_check, daemon=True).start()
