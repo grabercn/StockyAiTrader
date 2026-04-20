@@ -80,7 +80,7 @@ def save_settings(settings):
 # ═════════════════════════════════════════════════════════════════════════════
 
 class ScanWorker(QThread):
-    progress = pyqtSignal(int, int, str, str)
+    progress = pyqtSignal(int, int, str, str)  # done, total, ticker, detail_str
     finished = pyqtSignal(list)
 
     def __init__(self, tickers, period, interval, risk_manager, auto_settings=False):
@@ -93,7 +93,14 @@ class ScanWorker(QThread):
 
     def run(self):
         def cb(done, total, ticker, result):
-            self.progress.emit(done, total, ticker, result.action if result else "...")
+            if result and not result.error:
+                p = getattr(result, 'period_used', '')
+                iv = getattr(result, 'interval_used', '')
+                settings = f" [{p}/{iv}]" if self.auto_settings and p else ""
+                detail = f"{result.action}{settings}"
+            else:
+                detail = result.action if result else "..."
+            self.progress.emit(done, total, ticker, detail)
         results = scan_multiple(self.tickers, self.period, self.interval,
                                 self.risk_manager, max_workers=3, progress_callback=cb,
                                 auto_settings=self.auto_settings)
@@ -821,11 +828,14 @@ class ScannerPanel(QWidget):
         self._worker.finished.connect(self._on_done)
         self._worker.start()
 
-    def _on_progress(self, done, total, ticker, action):
+    def _on_progress(self, done, total, ticker, detail):
         pct = 10 + int(done / total * 85) if total > 0 else 0
         self.progress.set_progress(pct, f"Scanning {ticker}...", f"{done}/{total} complete")
+        # detail contains "BUY [2d/1m]" or "HOLD" etc
+        action = detail.split(" ")[0] if detail else "..."
         colors = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#f59e0b"}
-        self.progress.add_log(f"{ticker}: <b style='color:{colors.get(action, '#94a3b8')}'>{action}</b>")
+        color = colors.get(action, "#94a3b8")
+        self.progress.add_log(f"{ticker}: <b style='color:{color}'>{detail}</b>")
 
     def _on_done(self, results):
         self.results = results

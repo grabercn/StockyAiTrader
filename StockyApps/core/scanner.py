@@ -122,6 +122,9 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
         # Auto-determine best settings if requested
         if auto_settings:
             period, interval, settings_reason = auto_determine_settings(ticker)
+            # Store on thread-local for progress callback to read
+            import threading
+            threading.current_thread()._auto_reason = f"{ticker}: {period}/{interval} — {settings_reason}"
         else:
             settings_reason = ""
 
