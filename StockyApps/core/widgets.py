@@ -27,13 +27,14 @@ import math
 class StatCard(QFrame):
     """
     A premium stat display card with label, value, and subtle glow.
-    Used on the Dashboard for portfolio value, buying power, etc.
+    Click to open a detail popup. Connect on_clicked to provide the popup.
     """
 
     def __init__(self, title="", value="--", accent_color="#0ea5e9", parent=None):
         super().__init__(parent)
         self._accent = QColor(accent_color)
         self._hover = False
+        self.on_clicked = None  # Set to a callable to handle clicks
         self.setMinimumHeight(70)
         self.setMaximumHeight(100)
         self.setMinimumWidth(130)
@@ -80,6 +81,11 @@ class StatCard(QFrame):
 
         painter.end()
         super().paintEvent(event)
+
+    def mousePressEvent(self, event):
+        if self.on_clicked:
+            self.on_clicked()
+        super().mousePressEvent(event)
 
     def enterEvent(self, event):
         self._hover = True

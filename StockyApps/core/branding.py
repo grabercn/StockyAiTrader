@@ -434,6 +434,39 @@ def get_stylesheet(theme="auto"):
     return LIGHT_STYLESHEET if theme == "light" else SUITE_STYLESHEET
 
 
+def chart_colors():
+    """Get theme-aware colors for matplotlib charts."""
+    t = detect_system_theme()
+    # Also check settings
+    try:
+        import json, os
+        sf = os.path.join(os.path.dirname(__file__), "..", "..", "settings.json")
+        with open(sf) as f:
+            s = json.load(f)
+        st = s.get("theme", "auto")
+        if st != "auto":
+            t = st
+    except Exception:
+        pass
+
+    if t == "light":
+        return {
+            "fig_bg": "#f8fafc",
+            "ax_bg": "#ffffff",
+            "text": "#475569",
+            "muted": "#94a3b8",
+            "grid": "#e2e8f0",
+        }
+    else:
+        return {
+            "fig_bg": BG_DARKEST,
+            "ax_bg": BG_PANEL,
+            "text": TEXT_SECONDARY,
+            "muted": TEXT_MUTED,
+            "grid": BORDER,
+        }
+
+
 def log_html(msg, level="info"):
     """Format a log message as colored HTML for QTextEdit display."""
     from datetime import datetime

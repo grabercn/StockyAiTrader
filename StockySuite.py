@@ -38,7 +38,7 @@ import pytz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "StockyApps"))
 
 from core.branding import *
-from core.branding import get_stylesheet, detect_system_theme
+from core.branding import get_stylesheet, detect_system_theme, chart_colors
 from core.event_bus import EventBus
 from core.risk import RiskManager
 from core.broker import AlpacaBroker
@@ -173,7 +173,7 @@ class DashboardPanel(QWidget):
         chart_widget = QWidget()
         cl = QVBoxLayout()
         cl.setContentsMargins(0, 4, 0, 0)
-        self.figure = plt.Figure(dpi=100, facecolor=BG_DARKEST)
+        self.figure = plt.Figure(dpi=100, facecolor=chart_colors()["fig_bg"])
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setMinimumHeight(140)
         cl.addWidget(self.canvas)
@@ -235,8 +235,26 @@ class DashboardPanel(QWidget):
         self.bus.log_entry.connect(self._on_activity)
         self.setLayout(layout)
 
+        # Wire stat card clicks to detail popups
+        self.card_portfolio.on_clicked = lambda: self._show_popup("equity")
+        self.card_pnl.on_clicked = lambda: self._show_popup("pnl")
+        self.card_buying.on_clicked = lambda: self._show_popup("buying")
+        self.card_cash.on_clicked = lambda: self._show_popup("equity")
+
         # Staggered fade-in animation for stat cards on first show
         QTimer.singleShot(200, lambda: StaggeredFadeIn(self._stat_cards, delay_ms=100, duration=400))
+
+    def _show_popup(self, kind):
+        if not self.broker:
+            self.bus.log_entry.emit("Connect Alpaca API first — go to Settings", "warn")
+            return
+        from core.ui.detail_popup import show_equity_popup, show_pnl_popup, show_buying_power_popup
+        if kind == "equity":
+            show_equity_popup(self.broker, self)
+        elif kind == "pnl":
+            show_pnl_popup(self.broker, self)
+        elif kind == "buying":
+            show_buying_power_popup(self.broker, self)
 
     def _on_activity(self, msg, level):
         from core.branding import log_html
@@ -291,16 +309,16 @@ class DashboardPanel(QWidget):
 
     def _plot(self, hist):
         self.figure.clear()
-        self.figure.set_facecolor(BG_DARKEST)
+        cc = chart_colors(); self.figure.set_facecolor(cc["fig_bg"])
         ax = self.figure.add_subplot(111)
-        ax.set_facecolor(BG_PANEL)
+        ax.set_facecolor(cc["ax_bg"])
         eq = hist["equity"]
         ts = [datetime.fromtimestamp(t) for t in hist["timestamp"]]
         ax.plot(ts, eq, color=BRAND_PRIMARY, linewidth=1.5)
         ax.fill_between(ts, eq, alpha=0.08, color=BRAND_PRIMARY)
-        ax.set_title("Portfolio Equity (1W)", color=TEXT_SECONDARY, fontsize=10)
-        ax.tick_params(colors=TEXT_MUTED, labelsize=8)
-        ax.grid(True, alpha=0.1, color=BORDER)
+        ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
+        ax.tick_params(colors=cc["muted"], labelsize=8)
+        ax.grid(True, alpha=0.15, color=cc["grid"])
         ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%m/%d"))
         self.figure.tight_layout()
         self.canvas.draw()
@@ -499,7 +517,7 @@ class ScannerPanel(QWidget):
         dp_layout.addWidget(self.detail_title)
 
         # Mini chart
-        self.detail_figure = plt.Figure(figsize=(4, 2.5), dpi=100, facecolor=BG_DARKEST)
+        self.detail_figure = plt.Figure(figsize=(4, 2.5), dpi=100, facecolor=chart_colors()["fig_bg"])
         self.detail_canvas = FigureCanvas(self.detail_figure)
         self.detail_canvas.setMinimumHeight(150)
         dp_layout.addWidget(self.detail_canvas)
@@ -760,13 +778,13 @@ class ScannerPanel(QWidget):
     def _draw_detail_chart(self, ticker):
         """Fetch and draw a quick price chart for the detail panel."""
         self.detail_figure.clear()
-        self.detail_figure.set_facecolor(BG_DARKEST)
+        cc = chart_colors(); self.detail_figure.set_facecolor(cc["fig_bg"])
         try:
             data = yf.Ticker(ticker).history(period="1mo", interval="1d")
             if data.empty:
                 return
             ax = self.detail_figure.add_subplot(111)
-            ax.set_facecolor(BG_PANEL)
+            ax.set_facecolor(cc["ax_bg"])
             closes = data["Close"].values
             x = range(len(closes))
 
@@ -776,9 +794,9 @@ class ScannerPanel(QWidget):
 
             ax.plot(x, closes, color=color, linewidth=1.5)
             ax.fill_between(x, closes, alpha=0.08, color=color)
-            ax.set_title(f"{ticker} — 1 Month", color=TEXT_SECONDARY, fontsize=10)
-            ax.tick_params(colors=TEXT_MUTED, labelsize=7)
-            ax.grid(True, alpha=0.1, color=BORDER)
+            ax.set_title(f"{ticker} — 1 Month", color=cc["text"], fontsize=10)
+            ax.tick_params(colors=cc["muted"], labelsize=7)
+            ax.grid(True, alpha=0.15, color=cc["grid"])
             self.detail_figure.tight_layout()
         except Exception:
             pass
@@ -915,7 +933,7 @@ class DayTradePanel(QWidget):
         layout.addWidget(GradientDivider())
 
         # Chart
-        self.figure = plt.Figure(figsize=(8, 4), dpi=100, facecolor=BG_DARKEST)
+        self.figure = plt.Figure(figsize=(8, 4), dpi=100, facecolor=chart_colors()["fig_bg"])
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
 
@@ -1006,9 +1024,9 @@ class DayTradePanel(QWidget):
 
         # Chart
         self.figure.clear()
-        self.figure.set_facecolor(BG_DARKEST)
+        cc = chart_colors(); self.figure.set_facecolor(cc["fig_bg"])
         ax = self.figure.add_subplot(111)
-        ax.set_facecolor(BG_PANEL)
+        ax.set_facecolor(cc["ax_bg"])
         x = range(len(data))
         closes = data["Close"].values
         ax.plot(x, closes, color=CHART_PRICE, linewidth=1.5, label="Price")
@@ -1024,9 +1042,9 @@ class DayTradePanel(QWidget):
             ax.scatter(np.where(buy_m)[0], closes[buy_m], marker="^", color=COLOR_BUY, s=40, zorder=5)
         if sell_m.any():
             ax.scatter(np.where(sell_m)[0], closes[sell_m], marker="v", color=COLOR_SELL, s=40, zorder=5)
-        ax.set_title(f"{ticker} Intraday", color=TEXT_SECONDARY, fontsize=12)
-        ax.tick_params(colors=TEXT_MUTED, labelsize=8)
-        ax.grid(True, alpha=0.1, color=BORDER)
+        ax.set_title(f"{ticker} Intraday", color=cc["text"], fontsize=12)
+        ax.tick_params(colors=cc["muted"], labelsize=8)
+        ax.grid(True, alpha=0.15, color=cc["grid"])
         ax.legend(fontsize=8, facecolor=BG_PANEL, edgecolor=BORDER, labelcolor=TEXT_SECONDARY)
         self.figure.tight_layout()
         self.canvas.draw()
@@ -1076,7 +1094,7 @@ class LongTradePanel(QWidget):
         self.stats_lbl.setFont(QFont(FONT_MONO, 10))
         layout.addWidget(self.stats_lbl)
 
-        self.figure = plt.Figure(figsize=(8, 4), dpi=100, facecolor=BG_DARKEST)
+        self.figure = plt.Figure(figsize=(8, 4), dpi=100, facecolor=chart_colors()["fig_bg"])
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
 
@@ -1139,9 +1157,9 @@ class LongTradePanel(QWidget):
 
         # Chart
         self.figure.clear()
-        self.figure.set_facecolor(BG_DARKEST)
+        cc = chart_colors(); self.figure.set_facecolor(cc["fig_bg"])
         ax = self.figure.add_subplot(111)
-        ax.set_facecolor(BG_PANEL)
+        ax.set_facecolor(cc["ax_bg"])
         x = range(len(data))
         closes = data["Close"].values
         ax.plot(x, closes, color=CHART_PRICE, linewidth=1.5, label="Price")
@@ -1149,9 +1167,9 @@ class LongTradePanel(QWidget):
             ax.plot(x, data["SMA_50"].values, color=CHART_VWAP, linewidth=1, alpha=0.6, label="SMA50")
         if "SMA_200" in data.columns:
             ax.plot(x, data["SMA_200"].values, color=CHART_EMA_FAST, linewidth=1, alpha=0.6, label="SMA200")
-        ax.set_title(f"{ticker} Long-Term", color=TEXT_SECONDARY, fontsize=12)
-        ax.tick_params(colors=TEXT_MUTED, labelsize=8)
-        ax.grid(True, alpha=0.1, color=BORDER)
+        ax.set_title(f"{ticker} Long-Term", color=cc["text"], fontsize=12)
+        ax.tick_params(colors=cc["muted"], labelsize=8)
+        ax.grid(True, alpha=0.15, color=cc["grid"])
         ax.legend(fontsize=8, facecolor=BG_PANEL, edgecolor=BORDER, labelcolor=TEXT_SECONDARY)
         self.figure.tight_layout()
         self.canvas.draw()
@@ -1307,6 +1325,10 @@ class PortfolioPanel(QWidget):
         stats_row.addWidget(self.card_orders)
         layout.addLayout(stats_row)
 
+        # Wire stat card clicks to detail popups
+        self.card_equity.on_clicked = lambda: self._show_popup("equity")
+        self.card_pnl_today.on_clicked = lambda: self._show_popup("pnl")
+
         # Main content — tabs within the tab
         inner_tabs = QTabWidget()
         inner_tabs.setStyleSheet(f"""
@@ -1398,7 +1420,7 @@ class PortfolioPanel(QWidget):
         perf_ctrl.addStretch()
         perf_l.addLayout(perf_ctrl)
 
-        self.perf_figure = plt.Figure(dpi=100, facecolor=BG_DARKEST)
+        self.perf_figure = plt.Figure(dpi=100, facecolor=chart_colors()["fig_bg"])
         self.perf_canvas = FigureCanvas(self.perf_figure)
         self.perf_canvas.setMinimumHeight(200)
         perf_l.addWidget(self.perf_canvas)
@@ -1407,6 +1429,16 @@ class PortfolioPanel(QWidget):
 
         layout.addWidget(inner_tabs)
         self.setLayout(layout)
+
+    def _show_popup(self, kind):
+        if not self.broker:
+            self.bus.log_entry.emit("Connect Alpaca API first — go to Settings", "warn")
+            return
+        from core.ui.detail_popup import show_equity_popup, show_pnl_popup
+        if kind == "equity":
+            show_equity_popup(self.broker, self)
+        elif kind == "pnl":
+            show_pnl_popup(self.broker, self)
 
     def refresh(self):
         if not self.broker:
@@ -1492,18 +1524,18 @@ class PortfolioPanel(QWidget):
             return
 
         self.perf_figure.clear()
-        self.perf_figure.set_facecolor(BG_DARKEST)
+        cc = chart_colors(); self.perf_figure.set_facecolor(cc["fig_bg"])
         ax = self.perf_figure.add_subplot(111)
-        ax.set_facecolor(BG_PANEL)
+        ax.set_facecolor(cc["ax_bg"])
         eq = hist["equity"]
         ts = [datetime.fromtimestamp(t) for t in hist["timestamp"]]
         trending_up = eq[-1] >= eq[0] if eq else True
         color = COLOR_BUY if trending_up else COLOR_SELL
         ax.plot(ts, eq, color=color, linewidth=1.5)
         ax.fill_between(ts, eq, alpha=0.08, color=color)
-        ax.set_title(f"Portfolio — {self.perf_period.currentText()}", color=TEXT_SECONDARY, fontsize=10)
-        ax.tick_params(colors=TEXT_MUTED, labelsize=7)
-        ax.grid(True, alpha=0.1, color=BORDER)
+        ax.set_title(f"Portfolio — {self.perf_period.currentText()}", color=cc["text"], fontsize=10)
+        ax.tick_params(colors=cc["muted"], labelsize=7)
+        ax.grid(True, alpha=0.15, color=cc["grid"])
         self.perf_figure.tight_layout()
         self.perf_canvas.draw()
 
