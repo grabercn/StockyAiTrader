@@ -251,6 +251,14 @@ class DashboardPanel(QWidget):
         # Staggered fade-in animation for stat cards on first show
         QTimer.singleShot(200, lambda: StaggeredFadeIn(self._stat_cards, delay_ms=100, duration=400))
 
+    def _tick_refresh(self):
+        """Auto-refresh countdown — refreshes dashboard data every 60 seconds."""
+        self._countdown -= 1
+        if self._countdown <= 0:
+            self._countdown = self._refresh_interval
+            self.refresh()
+        self._refresh_countdown_label.setText(f"Next refresh: {self._countdown}s")
+
     def _show_popup(self, kind):
         if not self.broker:
             self.bus.log_entry.emit("Connect Alpaca API first — go to Settings", "warn")
@@ -2076,6 +2084,7 @@ class SettingsPanel(QWidget):
         scroll.setWidgetResizable(True)
         inner = QWidget()
         inner_layout = QVBoxLayout()
+        settings = load_settings()
 
         # ── Hardware Profiles ──
         profile_box = QGroupBox("Hardware Profile")
@@ -2149,17 +2158,36 @@ class SettingsPanel(QWidget):
 
         # Appearance
         appear_box = QGroupBox("Appearance")
-        al2 = QHBoxLayout()
-        al2.addWidget(QLabel("Theme:"))
+        al2 = QVBoxLayout()
+
+        # Theme
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Theme:"))
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["Auto (System)", "Dark", "Light"])
-        # Set current
-        settings = load_settings()
-        theme = settings.get("theme", "auto")
+        theme_val = settings.get("theme", "auto")
         idx_map = {"auto": 0, "dark": 1, "light": 2}
-        self.theme_combo.setCurrentIndex(idx_map.get(theme, 0))
+        self.theme_combo.setCurrentIndex(idx_map.get(theme_val, 0))
         self.theme_combo.currentIndexChanged.connect(self._change_theme)
-        al2.addWidget(self.theme_combo, 1)
+        theme_row.addWidget(self.theme_combo, 1)
+        al2.addLayout(theme_row)
+
+        # Zoom slider
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("UI Scale:"))
+        self.zoom_slider = QSpinBox()
+        self.zoom_slider.setRange(70, 200)
+        self.zoom_slider.setSuffix("%")
+        self.zoom_slider.setSingleStep(5)
+        current_zoom = int(settings.get("ui_zoom", 0.95) * 100)
+        self.zoom_slider.setValue(current_zoom)
+        self.zoom_slider.valueChanged.connect(self._change_zoom)
+        zoom_row.addWidget(self.zoom_slider)
+        self.zoom_label = QLabel(f"Current: {current_zoom}%")
+        self.zoom_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        zoom_row.addWidget(self.zoom_label)
+        al2.addLayout(zoom_row)
+
         appear_box.setLayout(al2)
         inner_layout.addWidget(appear_box)
 
@@ -2231,6 +2259,15 @@ class SettingsPanel(QWidget):
         layout.addWidget(scroll)
         self.setLayout(layout)
         self._refresh()
+
+    def _change_zoom(self, value):
+        scale = value / 100.0
+        main_window = self.window()
+        if main_window and hasattr(main_window, '_scale'):
+            main_window._scale = scale
+            main_window._apply_scale()
+            main_window._save_zoom()
+        self.zoom_label.setText(f"Current: {value}%")
 
     def _change_aggressivity(self, index):
         name = self.aggr_combo.currentData()
@@ -3035,14 +3072,7 @@ class StockySuite(QMainWindow):
             self._scale = self._detect_ideal_scale()
         self._apply_scale()
 
-        # Keyboard shortcuts for zoom (using QShortcut for reliable capture)
-        from PyQt5.QtWidgets import QShortcut
-        from PyQt5.QtGui import QKeySequence
-        # Multiple key combos for zoom-in to handle different keyboard layouts
-        for key in ["Ctrl+=", "Ctrl+Shift+=", "Ctrl++"]:
-            QShortcut(QKeySequence(key), self, lambda: self._zoom(0.1), context=Qt.ApplicationShortcut)
-        QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-0.1), context=Qt.ApplicationShortcut)
-        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._reset_zoom(), context=Qt.ApplicationShortcut)
+        # Zoom is now controlled via Settings tab slider (removed broken Ctrl+/- shortcuts)
 
         # System tray agent — minimize to tray on close, toast notifications
         from core.tray_agent import TrayAgent
@@ -3161,8 +3191,9 @@ class StockySuite(QMainWindow):
             }}
             QTabBar {{ qproperty-expanding: 0; }}
         """)
-        if hasattr(self, '_notif_bar'):
-            self._notif_bar.show_message(f"Zoom: {self._scale:.0%}  (Ctrl+/- to adjust, Ctrl+0 to reset)", "system")
+        # Only show zoom notification if scale is not default
+        if hasattr(self, '_notif_bar') and abs(self._scale - 1.0) > 0.01:
+            self._notif_bar.show_message(f"UI Scale: {self._scale:.0%}", "system")
 
     @staticmethod
     def _detect_ideal_scale():
@@ -3329,16 +3360,6 @@ def boot_app():
         view_menu.addAction(action)
 
     tools_menu = suite.menuBar().addMenu("Tools")
-    for label, shortcut, fn in [
-        ("Zoom In", "Ctrl+=", lambda: suite._zoom(0.1)),
-        ("Zoom Out", "Ctrl+-", lambda: suite._zoom(-0.1)),
-        ("Reset Zoom", "Ctrl+0", lambda: suite._reset_zoom()),
-    ]:
-        a = QAction(label, suite)
-        a.setShortcut(shortcut)
-        a.triggered.connect(fn)
-        tools_menu.addAction(a)
-    tools_menu.addSeparator()
     rerun = QAction("Run Setup Wizard...", suite)
     rerun.triggered.connect(lambda: SetupWizard(suite).exec_())
     tools_menu.addAction(rerun)
