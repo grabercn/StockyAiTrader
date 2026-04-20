@@ -2716,6 +2716,11 @@ class _NotificationBar(QWidget):
         self._text_slide = 0.0   # 0-1, decays (text slides in from right)
         self._market_open = False
 
+        # Notification history for bell
+        self._notif_history = []  # list of (time, msg, level)
+        self._unread_count = 0
+        self._bell_pulse = 0.0
+
         # Animation timer
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -2747,6 +2752,8 @@ class _NotificationBar(QWidget):
             self._icon_bounce = max(0, self._icon_bounce - 0.04)
         if self._text_slide > 0:
             self._text_slide = max(0, self._text_slide - 0.05)
+        if self._bell_pulse > 0:
+            self._bell_pulse = max(0, self._bell_pulse - 0.02)
         self.update()
 
     def show_message(self, msg, level="info"):
@@ -2762,9 +2769,15 @@ class _NotificationBar(QWidget):
         self._text_color = QColor(text_hex)
         self._msg = msg
         self._time = datetime.now().strftime("%H:%M:%S")
-        self._icon_pulse = 1.0   # Start glow
-        self._icon_bounce = 1.0  # Start bounce
-        self._text_slide = 1.0   # Start slide-in
+        self._icon_pulse = 1.0
+        self._icon_bounce = 1.0
+        self._text_slide = 1.0
+
+        # Track in history
+        self._notif_history.append((self._time, msg, level))
+        self._notif_history = self._notif_history[-50:]  # Keep last 50
+        self._unread_count += 1
+        self._bell_pulse = 1.0
         self.update()
 
     def paintEvent(self, event):
@@ -2845,13 +2858,80 @@ class _NotificationBar(QWidget):
         painter.setFont(QFont(FONT_FAMILY, 10))
         painter.drawText(int(x + text_offset), 0, w - x - 70, h, Qt.AlignVCenter, self._msg)
 
-        # Timestamp on right
+        # Timestamp
         if self._time:
             painter.setPen(QColor(TEXT_MUTED))
             painter.setFont(QFont(FONT_MONO, 8))
-            painter.drawText(w - 60, 0, 50, h, Qt.AlignVCenter | Qt.AlignRight, self._time)
+            painter.drawText(w - 90, 0, 50, h, Qt.AlignVCenter | Qt.AlignRight, self._time)
+
+        # Bell icon with unread badge
+        bell_x = w - 32
+        bell_px = StockyIcons.get("bell", 14, BRAND_PRIMARY if self._unread_count > 0 else TEXT_MUTED)
+
+        # Bell pulse glow
+        if self._bell_pulse > 0:
+            glow = QColor(BRAND_PRIMARY)
+            glow.setAlphaF(self._bell_pulse * 0.3)
+            painter.setBrush(glow)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(int(bell_x - 1), int(h/2 - 9), 18, 18)
+
+        painter.drawPixmap(int(bell_x), int(h/2 - 7), bell_px)
+
+        # Unread count badge
+        if self._unread_count > 0:
+            painter.setBrush(QColor(COLOR_SELL))
+            painter.setPen(Qt.NoPen)
+            badge_r = 7
+            painter.drawEllipse(int(bell_x + 8), int(h/2 - 10), badge_r * 2, badge_r * 2)
+            painter.setPen(QColor("white"))
+            painter.setFont(QFont(FONT_FAMILY, 7, QFont.Bold))
+            count_text = str(self._unread_count) if self._unread_count < 100 else "99+"
+            painter.drawText(int(bell_x + 8), int(h/2 - 10), badge_r * 2, badge_r * 2, Qt.AlignCenter, count_text)
 
         painter.end()
+
+    def mousePressEvent(self, event):
+        """Click on bell area opens notification overlay."""
+        bell_x = self.width() - 32
+        if event.x() >= bell_x - 5:
+            self._show_notification_overlay()
+        super().mousePressEvent(event)
+
+    def _show_notification_overlay(self):
+        """Show overlay with notification history, clear unread count."""
+        self._unread_count = 0
+        self.update()
+
+        if not self._notif_history:
+            return
+
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit
+        dlg = QDialog(self.window())
+        dlg.setWindowTitle("Notifications")
+        dlg.setMinimumSize(450, 350)
+        bg = theme.color("bg_base") if hasattr(theme, 'color') else BG_DARKEST
+        dlg.setStyleSheet(f"QDialog {{ background-color: {bg}; }}")
+
+        lay = QVBoxLayout()
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        txt.setFont(QFont(FONT_MONO, 10))
+
+        from core.branding import log_html as _lh
+        for ts, msg, level in reversed(self._notif_history):
+            colors = {"info": BRAND_PRIMARY, "trade": BRAND_ACCENT, "warn": COLOR_HOLD, "error": COLOR_SELL, "system": TEXT_MUTED}
+            c = colors.get(level, TEXT_SECONDARY)
+            txt.append(f'<span style="color:{TEXT_MUTED}">{ts}</span> <span style="color:{c}">{msg}</span>')
+
+        lay.addWidget(txt)
+
+        clear_btn = QPushButton("Clear All")
+        clear_btn.clicked.connect(lambda: (self._notif_history.clear(), dlg.accept()))
+        lay.addWidget(clear_btn)
+
+        dlg.setLayout(lay)
+        dlg.exec_()
 
 
 class StockySuite(QMainWindow):
@@ -2917,7 +2997,34 @@ class StockySuite(QMainWindow):
         QShortcut(QKeySequence("Ctrl+-"), self, lambda: self._zoom(-0.1))
         QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._reset_zoom())
 
+        # System tray agent — minimize to tray on close, toast notifications
+        from core.tray_agent import TrayAgent
+        self._tray = TrayAgent(self)
+        self._tray.setup()
+
+        # Send toast notifications on trade events
+        self.event_bus.trade_executed.connect(
+            lambda t, s, q, o: self._tray.send_notification(
+                f"Trade Executed: {s.upper()} {t}",
+                f"{s.upper()} {q} shares of {t}\nOrder: {o}",
+                "trade",
+            )
+        )
+
         log_event("startup", f"{APP_NAME} v{APP_VERSION} launched")
+
+    def closeEvent(self, event):
+        """Minimize to tray instead of quitting."""
+        if self._tray and self._tray.tray and self._tray.tray.isVisible():
+            event.ignore()
+            self.hide()
+            self._tray.send_notification(
+                "Stocky Suite",
+                "Running in background. Double-click tray icon to restore.",
+                "info",
+            )
+        else:
+            event.accept()
 
     def _init_broker(self):
         settings = load_settings()
