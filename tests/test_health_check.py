@@ -196,3 +196,30 @@ class TestSettingsHealth:
             assert key in _LIGHT, f"Key {key} in dark but not light"
         for key in _LIGHT:
             assert key in _DARK, f"Key {key} in light but not dark"
+
+
+class TestUpdater:
+    def test_endpoint_reachable(self):
+        """Verify we can reach the GitHub releases API."""
+        import requests
+        r = requests.get(
+            "https://api.github.com/repos/grabercn/StockyAiTrader/releases/latest",
+            headers={"User-Agent": "StockyAiTrader"}, timeout=10,
+        )
+        assert r.status_code == 200, f"GitHub API returned {r.status_code}"
+        data = r.json()
+        assert "tag_name" in data, "No tag_name in release data"
+
+    def test_check_for_update_returns_tuple(self):
+        from core.updater import check_for_update
+        result = check_for_update()
+        assert isinstance(result, tuple)
+        assert len(result) == 4
+        has_update, ver, dl, url = result
+        assert isinstance(has_update, bool)
+
+    def test_version_string_valid(self):
+        from core.branding import APP_VERSION
+        parts = APP_VERSION.split(".")
+        assert len(parts) == 3, f"Version should be X.Y.Z, got {APP_VERSION}"
+        assert all(p.isdigit() for p in parts)
