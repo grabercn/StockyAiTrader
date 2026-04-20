@@ -195,8 +195,10 @@ class BootScreen(QWidget):
         inner.setContentsMargins(50, 30, 50, 24)
         inner.setSpacing(6)
 
-        # Icon
-        icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "icon.png")
+        # Icon — use splash variant if available, fallback to regular
+        icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "icon_splash.png")
+        if not os.path.exists(icon_path):
+            icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "icon.png")
         if os.path.exists(icon_path):
             icon_lbl = QLabel()
             icon_lbl.setPixmap(QPixmap(icon_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
