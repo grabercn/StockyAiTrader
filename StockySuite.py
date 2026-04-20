@@ -189,7 +189,7 @@ class StockySuite(QMainWindow):
                     url = download_url or release_url
                     self._update_url = url
                     self.event_bus.log_entry.emit(
-                        f"Update available: v{APP_VERSION} → v{latest} — click here to download",
+                        f"Update available: v{APP_VERSION} → v{latest} — click to download",
                         "warn",
                     )
                     # Make the notification bar clickable to open the download

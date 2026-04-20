@@ -99,10 +99,13 @@ class _NotificationBar(QWidget):
     def set_click_url(self, url):
         """Set a URL that opens when the message area is clicked."""
         self._click_url = url
+        self.setCursor(Qt.PointingHandCursor if url else Qt.ArrowCursor)
+        self.update()
 
     def show_message(self, msg, level="info"):
         from core.ui.icons import StockyIcons
-        self._click_url = None  # Clear on new message unless explicitly set
+        self._click_url = None
+        self.setCursor(Qt.ArrowCursor)
         icon_map = {
             "info":   ("check",    BRAND_PRIMARY, TEXT_SECONDARY),
             "trade":  ("bolt",     BRAND_ACCENT,  BRAND_ACCENT),
@@ -201,6 +204,11 @@ class _NotificationBar(QWidget):
         tc.setAlphaF(max(0.3, text_alpha))
         painter.setPen(tc)
         painter.setFont(QFont(FONT_FAMILY, 10))
+        # If clickable, use underline font to look like a link
+        msg_font = QFont(FONT_FAMILY, 10)
+        if hasattr(self, '_click_url') and self._click_url:
+            msg_font.setUnderline(True)
+        painter.setFont(msg_font)
         painter.drawText(int(x + text_offset), 0, w - x - 70, h, Qt.AlignVCenter, self._msg)
 
         # Timestamp
