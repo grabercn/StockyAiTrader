@@ -152,8 +152,10 @@ class DetailPopup(QDialog):
             ("1 Year", "1A", "1D"),
         ]
 
-        # Background
-        self._bg = _PopupBackground(self)
+        self._bg_phase = 0.0
+        self._bg_timer = QTimer(self)
+        self._bg_timer.timeout.connect(lambda: (setattr(self, '_bg_phase', self._bg_phase + 0.01), self.update()))
+        self._bg_timer.start(50)
         self._build()
 
         # Load default period
@@ -165,9 +167,34 @@ class DetailPopup(QDialog):
         self._refresh_timer.timeout.connect(self._load_data)
         self._refresh_timer.start(30000)
 
-    def resizeEvent(self, event):
-        self._bg.resize(self.size())
-        super().resizeEvent(event)
+    def paintEvent(self, event):
+        """Paint animated gradient background behind all content."""
+        import math
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+        shift = (math.sin(self._bg_phase) + 1) / 2 * 0.15
+
+        if theme.is_dark:
+            grad = QLinearGradient(0, 0, w, h)
+            grad.setColorAt(0, QColor(15, 17, 23))
+            grad.setColorAt(0.4 + shift, QColor(20, 24, 38))
+            grad.setColorAt(1, QColor(12, 14, 20))
+        else:
+            grad = QLinearGradient(0, 0, w, h)
+            grad.setColorAt(0, QColor(248, 250, 252))
+            grad.setColorAt(0.5, QColor(241, 245, 249))
+            grad.setColorAt(1, QColor(248, 250, 252))
+        painter.fillRect(0, 0, w, h, grad)
+
+        # Top accent line
+        line = QLinearGradient(0, 0, w, 0)
+        line.setColorAt(0, QColor(BRAND_PRIMARY + "00"))
+        line.setColorAt(0.3, QColor(BRAND_PRIMARY))
+        line.setColorAt(0.7, QColor(BRAND_ACCENT))
+        line.setColorAt(1, QColor(BRAND_ACCENT + "00"))
+        painter.setPen(QPen(QBrush(line), 2))
+        painter.drawLine(0, 0, w, 0)
+        painter.end()
 
     def _build(self):
         layout = QVBoxLayout()
@@ -218,12 +245,15 @@ class DetailPopup(QDialog):
         self._change_lbl.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent;")
         layout.addWidget(self._change_lbl)
 
-        # Chart
-        fig_bg = BG_DARKEST if theme.is_dark else "#f8fafc"
-        self._figure = plt.Figure(dpi=100, facecolor=fig_bg)
+        # Chart — transparent canvas, figure bg matches theme
+        self._fig_bg = BG_DARKEST if theme.is_dark else "#f8fafc"
+        self._ax_bg = BG_PANEL if theme.is_dark else "#ffffff"
+        self._figure = plt.Figure(dpi=100, facecolor=self._fig_bg)
         self._canvas = FigureCanvas(self._figure)
         self._canvas.setMinimumHeight(180)
-        self._canvas.setStyleSheet(f"background-color: {fig_bg};")
+        # Force canvas background to match figure — prevents white square
+        self._figure.patch.set_facecolor(self._fig_bg)
+        self._figure.patch.set_alpha(1.0)
         layout.addWidget(self._canvas, 1)
 
         # Stats grid
@@ -289,9 +319,9 @@ class DetailPopup(QDialog):
 
     def _draw_chart(self, timestamps, values, unit, trending_up):
         self._figure.clear()
-        bg = BG_DARKEST if theme.is_dark else "#f8fafc"
-        panel_bg = BG_PANEL if theme.is_dark else "#ffffff"
-        self._figure.set_facecolor(bg)
+        self._figure.set_facecolor(self._fig_bg)
+        self._figure.patch.set_facecolor(self._fig_bg)
+        panel_bg = self._ax_bg
 
         ax = self._figure.add_subplot(111)
         ax.set_facecolor(panel_bg)
