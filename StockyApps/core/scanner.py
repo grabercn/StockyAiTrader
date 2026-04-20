@@ -35,8 +35,10 @@ class ScanResult:
     probs: list               # [sell_prob, hold_prob, buy_prob]
     feature_importances: dict  # Top features driving this decision
     reasoning: str            # Human-readable explanation
-    score: float              # Composite ranking score (higher = better opportunity)
+    score: float              # Composite ranking score (higher = best opportunity)
     error: Optional[str] = None
+    period_used: str = "5d"   # What training data period was used
+    interval_used: str = "5m" # What bar interval was used
 
 
 # ─── Default scan universe ───────────────────────────────────────────────────
@@ -54,13 +56,75 @@ TECH_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "AMD", 
 ETF_TICKERS = ["SPY", "QQQ", "IWM", "DIA", "VTI", "ARKK", "XLF", "XLE", "XLK"]
 
 
-def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None):
+def auto_determine_settings(ticker):
+    """
+    Intelligently pick the best period + interval for a stock.
+
+    Strategy:
+    1. Fetch 2 days of 15-min data (lightweight pre-check)
+    2. Calculate volatility (ATR%) and average volume
+    3. Pick settings based on stock characteristics:
+
+        High volatility (>2% ATR) + High volume:
+            → 2d period, 1m interval (recent data, fine granularity)
+            Why: volatile stocks change fast, need frequent fresh data
+
+        High volatility + Low volume:
+            → 3d period, 5m interval (more data, avoid noise from low vol)
+            Why: low volume 1m bars are too noisy
+
+        Low volatility + High volume:
+            → 5d period, 5m interval (more training data, standard bars)
+            Why: calm stocks benefit from more historical context
+
+        Low volatility + Low volume:
+            → 5d period, 15m interval (max context, smoothed bars)
+            Why: thin/calm stocks need aggregated bars to find patterns
+
+    Returns: (period, interval, reason_str)
+    """
+    try:
+        import yfinance as yf
+        data = yf.Ticker(ticker).history(period="2d", interval="15m")
+        if data.empty or len(data) < 10:
+            return "5d", "5m", "default (not enough pre-check data)"
+
+        price = data["Close"].iloc[-1]
+        # Simple ATR proxy: average of high-low range
+        avg_range = (data["High"] - data["Low"]).mean()
+        atr_pct = avg_range / price if price > 0 else 0.01
+        avg_volume = data["Volume"].mean()
+
+        high_vol = atr_pct > 0.015   # >1.5% average bar range
+        high_volume = avg_volume > 500000  # >500k shares per 15min bar
+
+        if high_vol and high_volume:
+            return "2d", "1m", f"volatile+liquid (ATR {atr_pct:.1%}, vol {avg_volume/1e6:.1f}M)"
+        elif high_vol and not high_volume:
+            return "3d", "5m", f"volatile+thin (ATR {atr_pct:.1%}, vol {avg_volume/1e3:.0f}K)"
+        elif not high_vol and high_volume:
+            return "5d", "5m", f"calm+liquid (ATR {atr_pct:.1%}, vol {avg_volume/1e6:.1f}M)"
+        else:
+            return "5d", "15m", f"calm+thin (ATR {atr_pct:.1%}, vol {avg_volume/1e3:.0f}K)"
+
+    except Exception:
+        return "5d", "5m", "default (pre-check failed)"
+
+
+def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_settings=False):
     """
     Run the full analysis pipeline on a single ticker.
 
+    If auto_settings=True, ignores period/interval and picks optimal ones per stock.
     Returns a ScanResult with action, confidence, sizing, and reasoning.
     """
     try:
+        # Auto-determine best settings if requested
+        if auto_settings:
+            period, interval, settings_reason = auto_determine_settings(ticker)
+        else:
+            settings_reason = ""
+
         # Fetch data with all features + addons
         data = fetch_intraday(ticker, period=period, interval=interval)
 
@@ -133,6 +197,7 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None):
             price=last_price, position_size=size, stop_loss=sl, take_profit=tp,
             atr=atr, probs=last_probs, feature_importances=importances,
             reasoning=reasoning, score=score,
+            period_used=period, interval_used=interval,
         )
 
     except Exception as e:
@@ -145,7 +210,7 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None):
 
 
 def scan_multiple(tickers, period="5d", interval="5m", risk_manager=None,
-                  max_workers=3, progress_callback=None):
+                  max_workers=3, progress_callback=None, auto_settings=False):
     """
     Scan multiple tickers concurrently and return ranked results.
 
@@ -169,7 +234,7 @@ def scan_multiple(tickers, period="5d", interval="5m", risk_manager=None,
     # Keep workers low (3) since LightGBM training is CPU-intensive on a laptop
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_ticker = {
-            executor.submit(scan_ticker, t, period, interval, risk_manager): t
+            executor.submit(scan_ticker, t, period, interval, risk_manager, auto_settings): t
             for t in tickers
         }
 

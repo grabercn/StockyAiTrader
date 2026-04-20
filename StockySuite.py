@@ -83,18 +83,20 @@ class ScanWorker(QThread):
     progress = pyqtSignal(int, int, str, str)
     finished = pyqtSignal(list)
 
-    def __init__(self, tickers, period, interval, risk_manager):
+    def __init__(self, tickers, period, interval, risk_manager, auto_settings=False):
         super().__init__()
         self.tickers = tickers
         self.period = period
         self.interval = interval
         self.risk_manager = risk_manager
+        self.auto_settings = auto_settings
 
     def run(self):
         def cb(done, total, ticker, result):
             self.progress.emit(done, total, ticker, result.action if result else "...")
         results = scan_multiple(self.tickers, self.period, self.interval,
-                                self.risk_manager, max_workers=3, progress_callback=cb)
+                                self.risk_manager, max_workers=3, progress_callback=cb,
+                                auto_settings=self.auto_settings)
         self.finished.emit(results)
 
 
@@ -541,7 +543,7 @@ class ScannerPanel(QWidget):
         period_lbl.setToolTip("How many days of historical price data the AI model trains on.\nMore days = more context but slower. 5d is recommended for day trading.")
         settings_row.addWidget(period_lbl)
         self.period_cb = QComboBox()
-        self.period_cb.addItems(["5 days", "3 days", "2 days", "1 day"])
+        self.period_cb.addItems(["Auto (Smart)", "5 days", "3 days", "2 days", "1 day"])
         self.period_cb.setToolTip("Amount of historical data used to train the AI model for each stock")
         settings_row.addWidget(self.period_cb)
         interval_lbl = QLabel("Bar Size:")
@@ -799,16 +801,22 @@ class ScannerPanel(QWidget):
         self._t0 = time.time()
 
         # Map display text back to API values
-        period_map = {"5 days": "5d", "3 days": "3d", "2 days": "2d", "1 day": "1d"}
+        period_map = {"Auto (Smart)": "5d", "5 days": "5d", "3 days": "3d", "2 days": "2d", "1 day": "1d"}
         interval_map = {"Auto (Smart)": "5m", "5 min": "5m", "1 min": "1m", "15 min": "15m"}
         period = period_map.get(self.period_cb.currentText(), "5d")
         interval = interval_map.get(self.interval_cb.currentText(), "5m")
-        is_auto = self.interval_cb.currentText() == "Auto (Smart)"
+
+        # Auto mode: either dropdown set to "Auto (Smart)" triggers per-stock optimization
+        is_auto = (self.period_cb.currentText() == "Auto (Smart)" or
+                   self.interval_cb.currentText() == "Auto (Smart)")
 
         if is_auto:
-            self.progress.add_log("Smart mode: AI will adapt interval per stock based on volatility")
+            self.progress.add_log(
+                "Smart mode: AI auto-picks training period + bar interval per stock "
+                "based on volatility and volume characteristics"
+            )
 
-        self._worker = ScanWorker(tickers, period, interval, self.rm)
+        self._worker = ScanWorker(tickers, period, interval, self.rm, auto_settings=is_auto)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
@@ -816,7 +824,7 @@ class ScannerPanel(QWidget):
     def _on_progress(self, done, total, ticker, action):
         pct = 10 + int(done / total * 85) if total > 0 else 0
         self.progress.set_progress(pct, f"Scanning {ticker}...", f"{done}/{total} complete")
-        colors = {"BUY": "#10b981", "SELL": "#ef4444"}
+        colors = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#f59e0b"}
         self.progress.add_log(f"{ticker}: <b style='color:{colors.get(action, '#94a3b8')}'>{action}</b>")
 
     def _on_done(self, results):
@@ -844,12 +852,17 @@ class ScannerPanel(QWidget):
             w = QWidget(); l = QHBoxLayout(w); l.addWidget(cb); l.setAlignment(Qt.AlignCenter); l.setContentsMargins(0,0,0,0)
             self.table.setCellWidget(i, 0, w)
 
+            # Show period/interval in SL/TP column when auto mode picked different settings
+            p_used = getattr(r, 'period_used', '5d')
+            i_used = getattr(r, 'interval_used', '5m')
+            settings_str = f"{p_used}/{i_used}" if (p_used != "5d" or i_used != "5m") else ""
+
             items = [
                 (r.ticker, None), (r.action, {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(r.action)),
                 (f"{r.confidence:.0%}", None), (f"${r.price:.2f}" if r.price else "--", None),
                 (str(r.position_size) if r.position_size else "--", None),
                 (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss else "--", None),
-                (f"{r.score:.2f}", None),
+                (f"{r.score:.2f}" + (f" [{settings_str}]" if settings_str else ""), None),
             ]
             for j, (val, color) in enumerate(items):
                 it = QTableWidgetItem(val)
@@ -953,15 +966,17 @@ class ScannerPanel(QWidget):
                 bar = "█" * bar_len
                 lines.append(f'  <span style="color:{BRAND_ACCENT}">{bar}</span> {feat}: {imp:.0f}')
 
-        # Trade metadata
+        # Trade metadata — show what the AI actually used for this stock
         lines.append("")
-        lines.append(f'<b style="color:{BRAND_PRIMARY}">Trade Info</b>')
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Scan Settings</b>')
         trade_type = "Intraday (Day Trade)" if r.atr and r.atr / r.price < 0.03 else "Swing Trade"
-        interval_txt = self.interval_cb.currentText() if hasattr(self, 'interval_cb') else "5 min"
-        period_txt = self.period_cb.currentText() if hasattr(self, 'period_cb') else "5 days"
+        period_used = getattr(r, 'period_used', '5d')
+        interval_used = getattr(r, 'interval_used', '5m')
         lines.append(f'  Type: {trade_type}')
-        lines.append(f'  Training Data: {period_txt}  |  Bar Size: {interval_txt}')
-        lines.append(f'  Volatility: {"High" if r.atr/r.price > 0.02 else "Low"} ({r.atr/r.price*100:.1f}% ATR)')
+        lines.append(f'  Training Data: {period_used}  |  Bar Interval: {interval_used}')
+        lines.append(f'  Volatility: {"High" if r.atr/r.price > 0.02 else "Moderate" if r.atr/r.price > 0.01 else "Low"} ({r.atr/r.price*100:.1f}% ATR)')
+        if period_used != "5d" or interval_used != "5m":
+            lines.append(f'  <i style="color:{BRAND_ACCENT}">AI auto-selected these settings for this stock</i>')
 
         if r.reasoning:
             lines.append("")
