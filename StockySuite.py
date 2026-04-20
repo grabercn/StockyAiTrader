@@ -1469,6 +1469,10 @@ class DayTradePanel(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
 
+        # Hover tooltip
+        from core.ui.chart_tooltip import ChartTooltip
+        self._tooltip = ChartTooltip(self.canvas, ax, list(range(len(closes))), list(closes))
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PANEL: LONG TRADE
@@ -1593,6 +1597,9 @@ class LongTradePanel(QWidget):
         ax.legend(fontsize=8, facecolor=BG_PANEL, edgecolor=BORDER, labelcolor=TEXT_SECONDARY)
         self.figure.tight_layout()
         self.canvas.draw()
+
+        from core.ui.chart_tooltip import ChartTooltip
+        self._tooltip = ChartTooltip(self.canvas, ax, list(range(len(closes))), list(closes))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2100,6 +2107,9 @@ class PortfolioPanel(QWidget):
         ax.grid(True, alpha=0.15, color=cc["grid"])
         self.perf_figure.tight_layout()
         self.perf_canvas.draw()
+
+        from core.ui.chart_tooltip import ChartTooltip
+        self._perf_tooltip = ChartTooltip(self.perf_canvas, ax, ts, eq)
 
     def _refresh_wl_combo(self):
         from core.discovery import get_watchlists
