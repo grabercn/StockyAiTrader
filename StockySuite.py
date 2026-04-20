@@ -1442,6 +1442,8 @@ class PortfolioPanel(QWidget):
         ])
         self.holdings_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.holdings_table.verticalHeader().setVisible(False)
+        self.holdings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.holdings_table.cellClicked.connect(self._on_holding_clicked)
         hl.addWidget(self.holdings_table)
         holdings_w.setLayout(hl)
         inner_tabs.addTab(holdings_w, StockyIcons.get_icon("wallet", 16, BRAND_PRIMARY), "Holdings")
@@ -1537,6 +1539,68 @@ class PortfolioPanel(QWidget):
         elif kind == "pnl":
             show_pnl_popup(self.broker, self)
 
+    def _on_holding_clicked(self, row, col):
+        """Open detail popup for a clicked holding."""
+        item = self.holdings_table.item(row, 0)
+        if not item:
+            return
+        ticker = item.text()
+        if not ticker or not self.broker:
+            return
+
+        # Get position data
+        positions = self.broker.get_positions()
+        pos = None
+        if isinstance(positions, list):
+            for p in positions:
+                if p.get("symbol", "").upper() == ticker.upper():
+                    pos = p
+                    break
+
+        if not pos:
+            return
+
+        qty = float(pos.get("qty", 0))
+        avg = float(pos.get("avg_entry_price", 0))
+        cur = float(pos.get("current_price", 0))
+        pnl = float(pos.get("unrealized_pl", 0))
+        pnl_pct = float(pos.get("unrealized_plpc", 0)) * 100
+        mv = qty * cur
+
+        # Show a popup with stock detail + sell controls
+        from core.ui.detail_popup import DetailPopup
+        def fetch(period, tf):
+            return self.broker.get_portfolio_history(period=period, timeframe=tf)
+
+        def extract(data):
+            # Use yfinance for stock-specific chart
+            try:
+                period_map = {"1D": "1d", "1W": "5d", "1M": "1mo", "3M": "3mo", "1A": "1y"}
+                yf_period = period_map.get(period, "1mo")
+                stock_data = yf.Ticker(ticker).history(period=yf_period)
+                if not stock_data.empty:
+                    ts = list(stock_data.index)
+                    vals = list(stock_data["Close"].values)
+                    return ts, vals, "$"
+            except Exception:
+                pass
+            return [], [], "$"
+
+        popup = DetailPopup(
+            f"{ticker} — {qty:.0f} shares",
+            fetch, extract,
+            stats={
+                "Avg Cost": f"${avg:.2f}",
+                "Current": f"${cur:.2f}",
+                "Market Value": f"${mv:,.2f}",
+                "P&L": f"${pnl:+,.2f}",
+                "P&L %": f"{pnl_pct:+.2f}%",
+                "Qty": f"{qty:.0f} shares",
+            },
+            parent=self,
+        )
+        popup.exec_()
+
     def refresh(self):
         if not self.broker:
             return
@@ -1586,26 +1650,48 @@ class PortfolioPanel(QWidget):
         if isinstance(orders, list):
             self.card_orders.set_value(str(len(orders)))
 
-        # Trade history
+        # Trade history with running totals
         limit_map = {"Last 20": 20, "Last 50": 50, "Last 100": 100, "All": 500}
         limit = limit_map.get(self.hist_count.currentText(), 20)
         closed = self.broker.get_orders("closed")
         if isinstance(closed, list):
             closed = closed[:limit]
+            # Add cost column to table if not already there
+            if self.history_table.columnCount() < 8:
+                self.history_table.setColumnCount(8)
+                self.history_table.setHorizontalHeaderLabels([
+                    "Symbol", "Side", "Qty", "Price", "Total Cost", "Status", "Time", "Order ID"
+                ])
             self.history_table.setRowCount(len(closed))
+            running_total = 0
             for i, o in enumerate(closed):
+                qty = float(o.get("filled_qty", 0))
+                price = float(o.get("filled_avg_price", 0))
+                side = o.get("side", "")
+                cost = qty * price
+                # Buys are negative cash flow, sells are positive
+                if side == "buy":
+                    running_total -= cost
+                else:
+                    running_total += cost
+
                 vals = [
-                    o.get("symbol", ""), o.get("side", ""),
-                    o.get("filled_qty", "0"), f"${float(o.get('filled_avg_price', 0)):.2f}",
-                    o.get("status", ""), o.get("filled_at", "")[:19] if o.get("filled_at") else "",
-                    o.get("id", "")[:12],
+                    o.get("symbol", ""), side,
+                    f"{qty:.0f}", f"${price:.2f}",
+                    f"${cost:,.2f}", o.get("status", ""),
+                    o.get("filled_at", "")[:16] if o.get("filled_at") else "",
+                    o.get("id", "")[:10],
                 ]
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(str(v))
                     item.setTextAlignment(Qt.AlignCenter)
                     if j == 1:
                         item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
+                    if j == 4:
+                        item.setForeground(QColor(COLOR_SELL if side == "buy" else COLOR_BUY))
                     self.history_table.setItem(i, j, item)
+        else:
+            self.history_table.setRowCount(0)
 
         self._refresh_perf_chart()
         self._refresh_watchlist()
@@ -1617,7 +1703,21 @@ class PortfolioPanel(QWidget):
                       "3 Months": ("3M", "1D"), "1 Year": ("1A", "1D")}
         p, tf = period_map.get(self.perf_period.currentText(), ("1W", "1H"))
         hist = self.broker.get_portfolio_history(period=p, timeframe=tf)
+
+        cc = chart_colors()
         if "error" in hist or not hist.get("equity"):
+            # Show empty state message
+            self.perf_figure.clear()
+            self.perf_figure.set_facecolor(cc["fig_bg"])
+            ax = self.perf_figure.add_subplot(111)
+            ax.set_facecolor(cc["ax_bg"])
+            ax.text(0.5, 0.5, "No performance data available yet.\nStart trading to see your equity curve.",
+                    transform=ax.transAxes, ha='center', va='center',
+                    fontsize=11, color=cc["muted"], style='italic')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            self.perf_figure.tight_layout()
+            self.perf_canvas.draw()
             return
 
         self.perf_figure.clear()
@@ -2527,8 +2627,10 @@ class StockySuite(QMainWindow):
 
         # Notification bar — animated gradient background + market status
         self._notif_bar = _NotificationBar(self)
-        self.statusBar().addPermanentWidget(self._notif_bar, 1)
-        self.statusBar().setStyleSheet("border: none; padding: 0; margin: 0;")
+        sb = self.statusBar()
+        sb.addPermanentWidget(self._notif_bar, 1)
+        sb.setStyleSheet("QStatusBar { border: none; padding: 0; margin: 0; } QStatusBar::item { border: none; }")
+        sb.setSizeGripEnabled(False)
 
         # Refresh dashboard on startup
         if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh'):

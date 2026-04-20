@@ -158,6 +158,11 @@ def get_sector_tickers(sector, limit=15):
         "ETFs":           ["SPY", "QQQ", "IWM", "DIA", "VTI", "ARKK", "XLF", "XLE", "XLK", "XLV", "XLI", "XLC", "XLY", "XLP", "XLRE"],
         "Meme / Retail":  ["GME", "AMC", "BBBY", "SOFI", "PLTR", "RIVN", "NIO", "LCID", "WISH", "CLOV", "BB", "HOOD", "COIN", "MARA", "RIOT"],
         "Crypto-Related": ["COIN", "MARA", "RIOT", "MSTR", "BITF", "HUT", "CLSK", "SI", "SQ", "PYPL", "V", "MA", "HOOD", "GBTC", "ETHE"],
+        "Defense":        ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII", "TXT", "LDOS", "BWXT", "KTOS", "PLTR", "AVAV", "SPR", "TDG"],
+        "Utilities":      ["NEE", "DUK", "SO", "D", "AEP", "SRE", "EXC", "XEL", "WEC", "ED", "ES", "AWK", "ATO", "CMS", "DTE"],
+        "Materials":      ["LIN", "APD", "SHW", "ECL", "FCX", "NEM", "NUE", "VMC", "MLM", "DOW", "DD", "PPG", "ALB", "CF", "MOS"],
+        "Telecom":        ["T", "VZ", "TMUS", "LUMN", "USM", "SHEN", "GSAT", "LBRDA", "CHTR", "CMCSA", "DISH", "ATUS", "WBD", "PARA", "NXST"],
+        "Semiconductors": ["NVDA", "AMD", "AVGO", "QCOM", "TXN", "INTC", "MU", "MRVL", "LRCX", "AMAT", "KLAC", "ON", "SWKS", "MCHP", "ADI"],
     }
     return sector_map.get(sector, [])[:limit]
 
@@ -166,7 +171,9 @@ def get_all_sectors():
     """List available sector names."""
     return [
         "Technology", "Healthcare", "Finance", "Energy", "Consumer",
-        "Real Estate", "Industrials", "ETFs", "Meme / Retail", "Crypto-Related",
+        "Real Estate", "Industrials", "Defense", "Semiconductors",
+        "Utilities", "Materials", "Telecom",
+        "ETFs", "Meme / Retail", "Crypto-Related",
     ]
 
 
