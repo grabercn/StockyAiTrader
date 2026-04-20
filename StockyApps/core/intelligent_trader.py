@@ -75,12 +75,14 @@ from .logger import log_decision, log_event
 AGGRESSIVITY_PROFILES = {
     "Chill": {
         "description": "Patient trading. High confidence required, smaller positions, wider stops.",
-        "min_confidence": 0.70,     # Only trade on strong signals
-        "size_multiplier": 0.5,     # Half normal position size
-        "atr_stop_mult": 2.0,       # Wider stop loss (more room)
-        "atr_profit_mult": 3.5,     # Wider take profit
-        "urgency_bias": -0.15,      # Less eager to check frequently
+        "min_confidence": 0.70,
+        "size_multiplier": 0.5,
+        "atr_stop_mult": 2.0,
+        "atr_profit_mult": 3.5,
+        "urgency_bias": -0.15,
         "max_trades_per_day": 3,
+        "use_llm": False,           # Not needed — trades rarely
+        "min_hardware": "Minimal",  # Works on any hardware
     },
     "Default": {
         "description": "Balanced approach. Standard confidence, normal sizing, standard risk.",
@@ -90,6 +92,8 @@ AGGRESSIVITY_PROFILES = {
         "atr_profit_mult": 2.5,
         "urgency_bias": 0.0,
         "max_trades_per_day": 8,
+        "use_llm": True,            # LLM reasoning for trade decisions
+        "min_hardware": "Balanced",  # Needs FinBERT + LightGBM
     },
     "Aggressive": {
         "description": "Active trading. Lower thresholds, larger positions, tighter stops.",
@@ -99,6 +103,8 @@ AGGRESSIVITY_PROFILES = {
         "atr_profit_mult": 2.0,
         "urgency_bias": 0.10,
         "max_trades_per_day": 15,
+        "use_llm": True,
+        "min_hardware": "Balanced",
     },
     "YOLO": {
         "description": "Maximum aggression. Minimal thresholds, 2x sizing, tight stops, high frequency.",
@@ -108,8 +114,54 @@ AGGRESSIVITY_PROFILES = {
         "atr_profit_mult": 1.5,
         "urgency_bias": 0.25,
         "max_trades_per_day": 30,
+        "use_llm": True,
+        "min_hardware": "Max",      # Needs all addons for best signals at this risk level
     },
 }
+
+
+# ─── Hardware Profile Compatibility ──────────────────────────────────────────
+# Maps which aggressivity profiles are compatible with which hardware profiles.
+# If user picks an incompatible combo, we warn them.
+
+_HARDWARE_RANK = {"Minimal": 0, "Light": 1, "Balanced": 2, "Max": 3}
+
+
+def check_profile_compatibility(aggressivity_name, hardware_name):
+    """
+    Check if aggressivity + hardware profiles are compatible.
+
+    Returns:
+        (compatible: bool, warnings: list[str])
+    """
+    profile = AGGRESSIVITY_PROFILES.get(aggressivity_name, AGGRESSIVITY_PROFILES["Default"])
+    min_hw = profile.get("min_hardware", "Minimal")
+
+    hw_rank = _HARDWARE_RANK.get(hardware_name, 2)
+    min_rank = _HARDWARE_RANK.get(min_hw, 0)
+
+    warnings = []
+
+    if hw_rank < min_rank:
+        warnings.append(
+            f"{aggressivity_name} aggressivity recommends '{min_hw}' hardware profile or higher. "
+            f"You're on '{hardware_name}' — some features may be limited."
+        )
+
+    # Specific warnings
+    if aggressivity_name == "YOLO" and hardware_name in ("Minimal", "Light"):
+        warnings.append(
+            "YOLO mode on Light/Minimal hardware means fewer addon signals. "
+            "High-frequency trading without full data coverage increases risk."
+        )
+
+    if profile.get("use_llm") and hardware_name == "Minimal":
+        warnings.append(
+            "LLM reasoning is recommended for this mode but requires at least "
+            "Balanced hardware profile. Trade reasoning will use templates instead."
+        )
+
+    return len(warnings) == 0, warnings
 
 
 def get_aggressivity_names():

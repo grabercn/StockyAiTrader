@@ -45,5 +45,6 @@
             "LLY"
         ]
     },
-    "ui_zoom": 1.0
+    "ui_zoom": 1.0,
+    "aggressivity": "Default"
 }

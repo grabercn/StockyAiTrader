@@ -2299,16 +2299,28 @@ class SettingsPanel(QWidget):
         self._update_aggr_desc()
         self.bus.log_entry.emit(f"Trading aggressivity set to: {name}", "system")
 
+        # Check compatibility with current hardware profile
+        from core.intelligent_trader import check_profile_compatibility
+        from core.profiles import get_active_profile_name
+        hw = get_active_profile_name()
+        compatible, warnings = check_profile_compatibility(name, hw)
+        for w in warnings:
+            self.bus.log_entry.emit(w, "warn")
+
     def _update_aggr_desc(self):
         from core.intelligent_trader import get_aggressivity
         name = self.aggr_combo.currentData() or "Default"
         p = get_aggressivity(name)
+        llm = "Yes" if p.get("use_llm") else "No"
+        min_hw = p.get("min_hardware", "Minimal")
         self.aggr_desc.setText(
-            f"Min confidence: {p['min_confidence']:.0%}  |  "
-            f"Position size: {p['size_multiplier']:.1f}x  |  "
-            f"Max trades/day: {p['max_trades_per_day']}  |  "
-            f"Stop: {p['atr_stop_mult']:.1f}x ATR  |  "
-            f"Target: {p['atr_profit_mult']:.1f}x ATR"
+            f"Confidence: {p['min_confidence']:.0%}  |  "
+            f"Size: {p['size_multiplier']:.1f}x  |  "
+            f"Max trades: {p['max_trades_per_day']}/day  |  "
+            f"Stop: {p['atr_stop_mult']:.1f}x  |  "
+            f"Target: {p['atr_profit_mult']:.1f}x  |  "
+            f"LLM: {llm}  |  "
+            f"Needs: {min_hw}+ hardware"
         )
 
     def _change_theme(self, index):
@@ -2474,6 +2486,14 @@ class SettingsPanel(QWidget):
             self.bus.settings_changed.emit(load_settings())
             discover_addons()
             self._refresh()
+
+            # Check compatibility with aggressivity
+            from core.intelligent_trader import check_profile_compatibility
+            settings = load_settings()
+            aggr = settings.get("aggressivity", "Default")
+            compatible, warnings = check_profile_compatibility(aggr, name)
+            for w in warnings:
+                self.bus.log_entry.emit(w, "warn")
 
     def _save_custom_profile(self):
         from core.profiles import save_custom_profile, get_current_addon_states
@@ -3121,11 +3141,11 @@ class StockySuite(QMainWindow):
         QTimer.singleShot(2000, self._check_profile_warnings)
 
     def _check_profile_warnings(self):
-        """Warn user if their hardware profile limits addon coverage."""
+        """Warn user if their profiles have issues."""
         try:
+            # Check addon coverage
             from addons import get_all_addons
             all_addons = get_all_addons()
-            active = [a for a in all_addons if a.available and a.enabled]
             inactive = [a for a in all_addons if a.available and not a.enabled]
             unavailable = [a for a in all_addons if not a.available]
 
@@ -3133,17 +3153,27 @@ class StockySuite(QMainWindow):
                 names = ", ".join(a.name for a in inactive[:3])
                 extra = f" +{len(inactive)-3} more" if len(inactive) > 3 else ""
                 self.event_bus.log_entry.emit(
-                    f"{len(inactive)} addons disabled by profile ({names}{extra}) — "
-                    f"check Settings > Hardware Profile for full accuracy",
+                    f"{len(inactive)} addons disabled ({names}{extra}) — "
+                    f"check Settings > Hardware Profile",
                     "warn",
                 )
             if unavailable:
                 names = ", ".join(a.name for a in unavailable[:2])
                 self.event_bus.log_entry.emit(
-                    f"{len(unavailable)} addons need dependencies ({names}) — "
-                    f"install via Settings > Addons",
+                    f"{len(unavailable)} addons need install ({names}) — "
+                    f"Settings > Addons",
                     "system",
                 )
+
+            # Check aggressivity + hardware compatibility
+            from core.intelligent_trader import check_profile_compatibility
+            from core.profiles import get_active_profile_name
+            settings = load_settings()
+            aggr = settings.get("aggressivity", "Default")
+            hw = get_active_profile_name()
+            compatible, warnings = check_profile_compatibility(aggr, hw)
+            for w in warnings:
+                self.event_bus.log_entry.emit(w, "warn")
         except Exception:
             pass
 

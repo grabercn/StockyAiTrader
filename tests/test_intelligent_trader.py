@@ -110,6 +110,40 @@ class TestAggressivityProfiles:
         assert prof == default
 
 
+class TestProfileCompatibility:
+    def test_chill_works_on_minimal(self):
+        from core.intelligent_trader import check_profile_compatibility
+        ok, warnings = check_profile_compatibility("Chill", "Minimal")
+        assert ok, f"Chill should work on Minimal: {warnings}"
+
+    def test_yolo_warns_on_light(self):
+        from core.intelligent_trader import check_profile_compatibility
+        ok, warnings = check_profile_compatibility("YOLO", "Light")
+        assert not ok
+        assert len(warnings) > 0
+
+    def test_default_ok_on_balanced(self):
+        from core.intelligent_trader import check_profile_compatibility
+        ok, warnings = check_profile_compatibility("Default", "Balanced")
+        assert ok
+
+    def test_aggressive_warns_on_minimal(self):
+        from core.intelligent_trader import check_profile_compatibility
+        ok, warnings = check_profile_compatibility("Aggressive", "Minimal")
+        assert not ok
+
+    def test_yolo_ok_on_max(self):
+        from core.intelligent_trader import check_profile_compatibility
+        ok, warnings = check_profile_compatibility("YOLO", "Max")
+        assert ok
+
+    def test_profiles_have_hardware_fields(self):
+        for name in get_aggressivity_names():
+            p = get_aggressivity(name)
+            assert "use_llm" in p, f"{name} missing use_llm"
+            assert "min_hardware" in p, f"{name} missing min_hardware"
+
+
 class TestIntelligentStock:
     def test_creation(self):
         stock = IntelligentStock(ticker="AAPL")
