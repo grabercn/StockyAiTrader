@@ -3302,8 +3302,14 @@ class AboutDialog(QDialog):
 
 def boot_app():
     """Boot sequence with premium animated loading screen."""
+    # Set Windows AppUserModelID so taskbar shows our icon instead of Python's
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("grabercn.stockysuite.4")
+    except Exception:
+        pass
+
     # Enable Qt high DPI scaling BEFORE QApplication is created
-    # This is critical for 2560x1600 / 144 DPI screens
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
