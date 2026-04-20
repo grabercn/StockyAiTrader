@@ -235,6 +235,7 @@ class DashboardPanel(QWidget):
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(v)
                     item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     if j >= 5:
                         item.setForeground(QColor(COLOR_PROFIT if unrealized >= 0 else COLOR_LOSS))
                     self.pos_table.setItem(i, j, item)
@@ -258,6 +259,7 @@ class DashboardPanel(QWidget):
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(str(v))
                     item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     if j == 1:
                         item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
                     self.orders_table.setItem(i, j, item)

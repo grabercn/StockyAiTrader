@@ -319,6 +319,7 @@ class PortfolioPanel(QWidget):
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(v)
                     item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     if j >= 6 and j <= 7:
                         item.setForeground(QColor(COLOR_PROFIT if pnl >= 0 else COLOR_LOSS))
                     if j == 8 and pending > 0:
@@ -374,6 +375,7 @@ class PortfolioPanel(QWidget):
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(str(v))
                     item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     if j == 1:
                         item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
                     if j == 4:
