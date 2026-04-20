@@ -192,9 +192,9 @@ class StockySuite(QMainWindow):
                         f"Update available: v{APP_VERSION} → v{latest} — click to download",
                         "warn",
                     )
-                    # Make the notification bar clickable to open the download
+                    # Make the notification bar clickable — schedule on main thread
                     if hasattr(self, '_notif_bar'):
-                        self._notif_bar.set_click_url(url)
+                        QTimer.singleShot(500, lambda u=url: self._notif_bar.set_click_url(u))
                     log_event("update", f"New version v{latest} available at {url}")
 
                     # Also send a toast notification with the link
