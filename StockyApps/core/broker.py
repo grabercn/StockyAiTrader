@@ -77,9 +77,25 @@ class AlpacaBroker:
         """List all open positions with current P&L."""
         return self._get("positions")
 
-    def close_position(self, symbol):
-        """Close a single position by symbol."""
-        return self._delete(f"positions/{symbol}")
+    def close_position(self, symbol, qty=None):
+        """
+        Close/sell a position by symbol.
+        If qty is specified, sells that many shares (partial close).
+        If qty is None, closes the entire position.
+        """
+        try:
+            params = {}
+            if qty is not None:
+                params["qty"] = str(qty)
+            r = requests.delete(
+                f"{self.base_url}/positions/{symbol}",
+                headers=self.headers,
+                params=params,
+            )
+            r.raise_for_status()
+            return r.json() if r.content else {"status": "ok"}
+        except requests.RequestException as e:
+            return {"error": str(e)}
 
     def close_all_positions(self):
         """Emergency: liquidate everything."""

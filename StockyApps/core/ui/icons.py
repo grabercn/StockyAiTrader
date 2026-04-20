@@ -121,6 +121,40 @@ _SVGS = {
         <line x1="12" y1="9" x2="12" y2="13" stroke="{color}" stroke-width="2" stroke-linecap="round"/>
         <circle cx="12" cy="17" r="1" fill="{color}"/>
     </svg>""",
+
+    "robot": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="8" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="2"/>
+        <line x1="12" y1="4" x2="12" y2="8" stroke="{color}" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="12" cy="3" r="1.5" fill="{color}"/>
+        <circle cx="9" cy="14" r="1.5" fill="{color}"/>
+        <circle cx="15" cy="14" r="1.5" fill="{color}"/>
+        <line x1="9" y1="17" x2="15" y2="17" stroke="{color}" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>""",
+
+    "hand": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M18,10V6a2,2,0,0,0-4,0V4a2,2,0,0,0-4,0V6a2,2,0,0,0-4,0v7" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M6,13v-1a2,2,0,0,0-4,0v5a8,8,0,0,0,16,0V10a2,2,0,0,0-4,0" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>""",
+
+    "refresh": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="23,4 23,10 17,10" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="1,20 1,14 7,14" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M3.51,9a9,9,0,0,1,14.85-3.36L23,10M1,14l4.64,4.36A9,9,0,0,0,20.49,15" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>""",
+
+    "bell": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M18,8A6,6,0,0,0,6,8c0,7-3,9-3,9H21s-3-2-3-9" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M13.73,21a2,2,0,0,1-3.46,0" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>""",
+
+    "play": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="5,3 19,12 5,21" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round"/>
+    </svg>""",
+
+    "pause": """<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <rect x="6" y="4" width="4" height="16" rx="1" fill="none" stroke="{color}" stroke-width="2"/>
+        <rect x="14" y="4" width="4" height="16" rx="1" fill="none" stroke="{color}" stroke-width="2"/>
+    </svg>""",
 }
 
 # Icon cache: (name, size, color) -> QPixmap

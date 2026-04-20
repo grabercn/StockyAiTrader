@@ -196,19 +196,14 @@ class DashboardPanel(QWidget):
         pl.addWidget(pos_label)
 
         self.pos_table = QTableWidget()
-        self.pos_table.setColumnCount(7)
+        self.pos_table.setColumnCount(8)
         self.pos_table.setHorizontalHeaderLabels(
-            ["Symbol", "Side", "Qty", "Avg Cost", "Current", "P&L", "P&L %"])
-        self.pos_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            ["Symbol", "Side", "Qty", "Avg Cost", "Current", "P&L", "P&L %", ""])
+        for c in range(7):
+            self.pos_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self.pos_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.pos_table.verticalHeader().setVisible(False)
         pl.addWidget(self.pos_table)
-
-        from core.ui.icons import StockyIcons
-        close_btn = QPushButton("  Close All Positions")
-        close_btn.setIcon(StockyIcons.get_icon("x_mark", 14, "white"))
-        close_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px; padding: 6px;")
-        close_btn.clicked.connect(self._close_all)
-        pl.addWidget(close_btn)
         pos_widget.setLayout(pl)
         bl.addWidget(pos_widget, 3)
 
@@ -234,6 +229,18 @@ class DashboardPanel(QWidget):
         layout.addWidget(splitter)
         self.bus.log_entry.connect(self._on_activity)
         self.setLayout(layout)
+
+        # Auto-refresh timer (every 60 seconds)
+        self._refresh_interval = 60
+        self._countdown = self._refresh_interval
+        self._refresh_countdown_label = QLabel(f"Next refresh: {self._countdown}s")
+        self._refresh_countdown_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        self._refresh_countdown_label.setAlignment(Qt.AlignRight)
+        layout.addWidget(self._refresh_countdown_label)
+
+        self._auto_refresh = QTimer(self)
+        self._auto_refresh.timeout.connect(self._tick_refresh)
+        self._auto_refresh.start(1000)
 
         # Wire stat card clicks to detail popups
         self.card_portfolio.on_clicked = lambda: self._show_popup("equity")
@@ -281,15 +288,17 @@ class DashboardPanel(QWidget):
         pnl_color = COLOR_PROFIT if pnl >= 0 else COLOR_LOSS
         self.card_pnl.set_value(f"${pnl:+,.2f} ({pct:+.2f}%)", pnl_color)
 
-        # Positions
+        # Positions with per-stock sell buttons
         positions = self.broker.get_positions()
         if isinstance(positions, list):
             self.pos_table.setRowCount(len(positions))
             for i, p in enumerate(positions):
                 unrealized = float(p.get("unrealized_pl", 0))
+                sym = p.get("symbol", "")
+                qty = float(p.get("qty", 0))
                 vals = [
-                    p.get("symbol", ""), p.get("side", ""),
-                    f"{float(p.get('qty', 0)):.0f}",
+                    sym, p.get("side", ""),
+                    f"{qty:.0f}",
                     f"${float(p.get('avg_entry_price', 0)):.2f}",
                     f"${float(p.get('current_price', 0)):.2f}",
                     f"${unrealized:+,.2f}",
@@ -302,6 +311,12 @@ class DashboardPanel(QWidget):
                         item.setForeground(QColor(COLOR_PROFIT if unrealized >= 0 else COLOR_LOSS))
                     self.pos_table.setItem(i, j, item)
 
+                # Sell button per stock
+                sell_btn = QPushButton(f"Sell")
+                sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 10px; padding: 3px 8px;")
+                sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_position(s, q))
+                self.pos_table.setCellWidget(i, 7, sell_btn)
+
         # Chart
         hist = self.broker.get_portfolio_history(period="1W", timeframe="1H")
         if "error" not in hist and hist.get("equity"):
@@ -312,8 +327,8 @@ class DashboardPanel(QWidget):
         cc = chart_colors(); self.figure.set_facecolor(cc["fig_bg"])
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(cc["ax_bg"])
-        eq = hist["equity"]
-        ts = [datetime.fromtimestamp(t) for t in hist["timestamp"]]
+        eq = [e for e in hist["equity"] if e is not None]
+        ts = [datetime.fromtimestamp(t) for t, e in zip(hist["timestamp"], hist["equity"]) if e is not None]
         ax.plot(ts, eq, color=BRAND_PRIMARY, linewidth=1.5)
         ax.fill_between(ts, eq, alpha=0.08, color=BRAND_PRIMARY)
         ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
@@ -323,52 +338,33 @@ class DashboardPanel(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
 
-    def _close_all(self):
+        # Add hover tooltip
+        from core.ui.chart_tooltip import ChartTooltip
+        self._tooltip = ChartTooltip(self.canvas, ax, ts, eq)
+
+    def _sell_position(self, symbol, max_qty):
+        """Sell a specific position with qty picker. Uses close_position endpoint."""
         if not self.broker:
-            self.bus.log_entry.emit("Alpaca API not connected — configure in Settings", "error")
+            self.bus.log_entry.emit("Alpaca API not connected", "error")
             return
 
-        # Show positions in the confirmation dialog
-        positions = self.broker.get_positions()
-        if not isinstance(positions, list) or len(positions) == 0:
-            self.bus.log_entry.emit("No open positions to close", "info")
+        from PyQt5.QtWidgets import QInputDialog
+        qty, ok = QInputDialog.getInt(
+            self, f"Sell {symbol}",
+            f"How many shares of {symbol} to sell?\n(You own {max_qty})",
+            value=max_qty, min=1, max=max_qty,
+        )
+        if not ok:
             return
 
-        pos_lines = []
-        total_pnl = 0
-        for p in positions:
-            sym = p.get("symbol", "?")
-            qty = float(p.get("qty", 0))
-            pnl = float(p.get("unrealized_pl", 0))
-            total_pnl += pnl
-            sign = "+" if pnl >= 0 else ""
-            pos_lines.append(f"  {sym}  x{qty:.0f}  ({sign}${pnl:,.2f})")
-
-        msg = (
-            f"This will CLOSE all {len(positions)} open positions:\n\n"
-            + "\n".join(pos_lines) +
-            f"\n\nTotal unrealized P&L: {'+'if total_pnl>=0 else ''}${total_pnl:,.2f}\n\n"
-            "All positions will be sold/covered at market price.\n"
-            "This cannot be undone."
-        )
-
-        reply = QMessageBox.warning(
-            self, "Close All Positions", msg,
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-
-        if reply == QMessageBox.Yes:
-            result = self.broker.close_all_positions()
-            if "error" in result:
-                self.bus.log_entry.emit(f"Failed to close positions: {result['error']}", "error")
-            else:
-                self.bus.log_entry.emit(f"Closed {len(positions)} positions (P&L: ${total_pnl:+,.2f})", "trade")
-
-            # Force refresh after a short delay to let Alpaca process
-            QTimer.singleShot(1500, self.refresh)
-            QTimer.singleShot(3000, self.refresh)  # Double-tap in case first is too early
+        # Use close_position endpoint (not place_order) — avoids 403 short sell restriction
+        result = self.broker.close_position(symbol, qty=qty)
+        if "error" in result:
+            self.bus.log_entry.emit(f"Sell {symbol} x{qty} failed: {result['error']}", "error")
+        else:
+            self.bus.log_entry.emit(f"Sold {symbol} x{qty} — order {result.get('id', '?')}", "trade")
             self.bus.positions_changed.emit()
+            QTimer.singleShot(2000, self.refresh)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -446,14 +442,25 @@ class ScannerPanel(QWidget):
 
         # Scan settings row
         settings_row = QHBoxLayout()
-        settings_row.addWidget(QLabel("Period:"))
+        period_lbl = QLabel("Training Data:")
+        period_lbl.setToolTip("How many days of historical price data the AI model trains on.\nMore days = more context but slower. 5d is recommended for day trading.")
+        settings_row.addWidget(period_lbl)
         self.period_cb = QComboBox()
-        self.period_cb.addItems(["5d", "3d", "2d", "1d"])
+        self.period_cb.addItems(["5 days", "3 days", "2 days", "1 day"])
+        self.period_cb.setToolTip("Amount of historical data used to train the AI model for each stock")
         settings_row.addWidget(self.period_cb)
-        settings_row.addWidget(QLabel("Interval:"))
+        interval_lbl = QLabel("Bar Size:")
+        interval_lbl.setToolTip("The time interval for each price bar.\n5min = one data point every 5 minutes.\nSmaller bars = more data points but noisier.")
+        settings_row.addWidget(interval_lbl)
         self.interval_cb = QComboBox()
-        self.interval_cb.addItems(["5m", "1m", "15m"])
+        self.interval_cb.addItems(["5 min", "1 min", "15 min"])
+        self.interval_cb.setToolTip("Price bar interval — how frequently data points are sampled")
         settings_row.addWidget(self.interval_cb)
+
+        # Help note
+        help_lbl = QLabel("ℹ Training Data = how far back to look. Bar Size = data resolution.")
+        help_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        settings_row.addWidget(help_lbl)
         settings_row.addStretch()
 
         self.scan_btn = QPushButton("  SCAN & RANK")
@@ -469,14 +476,14 @@ class ScannerPanel(QWidget):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        # Results table
+        # Results table (added Monitor column)
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels(
-            ["", "Ticker", "Signal", "Conf", "Price", "Shares", "SL/TP", "Score", "Reasoning"])
-        for c in range(8):
+            ["", "Ticker", "Signal", "Conf", "Price", "Shares", "SL/TP", "Score", "Monitor", "Reasoning"])
+        for c in range(9):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.cellClicked.connect(self._on_row_clicked)
@@ -696,8 +703,13 @@ class ScannerPanel(QWidget):
         self.bus.log_entry.emit(f"Scanning {len(tickers)} tickers from {source}...", "info")
         self._t0 = time.time()
 
-        self._worker = ScanWorker(tickers, self.period_cb.currentText(),
-                                  self.interval_cb.currentText(), self.rm)
+        # Map display text back to API values
+        period_map = {"5 days": "5d", "3 days": "3d", "2 days": "2d", "1 day": "1d"}
+        interval_map = {"5 min": "5m", "1 min": "1m", "15 min": "15m"}
+        period = period_map.get(self.period_cb.currentText(), "5d")
+        interval = interval_map.get(self.interval_cb.currentText(), "5m")
+
+        self._worker = ScanWorker(tickers, period, interval, self.rm)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
@@ -738,7 +750,7 @@ class ScannerPanel(QWidget):
                 (f"{r.confidence:.0%}", None), (f"${r.price:.2f}" if r.price else "--", None),
                 (str(r.position_size) if r.position_size else "--", None),
                 (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss else "--", None),
-                (f"{r.score:.2f}", None), (r.reasoning[:80] if r.reasoning else r.error or "", None),
+                (f"{r.score:.2f}", None),
             ]
             for j, (val, color) in enumerate(items):
                 it = QTableWidgetItem(val)
@@ -749,6 +761,25 @@ class ScannerPanel(QWidget):
                 if j == 0:
                     it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
                 self.table.setItem(i, j+1, it)
+
+            # Auto-trade toggle button with icon
+            is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
+            monitor_btn = QPushButton()
+            if is_monitored:
+                monitor_btn.setIcon(StockyIcons.get_icon("robot", 14, BRAND_ACCENT))
+                monitor_btn.setToolTip(f"Auto-trading {r.ticker} — click to stop")
+                monitor_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}30; border: 1px solid {BRAND_ACCENT}; padding: 3px 6px; border-radius: 4px;")
+            else:
+                monitor_btn.setIcon(StockyIcons.get_icon("play", 14, TEXT_MUTED))
+                monitor_btn.setToolTip(f"Start auto-trading {r.ticker}")
+                monitor_btn.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; padding: 3px 6px; border-radius: 4px;")
+            monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
+            self.table.setCellWidget(i, 8, monitor_btn)
+
+            # Reasoning (last column)
+            reason_it = QTableWidgetItem(r.reasoning[:80] if r.reasoning else r.error or "")
+            reason_it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 9, reason_it)
 
         buys = sum(1 for r in results if r.action == "BUY")
         sells = sum(1 for r in results if r.action == "SELL")
@@ -795,6 +826,16 @@ class ScannerPanel(QWidget):
                 bar_len = int(min(imp / 100, 20))
                 bar = "█" * bar_len
                 lines.append(f'  <span style="color:{BRAND_ACCENT}">{bar}</span> {feat}: {imp:.0f}')
+
+        # Trade metadata
+        lines.append("")
+        lines.append(f'<b style="color:{BRAND_PRIMARY}">Trade Info</b>')
+        trade_type = "Intraday (Day Trade)" if r.atr and r.atr / r.price < 0.03 else "Swing Trade"
+        interval_txt = self.interval_cb.currentText() if hasattr(self, 'interval_cb') else "5 min"
+        period_txt = self.period_cb.currentText() if hasattr(self, 'period_cb') else "5 days"
+        lines.append(f'  Type: {trade_type}')
+        lines.append(f'  Training Data: {period_txt}  |  Bar Size: {interval_txt}')
+        lines.append(f'  Volatility: {"High" if r.atr/r.price > 0.02 else "Low"} ({r.atr/r.price*100:.1f}% ATR)')
 
         if r.reasoning:
             lines.append("")
@@ -906,21 +947,177 @@ class ScannerPanel(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        result = self.broker.place_order(r.ticker, qty, side,
-                                         stop_loss=r.stop_loss, take_profit=r.take_profit)
+        # Use close_position for sells (avoids 403 short sell restriction)
+        # Use place_order for buys
+        if side == "sell":
+            result = self.broker.close_position(r.ticker, qty=qty)
+        else:
+            result = self.broker.place_order(r.ticker, qty, side,
+                                             stop_loss=r.stop_loss, take_profit=r.take_profit)
         if "error" in result:
             self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} failed: {result['error']}", "error")
         else:
             self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} — order {result.get('id','?')}", "trade")
             self.bus.positions_changed.emit()
-            # Refresh detail to update sell button visibility
             QTimer.singleShot(2000, lambda: self._show_detail(r))
 
     def _deep_analyze(self):
-        """Send ticker to Day Trade panel for deep analysis."""
-        if self._selected_result:
-            self.bus.ticker_selected.emit(self._selected_result.ticker)
-            self.bus.log_entry.emit(f"Opening {self._selected_result.ticker} in Day Trade for deep analysis", "info")
+        """Open a full technical report popup for the selected stock."""
+        if not self._selected_result:
+            self.bus.log_entry.emit("Select a stock first", "warn")
+            return
+
+        r = self._selected_result
+
+        # Build a comprehensive report
+        report = []
+        report.append(f"{'='*60}")
+        report.append(f"  DEEP ANALYSIS REPORT — {r.ticker}")
+        report.append(f"  Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"{'='*60}")
+        report.append("")
+        report.append(f"SIGNAL: {r.action}  |  Confidence: {r.confidence:.1%}  |  Score: {r.score:.3f}")
+        report.append(f"Price: ${r.price:.2f}  |  ATR: ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)")
+        report.append("")
+        report.append(f"{'─'*60}")
+        report.append("PROBABILITIES")
+        report.append(f"  SELL:  {r.probs[0]:.1%}  {'█' * int(r.probs[0]*30)}")
+        report.append(f"  HOLD:  {r.probs[1]:.1%}  {'█' * int(r.probs[1]*30)}")
+        report.append(f"  BUY:   {r.probs[2]:.1%}  {'█' * int(r.probs[2]*30)}")
+        report.append("")
+        report.append(f"{'─'*60}")
+        report.append("RISK MANAGEMENT")
+        report.append(f"  Position Size:  {r.position_size} shares")
+        report.append(f"  Stop Loss:      ${r.stop_loss:.2f} ({(r.price-r.stop_loss)/r.price*100:.1f}% from entry)")
+        report.append(f"  Take Profit:    ${r.take_profit:.2f} ({(r.take_profit-r.price)/r.price*100:.1f}% from entry)")
+        report.append(f"  Risk/Reward:    1:{(r.take_profit-r.price)/(r.price-r.stop_loss):.1f}" if r.stop_loss < r.price else "")
+        report.append(f"  Max Loss:       ${r.position_size * (r.price - r.stop_loss):,.2f}")
+        report.append(f"  Max Gain:       ${r.position_size * (r.take_profit - r.price):,.2f}")
+
+        if r.feature_importances:
+            report.append("")
+            report.append(f"{'─'*60}")
+            report.append("TOP FEATURE DRIVERS (what the AI focused on)")
+            for feat, imp in sorted(r.feature_importances.items(), key=lambda x: -x[1])[:10]:
+                bar = "█" * int(min(imp / 50, 30))
+                report.append(f"  {bar} {feat}: {imp:.0f}")
+
+        if r.reasoning:
+            report.append("")
+            report.append(f"{'─'*60}")
+            report.append("AI REASONING")
+            for part in r.reasoning.split(" | "):
+                report.append(f"  • {part}")
+
+        report.append("")
+        report.append(f"{'='*60}")
+
+        # Show in a dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Deep Analysis — {r.ticker}")
+        dlg.setMinimumSize(600, 500)
+        bg = theme.color("bg_base") if hasattr(theme, 'color') else BG_DARKEST
+        dlg.setStyleSheet(f"QDialog {{ background-color: {bg}; }}")
+        lay = QVBoxLayout()
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        txt.setFont(QFont(FONT_MONO, 10))
+        txt.setPlainText("\n".join(report))
+        lay.addWidget(txt)
+
+        # Also send to Day Trade
+        btn_row = QHBoxLayout()
+        day_btn = QPushButton("Open in Day Trade")
+        day_btn.clicked.connect(lambda: (self.bus.ticker_selected.emit(r.ticker), dlg.accept()))
+        btn_row.addWidget(day_btn)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+        dlg.setLayout(lay)
+        dlg.exec_()
+
+    # ── Auto-Trade Monitoring ───────────────────────────────────────────
+
+    def _get_auto_service(self):
+        """Get or create the auto-trader service."""
+        if not hasattr(self, '_auto_service') or self._auto_service is None:
+            from core.auto_trader import AutoTraderService
+            self._auto_service = AutoTraderService(broker=self.broker, risk_manager=self.rm)
+            self._auto_service.log.connect(self.bus.log_entry.emit)
+            self._auto_service.stock_updated.connect(self._on_auto_update)
+            self._auto_service.trade_executed.connect(
+                lambda t, s, q, o: self.bus.trade_executed.emit(t, s, q, o)
+            )
+            self._auto_service.start()
+        return self._auto_service
+
+    def _toggle_auto_trade(self, ticker):
+        """Toggle auto-trade monitoring for a stock."""
+        svc = self._get_auto_service()
+        period_map = {"5 days": "5d", "3 days": "3d", "2 days": "2d", "1 day": "1d"}
+        interval_map = {"5 min": "5m", "1 min": "1m", "15 min": "15m"}
+        period = period_map.get(self.period_cb.currentText(), "5d")
+        interval = interval_map.get(self.interval_cb.currentText(), "5m")
+
+        if svc.is_monitoring(ticker):
+            svc.remove_stock(ticker)
+            self.bus.log_entry.emit(f"Stopped auto-trading {ticker}", "info")
+        else:
+            svc.add_stock(ticker, period=period, interval=interval, auto_execute=True, min_confidence=0.5)
+            self.bus.log_entry.emit(
+                f"Auto-trading {ticker} — {period} data, checking every {interval}",
+                "trade",
+            )
+
+        # Refresh table to update button icons
+        if self.results:
+            self._refresh_monitor_icons()
+
+    def _refresh_monitor_icons(self):
+        """Update all monitor toggle buttons to reflect current state."""
+        from core.ui.icons import StockyIcons
+        svc = self._auto_service if hasattr(self, '_auto_service') and self._auto_service else None
+        for i in range(self.table.rowCount()):
+            ticker_item = self.table.item(i, 1)
+            if not ticker_item:
+                continue
+            ticker = ticker_item.text()
+            btn = self.table.cellWidget(i, 8)
+            if not btn:
+                continue
+            is_mon = svc and svc.is_monitoring(ticker)
+            if is_mon:
+                btn.setIcon(StockyIcons.get_icon("robot", 14, BRAND_ACCENT))
+                btn.setToolTip(f"Auto-trading {ticker} — click to stop")
+                btn.setStyleSheet(f"background-color: {BRAND_ACCENT}30; border: 1px solid {BRAND_ACCENT}; padding: 3px 6px; border-radius: 4px;")
+            else:
+                btn.setIcon(StockyIcons.get_icon("play", 14, TEXT_MUTED))
+                btn.setToolTip(f"Start auto-trading {ticker}")
+                btn.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; padding: 3px 6px; border-radius: 4px;")
+
+    def _on_auto_update(self, ticker, action, confidence, price, next_secs):
+        """Called by auto-trader service when a stock is checked."""
+        # Update the table row if this ticker is visible
+        for i in range(self.table.rowCount()):
+            ticker_item = self.table.item(i, 1)
+            if ticker_item and ticker_item.text() == ticker:
+                # Update signal
+                sig_item = self.table.item(i, 2)
+                if sig_item:
+                    sig_item.setText(action)
+                    colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
+                    sig_item.setForeground(QColor(colors.get(action, TEXT_MUTED)))
+                # Update confidence
+                conf_item = self.table.item(i, 3)
+                if conf_item:
+                    conf_item.setText(f"{confidence:.0%}")
+                # Update price
+                price_item = self.table.item(i, 4)
+                if price_item:
+                    price_item.setText(f"${price:.2f}")
+                break
 
     # ── Selection / Invest ────────────────────────────────────────────────
 
@@ -958,8 +1155,11 @@ class ScannerPanel(QWidget):
 
         for r in actionable:
             side = "buy" if r.action == "BUY" else "sell"
-            result = self.broker.place_order(r.ticker, r.position_size, side,
-                                             stop_loss=r.stop_loss, take_profit=r.take_profit)
+            if side == "sell":
+                result = self.broker.close_position(r.ticker, qty=r.position_size)
+            else:
+                result = self.broker.place_order(r.ticker, r.position_size, side,
+                                                 stop_loss=r.stop_loss, take_profit=r.take_profit)
             oid = result.get("id", "failed")
             if "error" in result:
                 self.bus.log_entry.emit(f"{r.action} {r.ticker} FAILED: {result['error']}", "error")
@@ -1436,9 +1636,9 @@ class PortfolioPanel(QWidget):
         holdings_w = QWidget()
         hl = QVBoxLayout()
         self.holdings_table = QTableWidget()
-        self.holdings_table.setColumnCount(8)
+        self.holdings_table.setColumnCount(10)
         self.holdings_table.setHorizontalHeaderLabels([
-            "Symbol", "Side", "Qty", "Avg Cost", "Current", "Market Value", "P&L", "P&L %"
+            "Symbol", "Side", "Qty", "Avg Cost", "Current", "Market Value", "P&L", "P&L %", "Orders", ""
         ])
         self.holdings_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.holdings_table.verticalHeader().setVisible(False)
@@ -1539,6 +1739,27 @@ class PortfolioPanel(QWidget):
         elif kind == "pnl":
             show_pnl_popup(self.broker, self)
 
+    def _sell_holding(self, symbol, max_qty):
+        """Sell shares of a specific holding."""
+        if not self.broker:
+            self.bus.log_entry.emit("Alpaca API not connected", "error")
+            return
+        from PyQt5.QtWidgets import QInputDialog
+        qty, ok = QInputDialog.getInt(
+            self, f"Sell {symbol}",
+            f"How many shares of {symbol} to sell?\n(You own {max_qty})",
+            value=max_qty, min=1, max=max_qty,
+        )
+        if not ok:
+            return
+        result = self.broker.close_position(symbol, qty=qty)
+        if "error" in result:
+            self.bus.log_entry.emit(f"Sell {symbol} x{qty} failed: {result['error']}", "error")
+        else:
+            self.bus.log_entry.emit(f"Sold {symbol} x{qty}", "trade")
+            self.bus.positions_changed.emit()
+            QTimer.singleShot(2000, self.refresh)
+
     def _on_holding_clicked(self, row, col):
         """Open detail popup for a clicked holding."""
         item = self.holdings_table.item(row, 0)
@@ -1618,29 +1839,48 @@ class PortfolioPanel(QWidget):
                 COLOR_PROFIT if pnl >= 0 else COLOR_LOSS,
             )
 
-        # Holdings
+        # Holdings + pending orders
         positions = self.broker.get_positions()
+        open_orders = self.broker.get_orders("open")
+        order_counts = {}
+        if isinstance(open_orders, list):
+            for o in open_orders:
+                sym = o.get("symbol", "")
+                order_counts[sym] = order_counts.get(sym, 0) + 1
+
         if isinstance(positions, list):
             self.card_positions.set_value(str(len(positions)))
             self.holdings_table.setRowCount(len(positions))
             for i, p in enumerate(positions):
+                sym = p.get("symbol", "")
                 qty = float(p.get("qty", 0))
                 avg = float(p.get("avg_entry_price", 0))
                 cur = float(p.get("current_price", 0))
                 mv = qty * cur
                 pnl = float(p.get("unrealized_pl", 0))
                 pnl_pct = float(p.get("unrealized_plpc", 0)) * 100
+                pending = order_counts.get(sym, 0)
+
                 vals = [
-                    p.get("symbol", ""), p.get("side", ""),
+                    sym, p.get("side", ""),
                     f"{qty:.0f}", f"${avg:.2f}", f"${cur:.2f}",
                     f"${mv:,.2f}", f"${pnl:+,.2f}", f"{pnl_pct:+.2f}%",
+                    f"{pending} pending" if pending > 0 else "—",
                 ]
                 for j, v in enumerate(vals):
                     item = QTableWidgetItem(v)
                     item.setTextAlignment(Qt.AlignCenter)
-                    if j >= 6:
+                    if j >= 6 and j <= 7:
                         item.setForeground(QColor(COLOR_PROFIT if pnl >= 0 else COLOR_LOSS))
+                    if j == 8 and pending > 0:
+                        item.setForeground(QColor(COLOR_HOLD))
                     self.holdings_table.setItem(i, j, item)
+
+                # Sell button per stock
+                sell_btn = QPushButton("Sell")
+                sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 10px; padding: 3px 8px;")
+                sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_holding(s, q))
+                self.holdings_table.setCellWidget(i, 9, sell_btn)
         else:
             self.card_positions.set_value("0")
             self.holdings_table.setRowCount(0)
@@ -1747,20 +1987,42 @@ class PortfolioPanel(QWidget):
         name = self.wl_select.currentText()
         wls = get_watchlists()
         tickers = wls.get(name, [])
+
+        # Update table columns
+        self.wl_table.setColumnCount(4)
+        self.wl_table.setHorizontalHeaderLabels(["Ticker", "Price", "Change", ""])
+        self.wl_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in range(1, 4):
+            self.wl_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+
         self.wl_table.setRowCount(len(tickers))
         for i, t in enumerate(tickers):
             self.wl_table.setItem(i, 0, QTableWidgetItem(t))
-            # Try to get price
             try:
-                price = yf.Ticker(t).fast_info.last_price
-                self.wl_table.setItem(i, 1, QTableWidgetItem(f"${price:.2f}"))
+                hist = yf.Ticker(t).history(period="2d")
+                if not hist.empty and len(hist) >= 1:
+                    price = hist["Close"].iloc[-1]
+                    self.wl_table.setItem(i, 1, QTableWidgetItem(f"${price:.2f}"))
+                    if len(hist) >= 2:
+                        prev = hist["Close"].iloc[-2]
+                        chg = price - prev
+                        pct = (chg / prev * 100) if prev != 0 else 0
+                        chg_item = QTableWidgetItem(f"{'+'if chg>=0 else ''}{chg:.2f} ({pct:+.1f}%)")
+                        chg_item.setForeground(QColor(COLOR_BUY if chg >= 0 else COLOR_SELL))
+                        self.wl_table.setItem(i, 2, chg_item)
+                    else:
+                        self.wl_table.setItem(i, 2, QTableWidgetItem("--"))
+                else:
+                    self.wl_table.setItem(i, 1, QTableWidgetItem("--"))
+                    self.wl_table.setItem(i, 2, QTableWidgetItem("--"))
             except Exception:
                 self.wl_table.setItem(i, 1, QTableWidgetItem("--"))
-            # Remove button
+                self.wl_table.setItem(i, 2, QTableWidgetItem("--"))
+
             rm_btn = QPushButton("Remove")
             rm_btn.setStyleSheet(f"font-size: 9px; padding: 2px; background-color: {BG_INPUT};")
             rm_btn.clicked.connect(lambda _, tk=t: self._remove_from_watchlist(tk))
-            self.wl_table.setCellWidget(i, 2, rm_btn)
+            self.wl_table.setCellWidget(i, 3, rm_btn)
 
     def _add_to_watchlist(self, ticker):
         from core.discovery import get_watchlists, save_watchlist

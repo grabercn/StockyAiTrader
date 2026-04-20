@@ -20,5 +20,29 @@
     "scanner_workers": 3,
     "custom_profiles": {},
     "setup_complete": true,
-    "theme": "auto"
+    "theme": "auto",
+    "watchlists": {
+        "Test": [
+            "AAPL",
+            "MSFT",
+            "GOOGL",
+            "AMZN",
+            "NVDA",
+            "META",
+            "TSLA",
+            "BRK-B",
+            "UNH",
+            "JNJ",
+            "JPM",
+            "V",
+            "XOM",
+            "PG",
+            "MA",
+            "HD",
+            "CVX",
+            "MRK",
+            "ABBV",
+            "LLY"
+        ]
+    }
 }
