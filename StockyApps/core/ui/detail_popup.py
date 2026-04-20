@@ -219,9 +219,11 @@ class DetailPopup(QDialog):
         layout.addWidget(self._change_lbl)
 
         # Chart
-        self._figure = plt.Figure(dpi=100, facecolor=BG_DARKEST if theme.is_dark else "#f8fafc")
+        fig_bg = BG_DARKEST if theme.is_dark else "#f8fafc"
+        self._figure = plt.Figure(dpi=100, facecolor=fig_bg)
         self._canvas = FigureCanvas(self._figure)
-        self._canvas.setMinimumHeight(200)
+        self._canvas.setMinimumHeight(180)
+        self._canvas.setStyleSheet(f"background-color: {fig_bg};")
         layout.addWidget(self._canvas, 1)
 
         # Stats grid

@@ -528,23 +528,55 @@ class ScannerPanel(QWidget):
         self.detail_stats.setFont(QFont(FONT_MONO, 10))
         dp_layout.addWidget(self.detail_stats)
 
-        # Quick-trade buttons for selected stock
-        trade_row = QHBoxLayout()
-        self.detail_buy_btn = QPushButton("  Quick BUY")
+        # Quick-trade controls
+        trade_box = QGroupBox("Quick Trade")
+        tbl = QVBoxLayout()
+        tbl.setSpacing(4)
+
+        # Quantity row
+        qty_row = QHBoxLayout()
+        qty_row.addWidget(QLabel("Shares:"))
+        self.detail_qty = QSpinBox()
+        self.detail_qty.setRange(1, 10000)
+        self.detail_qty.setValue(1)
+        self.detail_qty.setStyleSheet(f"padding: 4px 8px; min-width: 80px;")
+        qty_row.addWidget(self.detail_qty)
+        self.detail_qty_label = QLabel("")
+        self.detail_qty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        qty_row.addWidget(self.detail_qty_label, 1)
+        tbl.addLayout(qty_row)
+
+        # Buy button
+        buy_row = QHBoxLayout()
+        self.detail_buy_btn = QPushButton("  BUY")
         self.detail_buy_btn.setIcon(StockyIcons.get_icon("arrow_up", 14, "white"))
-        self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 11px;")
+        self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 12px; padding: 8px;")
         self.detail_buy_btn.clicked.connect(lambda: self._quick_trade("buy"))
-        trade_row.addWidget(self.detail_buy_btn)
-        self.detail_sell_btn = QPushButton("  Quick SELL")
+        buy_row.addWidget(self.detail_buy_btn)
+        tbl.addLayout(buy_row)
+
+        # Sell button (hidden until user owns the stock)
+        sell_row = QHBoxLayout()
+        self.detail_sell_btn = QPushButton("  SELL")
         self.detail_sell_btn.setIcon(StockyIcons.get_icon("arrow_down", 14, "white"))
-        self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px;")
+        self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 12px; padding: 8px;")
         self.detail_sell_btn.clicked.connect(lambda: self._quick_trade("sell"))
-        trade_row.addWidget(self.detail_sell_btn)
-        self.detail_analyze_btn = QPushButton("Deep Analyze")
-        self.detail_analyze_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px;")
+        self.detail_sell_btn.setVisible(False)
+        sell_row.addWidget(self.detail_sell_btn)
+        self.detail_owned_label = QLabel("")
+        self.detail_owned_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        sell_row.addWidget(self.detail_owned_label)
+        tbl.addLayout(sell_row)
+
+        # Deep analyze button
+        self.detail_analyze_btn = QPushButton("  Deep Analyze")
+        self.detail_analyze_btn.setIcon(StockyIcons.get_icon("brain", 14, BRAND_PRIMARY))
+        self.detail_analyze_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px; padding: 6px;")
         self.detail_analyze_btn.clicked.connect(self._deep_analyze)
-        trade_row.addWidget(self.detail_analyze_btn)
-        dp_layout.addLayout(trade_row)
+        tbl.addWidget(self.detail_analyze_btn)
+
+        trade_box.setLayout(tbl)
+        dp_layout.addWidget(trade_box)
 
         self.detail_panel.setLayout(dp_layout)
         splitter.addWidget(self.detail_panel)
@@ -772,6 +804,51 @@ class ScannerPanel(QWidget):
 
         self.detail_stats.setHtml("<br>".join(lines))
 
+        # Set quantity to AI recommendation
+        qty = r.position_size if r.position_size > 0 else 1
+        self.detail_qty.setValue(qty)
+        self.detail_qty_label.setText(f"AI recommends {r.position_size} shares")
+
+        # Update buy button text with quantity and cost
+        cost = qty * r.price if r.price > 0 else 0
+        self.detail_buy_btn.setText(f"  BUY {qty} shares (${cost:,.0f})")
+
+        # Check if user owns this stock — show/hide sell button
+        owned_qty = 0
+        if self.broker:
+            try:
+                positions = self.broker.get_positions()
+                if isinstance(positions, list):
+                    for p in positions:
+                        if p.get("symbol", "").upper() == r.ticker.upper():
+                            owned_qty = int(float(p.get("qty", 0)))
+                            break
+            except Exception:
+                pass
+
+        if owned_qty > 0:
+            self.detail_sell_btn.setVisible(True)
+            self.detail_sell_btn.setText(f"  SELL {min(qty, owned_qty)} shares")
+            self.detail_owned_label.setText(f"You own {owned_qty} shares")
+            # Default sell qty to what AI recommends or what user owns, whichever is less
+            if r.action == "SELL":
+                self.detail_qty.setValue(min(r.position_size, owned_qty))
+        else:
+            self.detail_sell_btn.setVisible(False)
+            self.detail_owned_label.setText("You don't own this stock")
+
+        # Update buttons when user changes quantity
+        try:
+            self.detail_qty.valueChanged.disconnect()
+        except Exception:
+            pass
+        self.detail_qty.valueChanged.connect(
+            lambda v: (
+                self.detail_buy_btn.setText(f"  BUY {v} shares (${v * r.price:,.0f})"),
+                self.detail_sell_btn.setText(f"  SELL {min(v, owned_qty)} shares") if owned_qty > 0 else None,
+            )
+        )
+
         # Chart
         self._draw_detail_chart(r.ticker)
 
@@ -810,16 +887,34 @@ class ScannerPanel(QWidget):
             self.bus.log_entry.emit("Alpaca API not connected — go to Settings to configure", "error")
             return
         r = self._selected_result
-        if r.position_size <= 0:
-            self.bus.log_entry.emit(f"Position size is 0 for {r.ticker} — risk too high", "warn")
+        qty = self.detail_qty.value()
+        if qty <= 0:
+            self.bus.log_entry.emit(f"Set quantity to at least 1 share", "warn")
             return
-        result = self.broker.place_order(r.ticker, r.position_size, side,
+
+        cost = qty * r.price
+        confirm = QMessageBox.question(
+            self, f"Confirm {side.upper()}",
+            f"{side.upper()} {qty} shares of {r.ticker}\n"
+            f"Price: ${r.price:.2f}\n"
+            f"Total: ${cost:,.2f}\n"
+            f"Stop Loss: ${r.stop_loss:.2f}\n"
+            f"Take Profit: ${r.take_profit:.2f}\n\n"
+            f"Proceed?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        result = self.broker.place_order(r.ticker, qty, side,
                                          stop_loss=r.stop_loss, take_profit=r.take_profit)
         if "error" in result:
-            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} failed: {result['error']}", "error")
+            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} failed: {result['error']}", "error")
         else:
-            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{r.position_size} — order {result.get('id','?')}", "trade")
+            self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} — order {result.get('id','?')}", "trade")
             self.bus.positions_changed.emit()
+            # Refresh detail to update sell button visibility
+            QTimer.singleShot(2000, lambda: self._show_detail(r))
 
     def _deep_analyze(self):
         """Send ticker to Day Trade panel for deep analysis."""
@@ -1299,6 +1394,8 @@ class PortfolioPanel(QWidget):
         self._build()
         self.bus.positions_changed.connect(self.refresh)
         self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
+        # Initial data load after a short delay (let UI finish building)
+        QTimer.singleShot(1000, self.refresh)
 
     def _build(self):
         from core.ui.backgrounds import GradientHeader
