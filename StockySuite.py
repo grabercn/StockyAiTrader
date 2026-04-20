@@ -2990,18 +2990,23 @@ class _NotificationBar(QWidget):
             return
 
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit
-        dlg = QDialog(self.window())
+        from core.ui.theme import theme as _theme
+
+        # Find the actual top-level window
+        parent = self
+        while parent.parent():
+            parent = parent.parent()
+
+        dlg = QDialog(parent)
         dlg.setWindowTitle("Notifications")
         dlg.setMinimumSize(450, 350)
-        bg = theme.color("bg_base") if hasattr(theme, 'color') else BG_DARKEST
-        dlg.setStyleSheet(f"QDialog {{ background-color: {bg}; }}")
+        dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
 
         lay = QVBoxLayout()
         txt = QTextEdit()
         txt.setReadOnly(True)
         txt.setFont(QFont(FONT_MONO, 10))
 
-        from core.branding import log_html as _lh
         for ts, msg, level in reversed(self._notif_history):
             colors = {"info": BRAND_PRIMARY, "trade": BRAND_ACCENT, "warn": COLOR_HOLD, "error": COLOR_SELL, "system": TEXT_MUTED}
             c = colors.get(level, TEXT_SECONDARY)

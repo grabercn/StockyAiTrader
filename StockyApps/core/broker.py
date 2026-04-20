@@ -77,13 +77,36 @@ class AlpacaBroker:
         """List all open positions with current P&L."""
         return self._get("positions")
 
+    def cancel_orders_for_symbol(self, symbol):
+        """Cancel all open orders for a specific symbol (frees held shares)."""
+        try:
+            orders = self.get_orders("open")
+            if not isinstance(orders, list):
+                return
+            for o in orders:
+                if o.get("symbol", "").upper() == symbol.upper():
+                    oid = o.get("id")
+                    if oid:
+                        requests.delete(f"{self.base_url}/orders/{oid}", headers=self.headers)
+        except Exception:
+            pass
+
     def close_position(self, symbol, qty=None):
         """
         Close/sell a position by symbol.
-        If qty is specified, sells that many shares (partial close).
-        If qty is None, closes the entire position.
+
+        Automatically cancels any open orders holding shares first
+        (bracket order stop-loss/take-profit legs lock shares and
+        cause 403 "insufficient qty available" if not cancelled).
         """
         try:
+            # Cancel open orders first — they hold shares hostage
+            self.cancel_orders_for_symbol(symbol)
+
+            # Small delay for Alpaca to process cancellations
+            import time
+            time.sleep(0.5)
+
             params = {}
             if qty is not None:
                 params["qty"] = str(qty)
