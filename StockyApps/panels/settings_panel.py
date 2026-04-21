@@ -162,28 +162,85 @@ class SettingsPanel(QWidget):
         appear_box.setLayout(al2)
         inner_layout.addWidget(appear_box)
 
-        # API Keys
+        # API Keys — with placeholder formats, info icons, signup links
         keys_box = QGroupBox("API Keys")
-        kl = QFormLayout()
+        kl = QVBoxLayout()
+
+        # Key definitions: (settings_key, label, placeholder, signup_url, instructions)
+        key_defs = [
+            ("alpaca_api_key", "Alpaca API Key", "PKXXXXXXXXXXXXXXXXXX",
+             "https://app.alpaca.markets/signup",
+             "1. Go to alpaca.markets and create a free account\n"
+             "2. Click 'Paper Trading' in the left sidebar\n"
+             "3. Click 'View' under API Keys\n"
+             "4. Click 'Regenerate' to get a new key\n"
+             "5. Copy the API Key ID (starts with PK...)"),
+            ("alpaca_secret_key", "Alpaca Secret Key", "••••••••••••••••••••",
+             "https://app.alpaca.markets/signup",
+             "Same page as the API Key above.\n"
+             "The Secret Key is shown once when you regenerate.\n"
+             "Copy it immediately — you can't view it again."),
+            ("fred_api_key", "FRED API Key", "abcdef1234567890abcdef1234567890",
+             "https://fred.stlouisfed.org/docs/api/api_key.html",
+             "1. Go to fred.stlouisfed.org\n"
+             "2. Create a free account\n"
+             "3. Go to 'My Account' > 'API Keys'\n"
+             "4. Click 'Request API Key'\n"
+             "5. Copy the 32-character key"),
+            ("finnhub_api_key", "Finnhub API Key", "cxxxxxxxxxxxxxxxxxxxxxxxxxx",
+             "https://finnhub.io/register",
+             "1. Go to finnhub.io and create a free account\n"
+             "2. Your API key is shown on the dashboard\n"
+             "3. Copy the key (starts with 'c...')"),
+            ("nixtla_api_key", "Nixtla TimeGPT Key", "nixtla-tok-XXXXXXXXXXXX",
+             "https://dashboard.nixtla.io/",
+             "1. Go to dashboard.nixtla.io\n"
+             "2. Sign up for a free account\n"
+             "3. Go to 'API Keys' tab\n"
+             "4. Create a new key\n"
+             "5. Copy it (starts with 'nixtla-tok-')"),
+        ]
+
         self.inputs = {}
-        for key, label in [("alpaca_api_key", "Alpaca API Key"), ("alpaca_secret_key", "Alpaca Secret Key")]:
+        for key, label, placeholder, url, instructions in key_defs:
+            row = QHBoxLayout()
+            lbl = QLabel(f"{label}:")
+            lbl.setMinimumWidth(130)
+            row.addWidget(lbl)
+
             inp = QLineEdit(settings.get(key, ""))
+            inp.setPlaceholderText(placeholder)
             if "secret" in key.lower():
                 inp.setEchoMode(QLineEdit.Password)
-            kl.addRow(label + ":", inp)
+            row.addWidget(inp, 1)
             self.inputs[key] = inp
 
-        # Addon API keys
+            # Info button — opens popup with instructions
+            info_btn = QPushButton("?")
+            info_btn.setFixedSize(24, 24)
+            info_btn.setToolTip(f"How to get your {label}")
+            info_btn.setStyleSheet(f"background-color: {BRAND_PRIMARY}; color: white; font-weight: bold; border-radius: 12px; font-size: 12px;")
+            info_btn.clicked.connect(lambda _, l=label, u=url, inst=instructions: self._show_key_help(l, u, inst))
+            row.addWidget(info_btn)
+
+            kl.addLayout(row)
+
+        # Addon API keys (dynamic)
         for addon in get_all_addons():
             if addon.requires_api_key and addon.api_key_name:
-                inp = QLineEdit(settings.get(addon.api_key_name, ""))
-                inp.setPlaceholderText(f"For {addon.name}")
-                kl.addRow(f"{addon.name}:", inp)
-                self.inputs[addon.api_key_name] = inp
+                if addon.api_key_name not in self.inputs:  # Don't duplicate
+                    row = QHBoxLayout()
+                    row.addWidget(QLabel(f"{addon.name}:"))
+                    inp = QLineEdit(settings.get(addon.api_key_name, ""))
+                    inp.setPlaceholderText(f"API key for {addon.name}")
+                    row.addWidget(inp, 1)
+                    self.inputs[addon.api_key_name] = inp
+                    kl.addLayout(row)
 
         save_btn = QPushButton("Save All Keys")
+        save_btn.setStyleSheet(f"background-color: {BRAND_PRIMARY};")
         save_btn.clicked.connect(self._save_keys)
-        kl.addRow(save_btn)
+        kl.addWidget(save_btn)
         keys_box.setLayout(kl)
         inner_layout.addWidget(keys_box)
 
@@ -209,19 +266,15 @@ class SettingsPanel(QWidget):
         addon_box = QGroupBox("Addons")
         al = QVBoxLayout()
         self.addon_table = QTableWidget()
-        self.addon_table.setColumnCount(5)
-        self.addon_table.setHorizontalHeaderLabels(["On", "Addon", "Status", "Features", "Config"])
+        self.addon_table.setColumnCount(6)
+        self.addon_table.setHorizontalHeaderLabels(["On", "Addon", "Status", "Features", "Config", ""])
         self.addon_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.addon_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         for c in range(2, 5):
             self.addon_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        self.addon_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.addon_table.verticalHeader().setVisible(False)
         al.addWidget(self.addon_table)
-
-        install_btn = QPushButton("Install Missing Dependencies")
-        install_btn.setStyleSheet(f"background-color: {BG_INPUT};")
-        install_btn.clicked.connect(self._install_deps)
-        al.addWidget(install_btn)
         addon_box.setLayout(al)
         inner_layout.addWidget(addon_box)
 
@@ -346,6 +399,86 @@ class SettingsPanel(QWidget):
             c = QTableWidgetItem(cfg)
             c.setForeground(QColor(STATUS_ACTIVE if cfg == "Key set" else (STATUS_ERROR if cfg == "Needs key" else TEXT_MUTED)))
             self.addon_table.setItem(i, 4, c)
+
+            # Install button for unavailable addons
+            if not a.available and a.dependencies:
+                install_btn = QPushButton("Install")
+                install_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 9px; padding: 2px 6px;")
+                install_btn.setToolTip(f"pip install {' '.join(a.dependencies)}")
+                install_btn.clicked.connect(lambda _, addon=a: self._install_addon(addon))
+                self.addon_table.setCellWidget(i, 5, install_btn)
+            elif a.available:
+                ok_item = QTableWidgetItem("Ready")
+                ok_item.setForeground(QColor(STATUS_ACTIVE))
+                ok_item.setFlags(Qt.ItemIsEnabled)
+                self.addon_table.setItem(i, 5, ok_item)
+
+    def _show_key_help(self, label, url, instructions):
+        """Show popup with instructions on how to get an API key."""
+        from core.ui.theme import theme as _theme
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"How to get: {label}")
+        dlg.setMinimumSize(450, 300)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
+
+        lay = QVBoxLayout()
+        title = QLabel(f"How to get your {label}")
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
+
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        txt.setFont(QFont(FONT_MONO, 10))
+        txt.setPlainText(instructions)
+        lay.addWidget(txt)
+
+        link_btn = QPushButton(f"Open Signup Page")
+        link_btn.setStyleSheet(f"background-color: {BRAND_PRIMARY}; font-size: 12px; padding: 8px;")
+        link_btn.clicked.connect(lambda: __import__('os').startfile(url))
+        lay.addWidget(link_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
+
+        dlg.setLayout(lay)
+        dlg.exec_()
+
+    def _install_addon(self, addon):
+        """Install addon dependencies via pip with confirmation."""
+        deps = " ".join(addon.dependencies)
+        confirm = QMessageBox.question(
+            self, f"Install {addon.name}",
+            f"This will install the following packages via pip:\n\n"
+            f"  {deps}\n\n"
+            f"This may download several hundred MB of data.\n"
+            f"Proceed?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.bus.log_entry.emit(f"Installing {addon.name} dependencies: {deps}", "system")
+
+        import subprocess, threading
+        def _do_install():
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install"] + addon.dependencies,
+                    capture_output=True, text=True, timeout=300,
+                )
+                if result.returncode == 0:
+                    self.bus.log_entry.emit(f"{addon.name} installed successfully! Restart to activate.", "trade")
+                    # Re-discover addons
+                    discover_addons()
+                    QTimer.singleShot(500, self._refresh)
+                else:
+                    self.bus.log_entry.emit(f"{addon.name} install failed: {result.stderr[:200]}", "error")
+            except Exception as e:
+                self.bus.log_entry.emit(f"{addon.name} install error: {e}", "error")
+
+        threading.Thread(target=_do_install, daemon=True).start()
 
     def _toggle_addon(self, name, enabled):
         set_addon_enabled(name, enabled)
