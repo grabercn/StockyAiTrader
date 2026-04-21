@@ -114,16 +114,16 @@
             "symbol": "DDOG",
             "qty": "1",
             "side": "long",
-            "current_price": "128.9788",
-            "unrealized_pl": "-0.3812",
+            "current_price": "130.3",
+            "unrealized_pl": "0.94",
             "avg_entry": "129.36"
         },
         {
             "symbol": "HIMS",
             "qty": "2942",
             "side": "long",
-            "current_price": "30.29",
-            "unrealized_pl": "1247.499202",
+            "current_price": "30.28",
+            "unrealized_pl": "1218.079202",
             "avg_entry": "29.865969"
         },
         {
@@ -138,8 +138,8 @@
             "symbol": "NVTS",
             "qty": "57",
             "side": "long",
-            "current_price": "15.37",
-            "unrealized_pl": "0.020007",
+            "current_price": "15.45",
+            "unrealized_pl": "4.580007",
             "avg_entry": "15.369649"
         },
         {
@@ -162,8 +162,8 @@
             "symbol": "SOFI",
             "qty": "3733",
             "side": "long",
-            "current_price": "19.15",
-            "unrealized_pl": "1302.869262",
+            "current_price": "19.16",
+            "unrealized_pl": "1340.199262",
             "avg_entry": "18.800986"
         }
     ],

@@ -364,11 +364,24 @@ class AIDashboardPanel(QWidget):
             self.table.setCellWidget(i, 9, btn)
 
     def _unmonitor(self, ticker):
+        # Remove from auto-service
         svc = self._get_svc()
         if svc and svc.is_monitoring(ticker):
             svc.remove_stock(ticker)
-            self.bus.log_entry.emit(f"Removed {ticker} from AI monitoring (position kept)", "system")
-            self.refresh()
+        # Remove from agent's tracked stocks
+        if ticker in self._agent_stocks:
+            del self._agent_stocks[ticker]
+        # Save so it doesn't come back
+        settings = load_settings()
+        monitored = settings.get("monitored_stocks", {})
+        monitored.pop(ticker, None)
+        tracked = settings.get("agent_tracked_stocks", {})
+        tracked.pop(ticker, None)
+        settings["monitored_stocks"] = monitored
+        settings["agent_tracked_stocks"] = tracked
+        save_settings(settings)
+        self.bus.log_entry.emit(f"Removed {ticker} — switched to manual management", "system")
+        self.refresh()
 
     def _stop_all(self):
         svc = self._get_svc()
