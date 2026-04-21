@@ -35,7 +35,7 @@ class TrayExplode(QWidget):
 
         # Generate burst particles
         self._particles = []
-        colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#ffffff", "#f59e0b", "#ef4444", "#10b981"]
+        colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#e2e8f0", "#ffffff"]
 
         for _ in range(100):
             angle = random.uniform(0, 6.28)

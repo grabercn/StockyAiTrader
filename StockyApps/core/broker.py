@@ -51,7 +51,13 @@ class AlpacaBroker:
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
-            return {"error": str(e)}
+            # Include Alpaca's error message for better debugging
+            detail = ""
+            try:
+                detail = r.json().get("message", "") if r.content else ""
+            except Exception:
+                pass
+            return {"error": f"{e}{': ' + detail if detail else ''}"}
 
     def _delete(self, endpoint):
         try:

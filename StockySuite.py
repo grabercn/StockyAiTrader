@@ -518,7 +518,43 @@ def boot_app():
         time.sleep(0.4)
 
     step(5,  "Loading core modules...",       "features · model · risk · broker · scanner")
-    step(15, "Checking dependencies...",      "lightgbm · ta · transformers · torch")
+
+    # Preload heavy imports in background while splash animates
+    import threading
+    _preload_done = threading.Event()
+    _preload_data = {}
+
+    def _preload():
+        """Load heavy modules and data while splash is showing."""
+        try:
+            # Pre-import heavy libraries so they're cached
+            import lightgbm  # noqa
+            import pandas  # noqa
+            import numpy  # noqa
+            import yfinance  # noqa
+            _preload_data["modules"] = True
+        except Exception:
+            pass
+        try:
+            # Pre-fetch broker data so dashboard loads instantly
+            settings = load_settings()
+            key = settings.get("alpaca_api_key", "")
+            secret = settings.get("alpaca_secret_key", "")
+            if key and secret:
+                from core.broker import AlpacaBroker
+                broker = AlpacaBroker(key, secret)
+                _preload_data["acct"] = broker.get_account()
+                _preload_data["positions"] = broker.get_positions()
+                _preload_data["orders"] = broker.get_orders("open")
+                _preload_data["hist"] = broker.get_portfolio_history(period="1W", timeframe="1H")
+        except Exception:
+            pass
+        _preload_done.set()
+
+    preload_thread = threading.Thread(target=_preload, daemon=True)
+    preload_thread.start()
+
+    step(15, "Preloading data...",            "Fetching broker data in background")
 
     step(25, "Discovering addons...",         "Scanning StockyApps/addons/")
     from addons import discover_addons, get_all_addons
@@ -533,8 +569,24 @@ def boot_app():
     from core.profiles import get_active_profile_name
     step(70, f"Profile: {get_active_profile_name()}", "Hardware preset loaded")
 
-    step(80, "Building interface...",         "8 panels · event bus · signal routing")
+    step(80, "Building interface...",         "9 panels · event bus · signal routing")
     suite = StockySuite()
+
+    # Wait for preload to finish before proceeding
+    step(88, "Waiting for data preload...",   "Almost ready")
+    _preload_done.wait(timeout=10)
+
+    # Inject preloaded data into dashboard so it renders instantly
+    if _preload_data.get("acct") and hasattr(suite, 'dashboard'):
+        try:
+            suite.dashboard._apply_refresh(
+                _preload_data.get("acct", {}),
+                _preload_data.get("positions", []),
+                _preload_data.get("orders", []),
+                _preload_data.get("hist", {}),
+            )
+        except Exception:
+            pass
 
     step(90, "Loading log history...",        "Decision logs · trade history")
 
@@ -594,16 +646,30 @@ def boot_app():
     # Particle convergence reveal — particles fly in and form the window outline
     from core.ui.window_reveal import WindowReveal
 
-    # Prepare main window (invisible)
+    # Prepare main window (invisible but fully rendered in memory)
     effect = QGraphicsOpacityEffect(suite)
     suite.setGraphicsEffect(effect)
     effect.setOpacity(0.0)
     suite.show()
 
+    # Force all widgets to render while invisible (populates memory)
+    app.processEvents()
+    for _ in range(10):
+        _time.sleep(0.05)
+        app.processEvents()
+
     def _on_reveal_done():
-        """Fade in main window when particles arrive."""
+        """Brief pause on dark screen, then fade in the fully-rendered app."""
+        # Small pause so user sees the particle outline form
+        pause = QTimer()
+        pause.setSingleShot(True)
+        pause.timeout.connect(lambda: _fade_in_app())
+        pause.start(300)
+        suite._pause_timer = pause
+
+    def _fade_in_app():
         fade_in = QPropertyAnimation(effect, b"opacity")
-        fade_in.setDuration(500)
+        fade_in.setDuration(600)
         fade_in.setStartValue(0.0)
         fade_in.setEndValue(1.0)
         fade_in.setEasingCurve(QEasingCurve.OutCubic)
@@ -613,7 +679,7 @@ def boot_app():
 
     reveal = WindowReveal(suite, on_done=_on_reveal_done)
     reveal.start()
-    suite._reveal = reveal  # prevent GC
+    suite._reveal = reveal
     suite.raise_()
     suite.activateWindow()
 
