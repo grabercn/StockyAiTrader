@@ -93,6 +93,18 @@ class AIDashboardPanel(QWidget):
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self._countdown_secs = 0
 
+        # Toggle: manage manually-bought stocks
+        manual_row = QHBoxLayout()
+        self.manage_manual_cb = QCheckBox("Also manage manually-bought stocks")
+        self.manage_manual_cb.setToolTip(
+            "When enabled, the AI will also monitor and trade stocks you bought manually. "
+            "Disabled by default — only manages stocks the AI bought.")
+        settings = load_settings()
+        self.manage_manual_cb.setChecked(settings.get("manage_manual_stocks", False))
+        self.manage_manual_cb.toggled.connect(self._toggle_manage_manual)
+        manual_row.addWidget(self.manage_manual_cb)
+        al.addLayout(manual_row)
+
         agent_box.setLayout(al)
         layout.addWidget(agent_box)
 
@@ -134,6 +146,36 @@ class AIDashboardPanel(QWidget):
 
         self.setLayout(layout)
         self.bus.log_entry.connect(self._on_log)
+
+    def _toggle_manage_manual(self, checked):
+        settings = load_settings()
+        settings["manage_manual_stocks"] = checked
+        save_settings(settings)
+        self.bus.log_entry.emit(
+            f"AI {'will' if checked else 'will NOT'} manage manually-bought stocks", "system")
+
+        # If enabled, add all current positions to monitoring
+        if checked and self.broker:
+            main = self.window()
+            if main and hasattr(main, 'scanner'):
+                svc_getter = getattr(main.scanner, '_get_auto_service', None)
+                if svc_getter:
+                    svc = svc_getter()
+                    try:
+                        positions = self.broker.get_positions()
+                        if isinstance(positions, list):
+                            added = 0
+                            for p in positions:
+                                sym = p.get("symbol", "")
+                                if sym and not svc.is_monitoring(sym):
+                                    svc.add_stock(sym, period="5d", interval="5m",
+                                                  auto_execute=True, min_confidence=0.5)
+                                    added += 1
+                            if added:
+                                self.bus.log_entry.emit(
+                                    f"Added {added} manual positions to AI monitoring", "trade")
+                    except Exception:
+                        pass
 
     def _show_card_detail(self, card_type):
         """Show detail popup when stat card is clicked."""
@@ -371,9 +413,9 @@ class AIDashboardPanel(QWidget):
         while getattr(self, '_agent_running', False):
             cycle += 1
             try:
-                self.bus.log_entry.emit(f"Agent cycle {cycle}: scanning...", "system")
-                QTimer.singleShot(0, lambda: self.agent_status.setText(
-                    f"Agent: Running — cycle {cycle}"))
+                self.bus.log_entry.emit(f"Agent cycle {cycle}: scanning market...", "system")
+                QTimer.singleShot(0, lambda c=cycle: self.agent_status.setText(
+                    f"Agent: Running — cycle {c}"))
 
                 # Get buying power
                 bp = 0
@@ -391,15 +433,30 @@ class AIDashboardPanel(QWidget):
                         time.sleep(1)
                     continue
 
+                self.bus.log_entry.emit(f"Agent: BP=${bp:,.0f}, profile={profile_name}", "system")
+
                 # Scan multiple sources for diverse opportunities
                 tickers = set()
-                try: tickers.update(get_most_active(10))
+                sources_used = []
+                try:
+                    ma = get_most_active(10)
+                    tickers.update(ma)
+                    sources_used.append(f"Active({len(ma)})")
                 except: pass
-                try: tickers.update(get_day_gainers(5))
+                try:
+                    g = get_day_gainers(5)
+                    tickers.update(g)
+                    sources_used.append(f"Gainers({len(g)})")
                 except: pass
-                try: tickers.update(get_trending_social(5))
+                try:
+                    t = get_trending_social(5)
+                    tickers.update(t)
+                    sources_used.append(f"Trending({len(t)})")
                 except: pass
                 tickers = list(tickers)[:20]
+
+                self.bus.log_entry.emit(
+                    f"Agent: scanning {len(tickers)} tickers from {', '.join(sources_used)}", "system")
 
                 if not tickers:
                     self.bus.log_entry.emit("Agent: no tickers, waiting 2 min...", "warn")
@@ -426,9 +483,17 @@ class AIDashboardPanel(QWidget):
                 sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
                 holds = [r for r in results if r.action == "HOLD" and not r.error]
 
+                skipped = [r for r in results if not r.error and r.action in ("BUY","SELL")
+                          and r.confidence < min_conf]
                 self.bus.log_entry.emit(
                     f"Cycle {cycle}: {len(buys)}B {len(sells)}S {len(holds)}H "
-                    f"(min_conf={min_conf:.0%}, BP=${bp:,.0f})", "trade")
+                    f"({len(skipped)} below {min_conf:.0%} threshold)", "trade")
+
+                # Log top picks with reasoning
+                for r in sorted(buys, key=lambda x: -x.score)[:3]:
+                    self.bus.log_entry.emit(
+                        f"  Top pick: {r.ticker} BUY ({r.confidence:.0%}) "
+                        f"score={r.score:.2f} @ ${r.price:.2f}", "info")
 
                 # Execute sells first (dynamic — partial or full based on confidence)
                 if sells and self.broker:

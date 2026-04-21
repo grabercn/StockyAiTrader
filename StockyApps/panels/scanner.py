@@ -1354,7 +1354,7 @@ class ScannerPanel(QWidget):
         save_settings(settings)
 
     def _restore_monitored_stocks(self):
-        """Restore auto-trade monitoring from settings on boot."""
+        """Restore auto-trade monitoring with full saved state."""
         settings = load_settings()
         monitored = settings.get("monitored_stocks", {})
         if monitored and self.broker:
@@ -1363,7 +1363,16 @@ class ScannerPanel(QWidget):
                 if not svc.is_monitoring(ticker):
                     svc.add_stock(ticker, period=cfg.get("period", "5d"),
                                   interval=cfg.get("interval", "5m"),
-                                  auto_execute=True, min_confidence=0.5)
+                                  auto_execute=cfg.get("auto_execute", True),
+                                  min_confidence=0.5)
+                    # Restore last known state
+                    stock = svc.get_monitored().get(ticker)
+                    if stock:
+                        stock.last_signal = cfg.get("last_signal", "HOLD")
+                        stock.last_confidence = cfg.get("last_confidence", 0)
+                        stock.last_price = cfg.get("last_price", 0)
+                        stock.last_check = cfg.get("last_check")
+                        stock.check_count = cfg.get("check_count", 0)
             if monitored:
                 self.bus.log_entry.emit(
                     f"Restored {len(monitored)} monitored stocks from last session",
