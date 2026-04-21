@@ -50,6 +50,8 @@ class ScannerPanel(QWidget):
         self._detail_ready.connect(self._on_detail_ready)
         self._trade_done.connect(self._on_trade_result)
         self._build()
+        # Restore monitored stocks from last session after a delay
+        QTimer.singleShot(5000, self._restore_monitored_stocks)
 
     def _build(self):
         from core.ui.backgrounds import GradientHeader
@@ -207,63 +209,97 @@ class ScannerPanel(QWidget):
         self.detail_stats.setFont(QFont(FONT_MONO, 10))
         dp_layout.addWidget(self.detail_stats)
 
-        # Quick-trade controls
+        # Quick Trade panel — matches Alpaca UI
         trade_box = QGroupBox("Quick Trade")
         tbl = QVBoxLayout()
-        tbl.setSpacing(4)
+        tbl.setSpacing(6)
 
-        # Quantity row
+        # Direct ticker input (trade without scanning)
+        ticker_row = QHBoxLayout()
+        ticker_row.addWidget(QLabel("Ticker:"))
+        self.trade_ticker_input = QLineEdit()
+        self.trade_ticker_input.setPlaceholderText("e.g. AAPL (or select from scan)")
+        self.trade_ticker_input.setStyleSheet(f"padding: 4px 8px;")
+        ticker_row.addWidget(self.trade_ticker_input, 1)
+        tbl.addLayout(ticker_row)
+
+        # Market price display
+        self.trade_price_label = QLabel("Market Price: --")
+        self.trade_price_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        tbl.addWidget(self.trade_price_label)
+
+        # Quantity
         qty_row = QHBoxLayout()
-        qty_row.addWidget(QLabel("Shares:"))
+        qty_row.addWidget(QLabel("Quantity:"))
         self.detail_qty = QSpinBox()
-        self.detail_qty.setRange(1, 10000)
+        self.detail_qty.setRange(1, 100000)
         self.detail_qty.setValue(1)
         self.detail_qty.setStyleSheet(f"padding: 4px 8px; min-width: 80px;")
-        qty_row.addWidget(self.detail_qty)
+        qty_row.addWidget(self.detail_qty, 1)
+        tbl.addLayout(qty_row)
         self.detail_qty_label = QLabel("")
         self.detail_qty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
-        qty_row.addWidget(self.detail_qty_label, 1)
-        tbl.addLayout(qty_row)
+        tbl.addWidget(self.detail_qty_label)
 
-        # Order type: Market vs Limit
+        # Order Type
         order_row = QHBoxLayout()
-        order_row.addWidget(QLabel("Order:"))
+        order_row.addWidget(QLabel("Order Type:"))
         self.order_type_cb = QComboBox()
-        self.order_type_cb.addItems(["Market", "Limit"])
-        self.order_type_cb.setToolTip("Market = instant at current price. Limit = set a price ceiling (buy) or floor (sell).")
-        order_row.addWidget(self.order_type_cb)
-        order_row.addWidget(QLabel("Price:"))
-        self.limit_price_input = QLineEdit()
-        self.limit_price_input.setPlaceholderText("e.g. 150.00")
-        self.limit_price_input.setStyleSheet(f"padding: 4px; min-width: 80px;")
-        self.limit_price_input.setEnabled(False)
-        order_row.addWidget(self.limit_price_input)
-        self.order_type_cb.currentTextChanged.connect(
-            lambda t: self.limit_price_input.setEnabled(t == "Limit")
-        )
+        self.order_type_cb.addItems(["Market", "Limit", "Stop", "Stop Limit"])
+        order_row.addWidget(self.order_type_cb, 1)
         tbl.addLayout(order_row)
 
+        # Limit/Stop price (shown when not Market)
+        price_row = QHBoxLayout()
+        price_row.addWidget(QLabel("Price:"))
+        self.limit_price_input = QLineEdit()
+        self.limit_price_input.setPlaceholderText("Limit/Stop price")
+        self.limit_price_input.setStyleSheet(f"padding: 4px 8px;")
+        self.limit_price_input.setEnabled(False)
+        price_row.addWidget(self.limit_price_input, 1)
+        tbl.addLayout(price_row)
+        self.order_type_cb.currentTextChanged.connect(
+            lambda t: self.limit_price_input.setEnabled(t != "Market")
+        )
+
+        # Time in Force
+        tif_row = QHBoxLayout()
+        tif_row.addWidget(QLabel("Time in Force:"))
+        self.tif_cb = QComboBox()
+        self.tif_cb.addItems(["DAY", "GTC", "IOC", "FOK"])
+        self.tif_cb.setToolTip("DAY=expires at close, GTC=good til cancelled, IOC=immediate or cancel, FOK=fill or kill")
+        tif_row.addWidget(self.tif_cb, 1)
+        tbl.addLayout(tif_row)
+
+        # Estimated cost/value + buying power
+        self.trade_estimate_label = QLabel("Estimated Cost: --")
+        self.trade_estimate_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        tbl.addWidget(self.trade_estimate_label)
+        self.trade_bp_label = QLabel("Buying Power: --")
+        self.trade_bp_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        tbl.addWidget(self.trade_bp_label)
+
+        # Update estimate when qty changes
+        self.detail_qty.valueChanged.connect(self._update_trade_estimate)
+
         # Buy button
-        buy_row = QHBoxLayout()
         self.detail_buy_btn = QPushButton("  BUY")
         self.detail_buy_btn.setIcon(StockyIcons.get_icon("arrow_up", 14, "white"))
         self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 12px; padding: 8px;")
         self.detail_buy_btn.clicked.connect(lambda: self._quick_trade("buy"))
-        buy_row.addWidget(self.detail_buy_btn)
-        tbl.addLayout(buy_row)
+        tbl.addWidget(self.detail_buy_btn)
 
-        # Sell button (hidden until user owns the stock)
-        sell_row = QHBoxLayout()
+        # Sell button
         self.detail_sell_btn = QPushButton("  SELL")
         self.detail_sell_btn.setIcon(StockyIcons.get_icon("arrow_down", 14, "white"))
         self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 12px; padding: 8px;")
         self.detail_sell_btn.clicked.connect(lambda: self._quick_trade("sell"))
         self.detail_sell_btn.setVisible(False)
-        sell_row.addWidget(self.detail_sell_btn)
+        tbl.addWidget(self.detail_sell_btn)
+
         self.detail_owned_label = QLabel("")
         self.detail_owned_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
-        sell_row.addWidget(self.detail_owned_label)
-        tbl.addLayout(sell_row)
+        tbl.addWidget(self.detail_owned_label)
 
         # Deep analyze button
         self.detail_analyze_btn = QPushButton("  Deep Analyze")
@@ -636,14 +672,28 @@ class ScannerPanel(QWidget):
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
-        # Set qty and buttons immediately (no network needed)
+        # Populate Quick Trade fields immediately
+        self.trade_ticker_input.setText(r.ticker)
+        self.trade_price_label.setText(f"Market Price: ${r.price:.2f}" if r.price else "Market Price: --")
         qty = r.position_size if r.position_size > 0 else 1
         self.detail_qty.setValue(qty)
         self.detail_qty_label.setText(f"AI recommends {r.position_size} shares")
         cost = qty * r.price if r.price > 0 else 0
+        self.trade_estimate_label.setText(f"Estimated Cost: ${cost:,.2f}")
         self.detail_buy_btn.setText(f"  BUY {qty} shares (${cost:,.0f})")
         self.detail_sell_btn.setVisible(False)
         self.detail_owned_label.setText("")
+        # Show buying power
+        if self.broker:
+            import threading
+            def _fetch_bp():
+                try:
+                    acct = self.broker.get_account()
+                    bp = float(acct.get("buying_power", 0))
+                    self._detail_ready.emit(r, f"__SET_BP__{bp}")
+                except Exception:
+                    pass
+            threading.Thread(target=_fetch_bp, daemon=True).start()
 
         # Show instant signal data + loading indicators for async sections
         loading = f'<span style="color:{TEXT_MUTED}"><i>loading...</i></span>'
@@ -734,6 +784,10 @@ class ScannerPanel(QWidget):
         """Signal handler — dispatches to _apply_detail on main thread."""
         if html.startswith("__UPDATE_REASONING__"):
             self._update_reasoning_column(r.ticker, html[20:])
+        elif html.startswith("__SET_BP__"):
+            bp = float(html[10:])
+            self.trade_bp_label.setText(f"Buying Power: ${bp:,.2f}")
+            self._buying_power = bp
         else:
             self._apply_detail(r, html)
 
@@ -957,6 +1011,19 @@ class ScannerPanel(QWidget):
 
         return "<br>".join(lines)
 
+    def _update_trade_estimate(self):
+        """Update estimated cost/value when qty changes."""
+        r = self._selected_result
+        if not r or not r.price:
+            return
+        qty = self.detail_qty.value()
+        cost = qty * r.price
+        self.trade_estimate_label.setText(f"Estimated Cost: ${cost:,.2f}")
+        self.detail_buy_btn.setText(f"  BUY {qty} shares (${cost:,.0f})")
+        # Update sell button if visible
+        if self.detail_sell_btn.isVisible():
+            self.detail_sell_btn.setText(f"  SELL {qty} shares (${cost:,.0f})")
+
     def _update_reasoning_column(self, ticker, llm_text):
         """Update the reasoning column in the results table when LLM finishes."""
         for i in range(self.table.rowCount()):
@@ -1026,62 +1093,76 @@ class ScannerPanel(QWidget):
         self.detail_canvas.draw()
 
     def _quick_trade(self, side):
-        if not self._selected_result:
-            self.bus.log_entry.emit("Select a stock from the scan results first", "warn")
+        # Support direct ticker input (no scan result needed)
+        ticker_input = self.trade_ticker_input.text().strip().upper()
+        r = self._selected_result
+
+        if not ticker_input and not r:
+            self.bus.log_entry.emit("Enter a ticker or select from scan results", "warn")
             return
         if not self.broker:
-            self.bus.log_entry.emit("Alpaca API not connected — go to Settings to configure", "error")
-            return
-        r = self._selected_result
-        qty = self.detail_qty.value()
-        if qty <= 0:
-            self.bus.log_entry.emit(f"Set quantity to at least 1 share", "warn")
+            self.bus.log_entry.emit("Alpaca API not connected — go to Settings", "error")
             return
 
-        # Determine order type and limit price
-        is_limit = self.order_type_cb.currentText() == "Limit"
+        ticker = ticker_input or r.ticker
+        qty = self.detail_qty.value()
+        if qty <= 0:
+            self.bus.log_entry.emit("Set quantity to at least 1 share", "warn")
+            return
+
+        # Order type
+        otype_text = self.order_type_cb.currentText()
+        otype_map = {"Market": "market", "Limit": "limit", "Stop": "stop", "Stop Limit": "stop_limit"}
+        order_type = otype_map.get(otype_text, "market")
+
+        # Limit/stop price
         limit_price = None
-        if is_limit:
+        if order_type != "market":
             try:
                 limit_price = float(self.limit_price_input.text())
             except (ValueError, TypeError):
-                self.bus.log_entry.emit("Enter a valid limit price", "warn")
+                self.bus.log_entry.emit(f"Enter a valid {otype_text.lower()} price", "warn")
                 return
 
-        order_type = "limit" if is_limit else "market"
-        price_str = f"${limit_price:.2f} (limit)" if limit_price else f"${r.price:.2f} (market)"
-        cost = qty * (limit_price or r.price)
+        # Time in force
+        tif = self.tif_cb.currentText().lower()
+
+        price = limit_price or (r.price if r else 0)
+        cost = qty * price
+        bp = getattr(self, '_buying_power', 0)
 
         confirm = QMessageBox.question(
-            self, f"Confirm {side.upper()}",
-            f"{side.upper()} {qty} shares of {r.ticker}\n"
-            f"Order Type: {order_type.upper()}\n"
-            f"Price: {price_str}\n"
-            f"Estimated Total: ${cost:,.2f}\n"
-            + (f"Stop Loss: ${r.stop_loss:.2f}\n"
-               f"Take Profit: ${r.take_profit:.2f}\n" if not is_limit else "")
+            self, f"Confirm {side.upper()} — {ticker}",
+            f"{side.upper()} {qty} shares of {ticker}\n"
+            f"Order Type: {otype_text}\n"
+            f"Price: ${price:.2f} {'(limit)' if limit_price else '(market)'}\n"
+            f"Time in Force: {tif.upper()}\n"
+            f"Estimated {'Cost' if side == 'buy' else 'Value'}: ${cost:,.2f}\n"
+            f"Buying Power: ${bp:,.2f}\n"
+            + (f"\nStop Loss: ${r.stop_loss:.2f}\n"
+               f"Take Profit: ${r.take_profit:.2f}\n" if r and order_type == "market" else "")
             + f"\nProceed?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
             return
 
-        # Execute trade in background thread to not freeze UI
+        # Execute in background
         import threading
-        self.bus.log_entry.emit(f"Submitting {side.upper()} {r.ticker} x{qty}...", "info")
+        self.bus.log_entry.emit(f"Submitting {side.upper()} {ticker} x{qty} ({otype_text}, {tif.upper()})...", "info")
 
         def _execute():
-            if side == "sell" and not is_limit:
-                result = self.broker.close_position(r.ticker, qty=qty)
+            if side == "sell" and order_type == "market":
+                result = self.broker.close_position(ticker, qty=qty)
             else:
                 result = self.broker.place_order(
-                    r.ticker, qty, side, order_type=order_type,
-                    stop_loss=r.stop_loss if not is_limit else None,
-                    take_profit=r.take_profit if not is_limit else None,
+                    ticker, qty, side, order_type=order_type,
+                    time_in_force=tif,
+                    stop_loss=r.stop_loss if r and order_type == "market" else None,
+                    take_profit=r.take_profit if r and order_type == "market" else None,
                     limit_price=limit_price,
                 )
-            # Update UI on main thread via signal
-            self._trade_done.emit(result, side, r, qty)
+            self._trade_done.emit(result, side, r if r else type('R', (), {'ticker': ticker, 'price': price})(), qty)
 
         threading.Thread(target=_execute, daemon=True).start()
 
@@ -1218,6 +1299,40 @@ class ScannerPanel(QWidget):
         # Refresh table to update button icons
         if self.results:
             self._refresh_monitor_icons()
+
+        # Persist monitored stocks to settings
+        self._save_monitored_stocks()
+
+    def _save_monitored_stocks(self):
+        """Save current monitored tickers to settings.json for restore on boot."""
+        svc = self._auto_service if hasattr(self, '_auto_service') and self._auto_service else None
+        if not svc:
+            return
+        monitored = {}
+        for ticker, stock in svc.get_monitored().items():
+            monitored[ticker] = {
+                "period": stock.period, "interval": stock.interval,
+            }
+        settings = load_settings()
+        settings["monitored_stocks"] = monitored
+        save_settings(settings)
+
+    def _restore_monitored_stocks(self):
+        """Restore auto-trade monitoring from settings on boot."""
+        settings = load_settings()
+        monitored = settings.get("monitored_stocks", {})
+        if monitored and self.broker:
+            svc = self._get_auto_service()
+            for ticker, cfg in monitored.items():
+                if not svc.is_monitoring(ticker):
+                    svc.add_stock(ticker, period=cfg.get("period", "5d"),
+                                  interval=cfg.get("interval", "5m"),
+                                  auto_execute=True, min_confidence=0.5)
+            if monitored:
+                self.bus.log_entry.emit(
+                    f"Restored {len(monitored)} monitored stocks from last session",
+                    "system",
+                )
 
     def _refresh_monitor_icons(self):
         """Update all monitor toggle buttons to reflect current state."""
