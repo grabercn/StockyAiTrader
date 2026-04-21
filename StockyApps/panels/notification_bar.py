@@ -97,6 +97,15 @@ class _NotificationBar(QWidget):
             self._bell_pulse = max(0, self._bell_pulse - 0.02)
         self.update()
 
+    def _reset_bar(self):
+        """Reset status bar to default after clearing notifications."""
+        from core.branding import APP_NAME, APP_VERSION
+        self._msg = f"{APP_NAME} v{APP_VERSION} — Ready"
+        self._time = ""
+        self._click_url = None
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
     def set_click_url(self, url):
         """Set a URL that opens when the message area is clicked."""
         self._click_url = url
@@ -332,7 +341,7 @@ class _NotificationBar(QWidget):
         btn_row = QHBoxLayout()
         clear_btn = QPushButton("Clear All")
         clear_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px;")
-        clear_btn.clicked.connect(lambda: (self._notif_history.clear(), dlg.accept()))
+        clear_btn.clicked.connect(lambda: (self._notif_history.clear(), self._reset_bar(), dlg.accept()))
         btn_row.addWidget(clear_btn)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dlg.accept)

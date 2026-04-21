@@ -245,10 +245,11 @@ class SettingsPanel(QWidget):
         model_box = QGroupBox("AI Models")
         ml = QVBoxLayout()
         self.model_table = QTableWidget()
-        self.model_table.setColumnCount(4)
-        self.model_table.setHorizontalHeaderLabels(["Model", "Status", "Size", "Action"])
+        self.model_table.setColumnCount(5)
+        self.model_table.setHorizontalHeaderLabels(["Model", "Status", "Size", "Profiles", "Action"])
         self.model_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for c in range(1, 4):
+        self.model_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        for c in [1, 2, 4]:
             self.model_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.model_table.verticalHeader().setVisible(False)
         self.model_table.setMinimumHeight(120)
@@ -263,13 +264,13 @@ class SettingsPanel(QWidget):
         addon_box = QGroupBox("Addons")
         al = QVBoxLayout()
         self.addon_table = QTableWidget()
-        self.addon_table.setColumnCount(6)
-        self.addon_table.setHorizontalHeaderLabels(["On", "Addon", "Status", "Features", "Config", ""])
+        self.addon_table.setColumnCount(7)
+        self.addon_table.setHorizontalHeaderLabels(["On", "Addon", "Status", "Profiles", "Features", "Config", ""])
         self.addon_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.addon_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        for c in range(2, 5):
+        self.addon_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        for c in [2, 4, 5, 6]:
             self.addon_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        self.addon_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.addon_table.verticalHeader().setVisible(False)
         al.addWidget(self.addon_table)
         addon_box.setLayout(al)
@@ -354,25 +355,57 @@ class SettingsPanel(QWidget):
         self.bus.log_entry.emit("Settings saved", "system")
 
     def _refresh(self):
+        from core.profiles import PRESETS, get_active_profile_name
+        active_profile = get_active_profile_name()
+
+        # Model → profile mapping
+        model_profiles = {
+            "FinBERT": "All profiles",
+            "FinBERT-Tone": "Max only",
+            "Twitter-RoBERTa": "Max only",
+            "DistilGPT2": "Default+",
+        }
+
         # Models
         self.model_table.setRowCount(len(MANAGED_MODELS))
         for i, m in enumerate(MANAGED_MODELS):
             dl, sz = get_model_status(m)
-            self.model_table.setItem(i, 0, QTableWidgetItem(m.name))
+
+            name_item = QTableWidgetItem(m.name)
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.model_table.setItem(i, 0, name_item)
+
             s = QTableWidgetItem("Ready" if dl else "Not downloaded")
             s.setForeground(QColor(STATUS_ACTIVE if dl else STATUS_ERROR))
+            s.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.model_table.setItem(i, 1, s)
-            self.model_table.setItem(i, 2, QTableWidgetItem(sz if dl else m.size_estimate))
+
+            sz_item = QTableWidgetItem(sz if dl else m.size_estimate)
+            sz_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.model_table.setItem(i, 2, sz_item)
+
+            # Profile column
+            prof_text = model_profiles.get(m.name, "All")
+            prof_item = QTableWidgetItem(prof_text)
+            prof_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            # Dim if current profile doesn't use this model
+            is_used = prof_text == "All profiles" or active_profile == "Max" or \
+                      (prof_text == "Default+" and active_profile in ("Balanced", "Max"))
+            prof_item.setForeground(QColor(STATUS_ACTIVE if is_used else TEXT_MUTED))
+            if not is_used:
+                prof_item.setText(f"{prof_text} (off)")
+            self.model_table.setItem(i, 3, prof_item)
+
             if not dl:
                 btn = QPushButton("Download")
                 btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 10px; padding: 3px;")
                 btn.clicked.connect(lambda _, mi=m: self._download(mi))
-                self.model_table.setCellWidget(i, 3, btn)
+                self.model_table.setCellWidget(i, 4, btn)
             else:
                 btn = QPushButton("Delete")
                 btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 10px; padding: 3px;")
                 btn.clicked.connect(lambda _, mi=m: self._delete_model(mi))
-                self.model_table.setCellWidget(i, 3, btn)
+                self.model_table.setCellWidget(i, 4, btn)
 
         # Addons
         settings = load_settings()
@@ -395,11 +428,30 @@ class SettingsPanel(QWidget):
             st = QTableWidgetItem("Active" if a.available and a.enabled else a.status)
             st.setForeground(QColor(STATUS_ACTIVE if a.available and a.enabled else STATUS_ERROR if not a.available else STATUS_INACTIVE))
             self.addon_table.setItem(i, 2, st)
-            self.addon_table.setItem(i, 3, QTableWidgetItem(f"{len(a.features)}"))
+
+            # Profile column — which profiles enable this addon
+            profiles_using = []
+            for pname, pdata in PRESETS.items():
+                if pdata.get("addons", {}).get(a.module_name, False):
+                    profiles_using.append(pname)
+            if profiles_using:
+                prof_str = ", ".join(profiles_using)
+            else:
+                prof_str = "None"
+            prof_item = QTableWidgetItem(prof_str)
+            prof_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            # Dim if current profile doesn't include this addon
+            is_in_profile = active_profile in profiles_using
+            prof_item.setForeground(QColor(STATUS_ACTIVE if is_in_profile else TEXT_MUTED))
+            if not is_in_profile and profiles_using:
+                prof_item.setText(f"{prof_str} (off)")
+            self.addon_table.setItem(i, 3, prof_item)
+
+            self.addon_table.setItem(i, 4, QTableWidgetItem(f"{len(a.features)}"))
             cfg = "Key set" if a.requires_api_key and settings.get(a.api_key_name) else ("Needs key" if a.requires_api_key else "—")
             c = QTableWidgetItem(cfg)
             c.setForeground(QColor(STATUS_ACTIVE if cfg == "Key set" else (STATUS_ERROR if cfg == "Needs key" else TEXT_MUTED)))
-            self.addon_table.setItem(i, 4, c)
+            self.addon_table.setItem(i, 5, c)
 
             # Install link for unavailable addons
             if not a.available and a.dependencies:
@@ -407,12 +459,12 @@ class SettingsPanel(QWidget):
                 install_link.setCursor(Qt.PointingHandCursor)
                 install_link.setToolTip(f"pip install {' '.join(a.dependencies)}")
                 install_link.mousePressEvent = lambda _, addon=a: self._install_addon(addon)
-                self.addon_table.setCellWidget(i, 5, install_link)
+                self.addon_table.setCellWidget(i, 6, install_link)
             elif a.available:
                 ok_item = QTableWidgetItem("Ready")
                 ok_item.setForeground(QColor(STATUS_ACTIVE))
                 ok_item.setFlags(Qt.ItemIsEnabled)
-                self.addon_table.setItem(i, 5, ok_item)
+                self.addon_table.setItem(i, 6, ok_item)
 
     def _show_key_help(self, label, url, instructions):
         """Show popup with instructions on how to get an API key."""
