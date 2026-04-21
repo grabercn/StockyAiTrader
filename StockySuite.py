@@ -270,25 +270,27 @@ class StockySuite(QMainWindow):
         quit_on_close = settings.get("quit_on_close", False)
 
         if quit_on_close or not (self._tray and self._tray.tray and self._tray.tray.isVisible()):
-            # Actually quit
             if self._tray and self._tray.tray:
                 self._tray.tray.hide()
             event.accept()
         else:
-            # Minimize to tray with particle dissolve
+            # Reverse particle animation — edges collapse to center
             event.ignore()
-            from core.ui.boot_screen import _DissolveOverlay
+            from core.ui.window_collapse import WindowCollapse
             snapshot = self.grab()
             geo = self.geometry()
             self.hide()
-            overlay = _DissolveOverlay(snapshot, geo)
+
+            def _on_collapse_done():
+                self._tray.send_notification(
+                    "Stocky Suite",
+                    "Running in background. Double-click tray icon to restore.",
+                    "info",
+                )
+
+            overlay = WindowCollapse(snapshot, geo, on_done=_on_collapse_done)
             overlay.start()
             self._close_overlay = overlay
-            self._tray.send_notification(
-                "Stocky Suite",
-                "Running in background. Double-click tray icon to restore.",
-                "info",
-            )
 
     def _init_broker(self):
         settings = load_settings()

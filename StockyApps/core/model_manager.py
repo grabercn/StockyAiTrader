@@ -55,9 +55,16 @@ MANAGED_MODELS = [
     ),
     ModelInfo(
         name="DistilGPT2",
-        description="Trade reasoning LLM (Default+ profiles)",
+        description="Trade reasoning LLM (fallback)",
         hf_repo="distilgpt2",
         size_estimate="~340 MB",
+        required=False,
+    ),
+    ModelInfo(
+        name="TinyLlama-Chat",
+        description="Trade reasoning LLM (primary, instruction-tuned)",
+        hf_repo="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        size_estimate="~2.2 GB",
         required=True,
     ),
 ]

@@ -48,15 +48,8 @@ class TestLLMReasoner:
         assert "AAPL" in result
         assert "150" in result
 
-    def test_generate_reasoning_fallback(self):
-        """generate_reasoning should work even if model not downloaded."""
-        result = generate_reasoning(
-            "TSLA", "SELL", 0.7, 200.0, 5.0,
-            [0.70, 0.20, 0.10],
-            feature_importances={"RSI_14": 500, "macd_hist": 300},
-        )
-        assert "SELL" in result
-        assert "TSLA" in result
+    # NOTE: generate_reasoning test removed — loads TinyLlama (~30s).
+    # Covered by test_llm_and_deep.py::TestLLMReasoner::test_generate_reasoning_returns_string
 
     def test_is_available_returns_bool(self):
         result = is_available()
