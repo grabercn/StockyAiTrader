@@ -36,6 +36,9 @@ def save_settings(s):
 class ScannerPanel(QWidget):
     """Dynamic multi-stock scanner with live discovery, detail panel, and auto-invest."""
 
+    # Signal for cross-thread detail panel updates
+    _detail_ready = pyqtSignal(object, str)  # (ScanResult, html)
+
     def __init__(self, broker, risk_manager, event_bus):
         super().__init__()
         self.broker = broker
@@ -43,6 +46,7 @@ class ScannerPanel(QWidget):
         self.bus = event_bus
         self.results = []
         self.selected = set()
+        self._detail_ready.connect(self._on_detail_ready)
         self._build()
 
     def _build(self):
@@ -678,7 +682,7 @@ class ScannerPanel(QWidget):
 
                 # Phase 2: Full detail (no LLM)
                 html = self._build_detail_html(r)
-                QTimer.singleShot(0, lambda: self._apply_detail(r, html))
+                self._detail_ready.emit(r, html)
 
                 if self._selected_result is not r:
                     return
@@ -695,8 +699,9 @@ class ScannerPanel(QWidget):
                             '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
                             "<br>".join(f"  {p}" for p in llm_text.split(" | "))
                         )
-                        QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
-                        QTimer.singleShot(0, lambda: self._update_reasoning_column(r.ticker, llm_text))
+                        self._detail_ready.emit(r, updated)
+                        # Update reasoning column via signal too
+                        self._detail_ready.emit(r, "__UPDATE_REASONING__" + llm_text)
                 except Exception:
                     pass
 
@@ -708,17 +713,24 @@ class ScannerPanel(QWidget):
                             '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
                             f'<span style="color:{TEXT_MUTED}">AI analysis complete</span>'
                         )
-                        QTimer.singleShot(0, lambda: self._apply_detail(r, final))
+                        self._detail_ready.emit(r, final)
             except Exception as e:
-                # If anything fails, show what we have
-                QTimer.singleShot(0, lambda: self.detail_stats.setHtml(
+                error_html = (
                     f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%})<br>'
                     f'<b>Price:</b> ${r.price:.2f}<br>'
                     f'<span style="color:{TEXT_MUTED}">Detail loading failed: {e}</span>'
-                ))
+                )
+                self._detail_ready.emit(r, error_html)
 
         threading.Thread(target=_load_progressive, daemon=True).start()
         QTimer.singleShot(100, lambda: self._draw_detail_chart(r.ticker))
+
+    def _on_detail_ready(self, r, html):
+        """Signal handler — dispatches to _apply_detail on main thread."""
+        if html.startswith("__UPDATE_REASONING__"):
+            self._update_reasoning_column(r.ticker, html[20:])
+        else:
+            self._apply_detail(r, html)
 
     def _apply_detail(self, r, html):
         """Apply the loaded detail HTML and update buttons (main thread)."""
