@@ -462,18 +462,31 @@ class SettingsPanel(QWidget):
 
         self.bus.log_entry.emit(f"Installing {addon.name}...", "system")
 
-        import subprocess, threading
+        import subprocess, threading, re
         def _do_install():
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "pip", "install"] + addon.dependencies,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    [sys.executable, "-m", "pip", "install", "--progress-bar", "on"] + addon.dependencies,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
                 )
-                # Stream output to status bar
-                for line in proc.stdout:
+                for line in iter(proc.stdout.readline, ""):
                     line = line.strip()
-                    if line and ("Downloading" in line or "Installing" in line or "Collecting" in line):
-                        self.bus.log_entry.emit(f"[{addon.name}] {line[:80]}", "system")
+                    if not line:
+                        continue
+
+                    # Parse download progress: "──── 75.6/100.0 kB 4.1 MB/s"
+                    m = re.search(r'([\d.]+)/([\d.]+)\s*(kB|MB|GB)', line)
+                    if m:
+                        done, total = float(m.group(1)), float(m.group(2))
+                        pct = int(done / total * 100) if total > 0 else 0
+                        self.bus.log_entry.emit(f"[{addon.name}] Downloading... {pct}%", "system")
+                        continue
+
+                    # Show key steps
+                    if any(kw in line for kw in ["Collecting", "Downloading", "Installing", "Successfully"]):
+                        short = line[:80]
+                        self.bus.log_entry.emit(f"[{addon.name}] {short}", "system")
 
                 proc.wait(timeout=300)
                 if proc.returncode == 0:
