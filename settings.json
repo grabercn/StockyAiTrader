@@ -108,47 +108,95 @@
             "interval": "5m"
         }
     },
-    "agent_was_running": false,
+    "agent_was_running": true,
     "agent_managed_positions": [
         {
             "symbol": "DDOG",
             "qty": "1",
             "side": "long",
             "avg_entry": "129.36",
-            "current_price": "130.53",
-            "unrealized_pl": "1.17"
+            "current_price": "130.96",
+            "unrealized_pl": "1.6"
         },
         {
             "symbol": "GOOGL",
             "qty": "33",
             "side": "long",
             "avg_entry": "333.258064",
-            "current_price": "333.71",
-            "unrealized_pl": "14.913888"
+            "current_price": "334.27",
+            "unrealized_pl": "33.393888"
+        },
+        {
+            "symbol": "HIMS",
+            "qty": "982",
+            "side": "long",
+            "avg_entry": "30.62",
+            "current_price": "30.6128",
+            "unrealized_pl": "-7.0704"
+        },
+        {
+            "symbol": "INTC",
+            "qty": "772",
+            "side": "long",
+            "avg_entry": "66.427021",
+            "current_price": "66.63",
+            "unrealized_pl": "156.699788"
         },
         {
             "symbol": "MSFT",
             "qty": "23",
             "side": "long",
             "avg_entry": "426.33",
-            "current_price": "426.8175",
-            "unrealized_pl": "11.2125"
+            "current_price": "426.515",
+            "unrealized_pl": "4.255"
         },
         {
             "symbol": "NVDA",
             "qty": "426",
             "side": "long",
             "avg_entry": "200.341407",
-            "current_price": "200.68",
-            "unrealized_pl": "144.240618"
+            "current_price": "200.67",
+            "unrealized_pl": "139.980618"
+        },
+        {
+            "symbol": "ONDS",
+            "qty": "4",
+            "side": "long",
+            "avg_entry": "10.95",
+            "current_price": "10.985",
+            "unrealized_pl": "0.14"
+        },
+        {
+            "symbol": "OPEN",
+            "qty": "7985",
+            "side": "long",
+            "avg_entry": "5.666705",
+            "current_price": "5.665",
+            "unrealized_pl": "-13.614425"
         },
         {
             "symbol": "PLTR",
             "qty": "68",
             "side": "long",
             "avg_entry": "146.54",
-            "current_price": "146.91",
-            "unrealized_pl": "25.16"
+            "current_price": "146.9799",
+            "unrealized_pl": "29.9132"
+        },
+        {
+            "symbol": "SNAP",
+            "qty": "1100",
+            "side": "long",
+            "avg_entry": "5.644379",
+            "current_price": "5.72",
+            "unrealized_pl": "83.1831"
+        },
+        {
+            "symbol": "SOFI",
+            "qty": "6066",
+            "side": "long",
+            "avg_entry": "19.084939",
+            "current_price": "19.12",
+            "unrealized_pl": "212.680026"
         }
     ]
 }

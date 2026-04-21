@@ -779,82 +779,108 @@ def boot_app():
         suite._entrance_anim = fade_in
 
     def _check_agent_resume():
-        """Ask user if they want to resume the autonomous agent and/or auto-trader."""
+        """Show a polished resume dialog with table of monitored stocks."""
         settings = load_settings()
-        was_running = settings.get("agent_was_running", False)
         monitored = settings.get("monitored_stocks", {})
         managed_positions = settings.get("agent_managed_positions", [])
 
-        if not was_running and not monitored:
+        if not monitored and not managed_positions:
             return
 
-        # Build a detailed resume message
-        lines = []
-        if was_running:
-            lines.append("The Autonomous Agent was running.")
+        # Build custom dialog
+        from core.ui.theme import theme as _theme
+        dlg = QDialog(suite)
+        dlg.setWindowTitle("Resume AI Trading")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
+        dlg.setMinimumSize(500, 400)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
+
+        lay = QVBoxLayout()
+
+        title = QLabel("Resume AI Trading?")
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
+
+        subtitle = QLabel(f"{len(monitored)} monitored stocks, {len(managed_positions)} positions")
+        subtitle.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        lay.addWidget(subtitle)
+
+        # Stocks table
         if monitored:
-            lines.append(f"\nAuto-trading {len(monitored)} stocks:")
-            for ticker, info in list(monitored.items())[:10]:
-                sig = info.get("last_signal", "?")
-                conf = info.get("last_confidence", 0)
-                lines.append(f"  {ticker}: {sig} ({conf:.0%})")
-            if len(monitored) > 10:
-                lines.append(f"  +{len(monitored)-10} more...")
+            table = QTableWidget()
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Stock", "Last Signal", "Interval"])
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setRowCount(len(monitored))
+            for i, (ticker, info) in enumerate(monitored.items()):
+                table.setItem(i, 0, QTableWidgetItem(ticker))
+                sig = info.get("last_signal", "pending")
+                sig_item = QTableWidgetItem(sig)
+                colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
+                sig_item.setForeground(QColor(colors.get(sig, TEXT_MUTED)))
+                table.setItem(i, 1, sig_item)
+                table.setItem(i, 2, QTableWidgetItem(info.get("interval", "5m")))
+            lay.addWidget(table)
+
+        # Positions summary
         if managed_positions:
             total_value = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0))
                              for p in managed_positions)
             total_pl = sum(float(p.get("unrealized_pl", 0)) for p in managed_positions)
-            lines.append(f"\nManaged positions: {len(managed_positions)} stocks")
-            lines.append(f"Total value: ${total_value:,.2f}")
-            lines.append(f"Unrealized P&L: ${total_pl:+,.2f}")
+            pl_color = COLOR_PROFIT if total_pl >= 0 else COLOR_LOSS
+            pos_label = QLabel(
+                f"Managed positions: {len(managed_positions)} stocks\n"
+                f"Total value: ${total_value:,.2f}\n"
+                f"Unrealized P&L: ${total_pl:+,.2f}")
+            pos_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px; padding: 4px;")
+            lay.addWidget(pos_label)
 
-        lines.append("\nResume where you left off?")
+        note = QLabel("Resume AI = Start agent + auto-trading\nManage Manually = Keep stocks, no AI")
+        note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        lay.addWidget(note)
 
-        reply = QMessageBox.question(
-            suite, "Resume AI Trading",
-            "\n".join(lines),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
+        # Buttons
+        btn_row = QHBoxLayout()
+        yes_btn = QPushButton("Resume AI")
+        yes_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 12px; padding: 8px 20px;")
+        yes_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(yes_btn)
+        no_btn = QPushButton("Manage Manually")
+        no_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 12px; padding: 8px 20px;")
+        no_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(no_btn)
+        lay.addLayout(btn_row)
 
-        if reply == QMessageBox.Yes:
+        dlg.setLayout(lay)
+        result = dlg.exec_()
+
+        if result == QDialog.Accepted:
             suite.event_bus.log_entry.emit(
-                f"Resuming AI — {len(monitored)} monitored stocks, "
-                f"{len(managed_positions)} positions loaded", "trade")
-
+                f"Resuming AI — {len(monitored)} stocks, {len(managed_positions)} positions", "trade")
             for ticker, info in monitored.items():
                 sig = info.get("last_signal", "")
-                conf = info.get("last_confidence", 0)
-                if sig and conf > 0:
-                    suite.event_bus.log_entry.emit(
-                        f"Restored {ticker}: {sig} ({conf:.0%})", "system")
+                if sig and sig not in ("?", ""):
+                    suite.event_bus.log_entry.emit(f"Restored {ticker}: {sig}", "system")
                 else:
-                    suite.event_bus.log_entry.emit(
-                        f"Restored {ticker}: will check shortly", "system")
+                    suite.event_bus.log_entry.emit(f"Restored {ticker}: will check shortly", "system")
 
-            # Always start autonomous agent on resume
             suite.event_bus.log_entry.emit("Starting autonomous agent...", "system")
             suite.tabs.setCurrentIndex(1)
-
             def _start_agent_delayed():
                 ai = getattr(suite, 'ai_agent', None)
                 if ai and hasattr(ai, '_toggle_agent'):
                     ai._toggle_agent()
-                else:
-                    suite.event_bus.log_entry.emit("Click AI Agent tab to start", "warn")
             QTimer.singleShot(1500, _start_agent_delayed)
         else:
+            # Manual mode — clear agent state but keep monitored stocks for manual use
             settings["agent_was_running"] = False
             settings["agent_managed_positions"] = []
             save_settings(settings)
-
-    reveal = WindowReveal(suite, on_done=_on_reveal_done)
-    reveal.start()
-    suite._reveal = reveal
-    suite.raise_()
-    suite.activateWindow()
-
-    sys.exit(app.exec_())
-
+            suite.event_bus.log_entry.emit(
+                f"Manual mode — {len(monitored)} stocks kept, AI agent not started", "system")
 
 if __name__ == "__main__":
     boot_app()
