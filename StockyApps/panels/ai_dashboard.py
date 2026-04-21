@@ -265,24 +265,40 @@ class AIDashboardPanel(QWidget):
             if ticker not in all_stocks:
                 all_stocks[ticker] = info
 
-        # If "manage manual" is on or agent is running, add broker positions
+        # Add saved positions (from settings, no broker call — prevents freeze)
         settings_chk = load_settings()
-        if (settings_chk.get("manage_manual_stocks") or getattr(self, '_agent_running', False)) and self.broker:
-            try:
-                positions = self.broker.get_positions()
-                if isinstance(positions, list):
-                    for p in positions:
-                        sym = p.get("symbol", "")
-                        if sym and sym not in all_stocks:
-                            all_stocks[sym] = {
-                                "signal": "HOLD", "confidence": 0,
-                                "price": float(p.get("current_price", 0)),
-                                "last_check": "--", "next_secs": 0,
-                                "interval": "managed", "checks": 0,
-                                "mode": "Position",
-                            }
-            except Exception:
-                pass
+        if settings_chk.get("manage_manual_stocks") or getattr(self, '_agent_running', False):
+            saved_positions = settings_chk.get("agent_managed_positions", [])
+            for p in saved_positions:
+                sym = p.get("symbol", "")
+                if sym and sym not in all_stocks:
+                    all_stocks[sym] = {
+                        "signal": "HOLD", "confidence": 0,
+                        "price": float(p.get("current_price", 0)),
+                        "last_check": "--", "next_secs": 0,
+                        "interval": "managed", "checks": 0,
+                        "mode": "Position",
+                    }
+            # Async refresh positions in background (updates saved data)
+            if self.broker and not hasattr(self, '_pos_refreshing'):
+                self._pos_refreshing = True
+                import threading
+                def _refresh_pos():
+                    try:
+                        positions = self.broker.get_positions()
+                        if isinstance(positions, list):
+                            settings2 = load_settings()
+                            settings2["agent_managed_positions"] = [
+                                {"symbol": p.get("symbol",""), "qty": p.get("qty","0"),
+                                 "side": p.get("side",""), "current_price": p.get("current_price","0"),
+                                 "unrealized_pl": p.get("unrealized_pl","0"),
+                                 "avg_entry": p.get("avg_entry_price","0")}
+                                for p in positions
+                            ]
+                            save_settings(settings2)
+                    except: pass
+                    self._pos_refreshing = False
+                threading.Thread(target=_refresh_pos, daemon=True).start()
 
         if not all_stocks:
             self.card_monitored.set_value("0")
