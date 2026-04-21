@@ -567,31 +567,40 @@ def boot_app():
         step(100, "Ready.", f"{APP_NAME} v{APP_VERSION}")
         time.sleep(0.5)
 
-    # Dissolve boot screen into particles, then show main window with fade-in
+    # Dissolve boot screen into particles
     boot.finish()
 
-    # Give particles time to animate before showing main window
+    # Let boot dissolve animate
     import time as _time
-    for _ in range(30):
+    for _ in range(40):
         _time.sleep(0.03)
         app.processEvents()
 
-    # Main window fade-in
+    # Particle convergence reveal — particles fly in and form the window outline
+    from core.ui.window_reveal import WindowReveal
+
+    # Prepare main window (invisible)
     effect = QGraphicsOpacityEffect(suite)
     suite.setGraphicsEffect(effect)
     effect.setOpacity(0.0)
     suite.show()
+
+    def _on_reveal_done():
+        """Fade in main window when particles arrive."""
+        fade_in = QPropertyAnimation(effect, b"opacity")
+        fade_in.setDuration(500)
+        fade_in.setStartValue(0.0)
+        fade_in.setEndValue(1.0)
+        fade_in.setEasingCurve(QEasingCurve.OutCubic)
+        fade_in.finished.connect(lambda: suite.setGraphicsEffect(None))
+        fade_in.start()
+        suite._entrance_anim = fade_in
+
+    reveal = WindowReveal(suite, on_done=_on_reveal_done)
+    reveal.start()
+    suite._reveal = reveal  # prevent GC
     suite.raise_()
     suite.activateWindow()
-
-    fade_in = QPropertyAnimation(effect, b"opacity")
-    fade_in.setDuration(600)
-    fade_in.setStartValue(0.0)
-    fade_in.setEndValue(1.0)
-    fade_in.setEasingCurve(QEasingCurve.OutCubic)
-    fade_in.finished.connect(lambda: suite.setGraphicsEffect(None))  # Remove effect after done
-    fade_in.start()
-    suite._entrance_anim = fade_in  # prevent GC
 
     sys.exit(app.exec_())
 
