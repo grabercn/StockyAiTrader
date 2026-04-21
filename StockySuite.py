@@ -758,16 +758,7 @@ def boot_app():
     for _ in range(10):
         _time.sleep(0.05)
         app.processEvents()
-    print("[BOOT] Window shown (invisible), starting reveal animation...", flush=True)
-
-    def _on_reveal_done():
-        """Brief pause on dark screen, then fade in the fully-rendered app."""
-        # Small pause so user sees the particle outline form
-        pause = QTimer()
-        pause.setSingleShot(True)
-        pause.timeout.connect(lambda: _fade_in_app())
-        pause.start(300)
-        suite._pause_timer = pause
+    print("[BOOT] Window shown, starting fade-in...", flush=True)
 
     def _fade_in_app():
         print("[BOOT] Fading in app...", flush=True)
@@ -827,6 +818,21 @@ def boot_app():
                 suite.event_bus.log_entry.emit("Manual mode — stocks kept, AI not started", "system")
         except Exception as e:
             print(f"[RESUME ERROR] {e}", flush=True)
+
+    # Start the reveal animation, fall back to direct fade-in
+    try:
+        reveal = WindowReveal(suite, on_done=_fade_in_app)
+        reveal.start()
+        suite._reveal = reveal
+    except Exception:
+        print("[BOOT] Reveal failed, direct fade-in", flush=True)
+        _fade_in_app()
+
+    suite.raise_()
+    suite.activateWindow()
+
+    sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     boot_app()
