@@ -114,11 +114,51 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
     if portfolio_context:
         sections.append(f"Portfolio Context: {portfolio_context}")
 
+    # Add truncated trade history + user profile
+    try:
+        from .reinforcement import get_stats
+        from .logger import get_log_entries
+        stats = get_stats()
+        sections.append(
+            f"Trading History: {stats.get('total_decisions',0)} decisions, "
+            f"{stats.get('total_executions',0)} executions, "
+            f"{stats.get('matched_trades',0)} matched for learning"
+        )
+
+        # Last 5 trades (truncated)
+        try:
+            entries = get_log_entries(limit=20)
+            recent_trades = [e for e in entries if e.get("type") == "execution"
+                           and e.get("status") not in ("failed", "cancelled")][:5]
+            if recent_trades:
+                trade_lines = []
+                for t in recent_trades:
+                    trade_lines.append(
+                        f"  {t.get('side','?').upper()} {t.get('ticker','?')} "
+                        f"x{t.get('qty',0)} @ ${t.get('fill_price',0) or '?'}"
+                    )
+                sections.append(f"Recent Trades:\n" + "\n".join(trade_lines))
+        except: pass
+
+        # User profile from settings
+        try:
+            with open(SETTINGS_FILE) as f:
+                user_settings = json.load(f)
+            aggr = user_settings.get("aggressivity", "Default")
+            manage_manual = user_settings.get("manage_manual_stocks", False)
+            sections.append(
+                f"User Profile: {aggr} aggressivity, "
+                f"{'manages manual stocks' if manage_manual else 'AI-only stocks'}"
+            )
+        except: pass
+    except: pass
+
     data_block = "\n".join(sections)
 
     prompt = (
-        f"You are a senior quantitative trading advisor. Analyze ALL the data below and give "
-        f"your independent recommendation. Be specific about WHY.\n\n"
+        f"You are a senior quantitative trading advisor. You have access to the full trading "
+        f"system data including history, user profile, and all indicators. Analyze ALL data "
+        f"and give your independent recommendation. Cite specific data points.\n\n"
         f"{data_block}\n\n"
         f"Respond in this exact JSON format:\n"
         f'{{"recommendation": "BUY/SELL/HOLD", "confidence_adjustment": -0.3 to 0.3, '
