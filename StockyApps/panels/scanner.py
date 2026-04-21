@@ -613,7 +613,7 @@ class ScannerPanel(QWidget):
 
     def _show_detail(self, r):
         """Show detailed breakdown for a scanned stock."""
-        self.detail_title.setText(f"{r.action}  {r.ticker}  —  ${r.price:.2f}")
+        self.detail_title.setText(f"{r.action}  {r.ticker}")
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
@@ -881,14 +881,12 @@ class ScannerPanel(QWidget):
         self.detail_figure.clear()
         cc = chart_colors(); self.detail_figure.set_facecolor(cc["fig_bg"])
         try:
-            # Use the same period the scan used, or default to 5d intraday
             r = self._selected_result
             period = getattr(r, 'period_used', '5d') if r else '5d'
             interval = getattr(r, 'interval_used', '5m') if r else '5m'
 
             data = yf.Ticker(ticker).history(period=period, interval=interval)
             if data.empty or len(data) < 2:
-                # Fallback to 1 month daily
                 data = yf.Ticker(ticker).history(period="1mo", interval="1d")
                 period, interval = "1mo", "1d"
             if data.empty:
@@ -897,23 +895,42 @@ class ScannerPanel(QWidget):
             ax = self.detail_figure.add_subplot(111)
             ax.set_facecolor(cc["ax_bg"])
             closes = data["Close"].values
-            x = range(len(closes))
+            timestamps = data.index
 
             trending_up = closes[-1] >= closes[0]
             color = COLOR_BUY if trending_up else COLOR_SELL
 
-            ax.plot(x, closes, color=color, linewidth=1.5)
-            ax.fill_between(x, closes, alpha=0.08, color=color)
+            ax.plot(timestamps, closes, color=color, linewidth=1.5)
+            ax.fill_between(timestamps, closes, alpha=0.08, color=color)
 
-            # Show current price annotation
-            ax.annotate(f"${closes[-1]:.2f}", xy=(len(closes)-1, closes[-1]),
+            ax.annotate(f"${closes[-1]:.2f}", xy=(timestamps[-1], closes[-1]),
                        fontsize=8, fontweight="bold", color=color,
                        xytext=(-50, 8), textcoords="offset points")
 
             ax.set_title(f"{ticker} — {period} @ {interval}", color=cc["text"], fontsize=10)
-            ax.tick_params(colors=cc["muted"], labelsize=7)
+            ax.tick_params(colors=cc["muted"], labelsize=6)
             ax.grid(True, alpha=0.15, color=cc["grid"])
-            self.detail_figure.subplots_adjust(left=0.12, right=0.95, top=0.88, bottom=0.1)
+
+            # Format x-axis based on interval
+            n = len(timestamps)
+            if n > 8:
+                step = max(1, n // 6)
+                tick_idx = list(range(0, n, step))
+            else:
+                tick_idx = list(range(n))
+
+            # Pick format based on data range
+            if interval in ("1m", "5m", "15m", "30m"):
+                fmt = "%m/%d %H:%M"
+            else:
+                fmt = "%m/%d"
+
+            ax.set_xticks([timestamps[i] for i in tick_idx])
+            ax.set_xticklabels([timestamps[i].strftime(fmt) for i in tick_idx],
+                               rotation=30, ha="right", fontsize=6)
+
+            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"${x:,.2f}"))
+            self.detail_figure.subplots_adjust(left=0.15, right=0.95, top=0.88, bottom=0.22)
         except Exception:
             pass
         self.detail_canvas.draw()
