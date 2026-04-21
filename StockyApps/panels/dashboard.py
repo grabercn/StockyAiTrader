@@ -249,10 +249,11 @@ class DashboardPanel(QWidget):
                 sym = p.get("symbol", "")
                 qty = float(p.get("qty", 0))
 
-                # Check if AI-managed (check both scanner and ai_agent services)
+                # Check if AI-managed
                 is_ai = False
                 main = self.window() if hasattr(self, 'window') else None
                 if main:
+                    # Check auto-trader service
                     for attr in ('scanner', 'ai_agent'):
                         panel = getattr(main, attr, None)
                         if panel:
@@ -260,6 +261,14 @@ class DashboardPanel(QWidget):
                             if svc and svc.is_monitoring(sym):
                                 is_ai = True
                                 break
+                    # Check AI agent's tracked stocks
+                    if not is_ai:
+                        ai = getattr(main, 'ai_agent', None)
+                        if ai and hasattr(ai, '_agent_stocks') and sym in ai._agent_stocks:
+                            is_ai = True
+                        # Also check if agent is running with manage_manual on
+                        if ai and getattr(ai, '_agent_running', False):
+                            is_ai = True
                 dot = "● " if is_ai else "○ "
 
                 vals = [

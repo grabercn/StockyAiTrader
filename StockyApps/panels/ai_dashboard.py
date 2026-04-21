@@ -258,6 +258,25 @@ class AIDashboardPanel(QWidget):
             if ticker not in all_stocks:
                 all_stocks[ticker] = info
 
+        # If "manage manual" is on or agent is running, add broker positions
+        settings_chk = load_settings()
+        if (settings_chk.get("manage_manual_stocks") or getattr(self, '_agent_running', False)) and self.broker:
+            try:
+                positions = self.broker.get_positions()
+                if isinstance(positions, list):
+                    for p in positions:
+                        sym = p.get("symbol", "")
+                        if sym and sym not in all_stocks:
+                            all_stocks[sym] = {
+                                "signal": "HOLD", "confidence": 0,
+                                "price": float(p.get("current_price", 0)),
+                                "last_check": "--", "next_secs": 0,
+                                "interval": "managed", "checks": 0,
+                                "mode": "Position",
+                            }
+            except Exception:
+                pass
+
         if not all_stocks:
             self.card_monitored.set_value("0")
             self.card_mode.set_value("No agent" if not getattr(self, '_agent_running', False) else "Running")
