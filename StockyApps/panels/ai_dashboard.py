@@ -584,15 +584,20 @@ class AIDashboardPanel(QWidget):
                     tickers.update(t)
                     sources_used.append(f"Trending({len(t)})")
                 except: pass
-                # Always include stocks we currently hold
-                try:
-                    positions = self.broker.get_positions()
-                    if isinstance(positions, list):
-                        held = [p.get("symbol", "") for p in positions if p.get("symbol")]
-                        tickers.update(held)
-                        if held:
-                            sources_used.append(f"Held({len(held)})")
-                except: pass
+                # Include held stocks only if managing manual positions
+                if settings.get("manage_manual_stocks"):
+                    try:
+                        positions = self.broker.get_positions()
+                        if isinstance(positions, list):
+                            held = [p.get("symbol", "") for p in positions if p.get("symbol")]
+                            tickers.update(held)
+                            if held:
+                                sources_used.append(f"Held({len(held)})")
+                    except: pass
+                # Always include stocks the agent itself bought
+                for t in list(self._agent_stocks.keys()):
+                    if self._agent_stocks[t].get("mode") == "Auto":
+                        tickers.add(t)
 
                 tickers = list(tickers)[:25]  # Allow more to fit held stocks
 
