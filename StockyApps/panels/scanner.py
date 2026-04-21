@@ -618,9 +618,6 @@ class ScannerPanel(QWidget):
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
-        # Show quick data immediately, load rest async
-        self.detail_stats.setHtml(f"<b>Loading {r.ticker} details...</b>")
-
         # Set qty and buttons immediately (no network needed)
         qty = r.position_size if r.position_size > 0 else 1
         self.detail_qty.setValue(qty)
@@ -630,54 +627,75 @@ class ScannerPanel(QWidget):
         self.detail_sell_btn.setVisible(False)
         self.detail_owned_label.setText("")
 
-        # Load heavy data in background
+        # Show instant signal data + loading indicators for async sections
+        loading = f'<span style="color:{TEXT_MUTED}"><i>loading...</i></span>'
+        instant_html = (
+            f'<b style="color:{BRAND_ACCENT}">Loading details for {r.ticker}...</b><br><br>'
+            f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence, score {r.score:.3f})<br>'
+            f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)<br>'
+            f'<b>Position:</b> {r.position_size} shares  |  <b>SL:</b> ${r.stop_loss:.2f}  |  <b>TP:</b> ${r.take_profit:.2f}<br><br>'
+            f'<b style="color:{BRAND_PRIMARY}">Company Info:</b> {loading}<br>'
+            f'<b style="color:{BRAND_ACCENT}">AI Analysis:</b> {loading}<br>'
+            f'<b style="color:{BRAND_PRIMARY}">Addon Signals:</b> {loading}<br>'
+        )
+        self.detail_stats.setHtml(instant_html)
+
+        # Progressive async loading
         import threading
         if not hasattr(self, '_stock_info_cache'):
             self._stock_info_cache = {}
 
-        def _load():
-            try:
-                # Fetch stock info (cached)
-                if r.ticker not in self._stock_info_cache:
-                    try:
-                        info = yf.Ticker(r.ticker).info
-                        self._stock_info_cache[r.ticker] = {
-                            "name": info.get("shortName", r.ticker),
-                            "desc": info.get("longBusinessSummary", ""),
-                            "sector": info.get("sector", ""),
-                            "industry": info.get("industry", ""),
-                            "cap": f"${info.get('marketCap',0)/1e9:.1f}B" if info.get('marketCap',0) > 1e9 else f"${info.get('marketCap',0)/1e6:.0f}M" if info.get('marketCap',0) > 1e6 else "",
-                        }
-                    except Exception:
-                        self._stock_info_cache[r.ticker] = {}
+        def _load_progressive():
+            if self._selected_result is not r:
+                return
 
-                # Build detail HTML (fast, no LLM)
-                html = self._build_detail_html(r)
-                QTimer.singleShot(0, lambda: self._apply_detail(r, html))
-
-                # Then load LLM reasoning separately
+            # Phase 1: Stock info (1-3s)
+            if r.ticker not in self._stock_info_cache:
                 try:
-                    from core.llm_reasoner import generate_reasoning
-                    llm_text = generate_reasoning(
-                        r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
-                        feature_importances=r.feature_importances,
-                    )
-                    if llm_text and self._selected_result is r:
-                        # Replace "Loading AI reasoning..." placeholder
-                        updated = html.replace(
-                            '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
-                            "<br>".join(f"  {p}" for p in llm_text.split(" | "))
-                        )
-                        QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
+                    info = yf.Ticker(r.ticker).info
+                    self._stock_info_cache[r.ticker] = {
+                        "name": info.get("shortName", r.ticker),
+                        "desc": info.get("longBusinessSummary", ""),
+                        "sector": info.get("sector", ""),
+                        "industry": info.get("industry", ""),
+                        "cap": f"${info.get('marketCap',0)/1e9:.1f}B" if info.get('marketCap',0) > 1e9 else f"${info.get('marketCap',0)/1e6:.0f}M" if info.get('marketCap',0) > 1e6 else "",
+                    }
                 except Exception:
-                    pass
+                    self._stock_info_cache[r.ticker] = {}
+
+            if self._selected_result is not r:
+                return
+
+            # Phase 2: Build main detail HTML (instant, uses cached info)
+            html = self._build_detail_html(r)
+            QTimer.singleShot(0, lambda: self._apply_detail(r, html))
+
+            if self._selected_result is not r:
+                return
+
+            # Phase 3: LLM reasoning (5-30s on first load)
+            try:
+                from core.llm_reasoner import generate_reasoning
+                llm_text = generate_reasoning(
+                    r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
+                    feature_importances=r.feature_importances,
+                )
+                if llm_text and self._selected_result is r:
+                    updated = html.replace(
+                        '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
+                        "<br>".join(f"  {p}" for p in llm_text.split(" | "))
+                    )
+                    QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
             except Exception:
-                pass
+                if self._selected_result is r:
+                    updated = html.replace(
+                        '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
+                        f'<span style="color:{TEXT_MUTED}">AI model unavailable</span>'
+                    )
+                    QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
 
-        threading.Thread(target=_load, daemon=True).start()
-
-        # Draw chart in background too
-        threading.Thread(target=lambda: QTimer.singleShot(0, lambda: self._draw_detail_chart(r.ticker)), daemon=True).start()
+        threading.Thread(target=_load_progressive, daemon=True).start()
+        QTimer.singleShot(0, lambda: self._draw_detail_chart(r.ticker))
 
     def _apply_detail(self, r, html):
         """Apply the loaded detail HTML and update buttons (main thread)."""
