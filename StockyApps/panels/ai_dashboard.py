@@ -631,6 +631,15 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(
                                         f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} "
                                         f"(${cost:,.0f}, {r.confidence:.0%})", "trade")
+                                    # Add to auto-trader monitoring so it shows in table
+                                    main = self.window()
+                                    if main and hasattr(main, 'scanner'):
+                                        try:
+                                            svc = main.scanner._get_auto_service()
+                                            if not svc.is_monitoring(r.ticker):
+                                                svc.add_stock(r.ticker, period="5d", interval="5m",
+                                                             auto_execute=True, min_confidence=0.5)
+                                        except: pass
                                 else:
                                     self.bus.log_entry.emit(
                                         f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
