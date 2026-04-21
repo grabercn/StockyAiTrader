@@ -606,19 +606,58 @@ class AIDashboardPanel(QWidget):
                 try:
                     from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
                     if gemini_enabled():
+                        # Gather addon data once
+                        addon_signals = {}
+                        try:
+                            from addons import get_all_addons
+                            for addon in get_all_addons():
+                                if addon.available and addon.enabled:
+                                    try:
+                                        feats = addon.get_features("MARKET")
+                                        if feats:
+                                            for k, v in list(feats.items())[:3]:
+                                                addon_signals[f"{addon.name}_{k}"] = v
+                                    except: pass
+                        except: pass
+
                         for r in results:
                             if not r.error and r.action in ("BUY", "SELL"):
+                                # Get position info if we hold this stock
+                                pos_info = None
+                                if r.ticker in self._agent_stocks:
+                                    s = self._agent_stocks[r.ticker]
+                                    pos_info = f"qty={s.get('qty',0)}, last_signal={s.get('signal','?')}"
+
+                                # Get per-stock addon data
+                                stock_addons = dict(addon_signals)
+                                try:
+                                    from addons import get_all_addons as _ga
+                                    for addon in _ga():
+                                        if addon.available and addon.enabled:
+                                            try:
+                                                f = addon.get_features(r.ticker)
+                                                if f:
+                                                    for k, v in list(f.items())[:3]:
+                                                        stock_addons[f"{addon.name}_{k}"] = v
+                                            except: pass
+                                except: pass
+
                                 advisory = get_advisory(
                                     r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
-                                    feature_importances=r.feature_importances)
+                                    feature_importances=r.feature_importances,
+                                    addon_data=stock_addons if stock_addons else None,
+                                    position_info=pos_info,
+                                    rl_quality=getattr(r, '_rl_quality', None),
+                                    portfolio_context=f"BP=${bp:,.0f}, {trades_today}/{max_trades} trades today")
                                 if advisory:
                                     old_conf = r.confidence
                                     _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
                                     reasoning = advisory.get("reasoning", "")
                                     model = advisory.get("model_used", "?")
+                                    conv = advisory.get("conviction", "?")
                                     self.bus.log_entry.emit(
                                         f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
-                                        f"adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
+                                        f"[{conv}/5] adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
                                 # No response — log why
                                 else:
                                     err = getattr(get_advisory, '_last_error', 'unknown')

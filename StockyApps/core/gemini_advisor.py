@@ -70,14 +70,16 @@ def is_enabled():
 
 
 def get_advisory(ticker, price, signal, confidence, probs, atr,
-                 feature_importances=None, portfolio_context=""):
+                 feature_importances=None, portfolio_context="",
+                 addon_data=None, position_info=None, rl_quality=None):
     """
-    Get Gemini's advisory recommendation for a stock.
+    Get Gemini's advisory with FULL data access (all indicators + addons).
 
     Returns:
         {
             "recommendation": "BUY" | "SELL" | "HOLD",
             "confidence_adjustment": float (-0.3 to +0.3),
+            "conviction": int (1-5, how sure Gemini is),
             "reasoning": str,
             "model_used": str,
         }
@@ -87,23 +89,41 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
     if not client:
         return None
 
-    # Build prompt
-    top_features = ""
+    # Build comprehensive prompt with ALL available data
+    sections = []
+    sections.append(f"Stock: {ticker} @ ${price:.2f}")
+    sections.append(f"AI Model Signal: {signal} ({confidence:.0%} confidence)")
+    sections.append(f"Probabilities: SELL {probs[0]:.1%}, HOLD {probs[1]:.1%}, BUY {probs[2]:.1%}")
+    sections.append(f"Volatility: ATR ${atr:.2f} ({atr/price*100:.1f}%)")
+
     if feature_importances:
-        sorted_f = sorted(feature_importances.items(), key=lambda x: -x[1])[:5]
-        top_features = ", ".join(f"{k}: {v:.0f}" for k, v in sorted_f)
+        sorted_f = sorted(feature_importances.items(), key=lambda x: -x[1])[:10]
+        feat_lines = "\n".join(f"  {k}: importance {v:.0f}" for k, v in sorted_f)
+        sections.append(f"Feature Importances (what drove the AI signal):\n{feat_lines}")
+
+    if addon_data:
+        addon_lines = "\n".join(f"  {k}: {v}" for k, v in list(addon_data.items())[:15])
+        sections.append(f"Addon Signals (sentiment, macro, social):\n{addon_lines}")
+
+    if position_info:
+        sections.append(f"Current Position: {position_info}")
+
+    if rl_quality:
+        sections.append(f"RL Feedback Quality Score: {rl_quality:.2f} (1.0=neutral, >1=historically good, <1=historically bad)")
+
+    if portfolio_context:
+        sections.append(f"Portfolio Context: {portfolio_context}")
+
+    data_block = "\n".join(sections)
 
     prompt = (
-        f"You are a stock trading advisor. Analyze this data and give a brief recommendation.\n\n"
-        f"Stock: {ticker} @ ${price:.2f}\n"
-        f"AI Signal: {signal} ({confidence:.0%} confidence)\n"
-        f"Probabilities: SELL {probs[0]:.0%}, HOLD {probs[1]:.0%}, BUY {probs[2]:.0%}\n"
-        f"ATR: ${atr:.2f} ({atr/price*100:.1f}% volatility)\n"
-        f"Key factors: {top_features}\n"
-        f"{portfolio_context}\n\n"
+        f"You are a senior quantitative trading advisor. Analyze ALL the data below and give "
+        f"your independent recommendation. Be specific about WHY.\n\n"
+        f"{data_block}\n\n"
         f"Respond in this exact JSON format:\n"
-        f'{{"recommendation": "BUY/SELL/HOLD", "confidence_adjustment": -0.1 to 0.1, '
-        f'"reasoning": "2-3 sentence explanation"}}'
+        f'{{"recommendation": "BUY/SELL/HOLD", "confidence_adjustment": -0.3 to 0.3, '
+        f'"conviction": 1 to 5, '
+        f'"reasoning": "2-3 sentence analysis citing specific data points"}}'
     )
 
     _last_error = None
@@ -136,12 +156,13 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
 
 def apply_advisory(signal, confidence, advisory):
     """
-    Apply Gemini's advisory to adjust signal and confidence.
+    Multi-vote weighted system: Gemini's vote weight scales with conviction.
 
-    The advisory heavily skews but doesn't dictate:
-    - If Gemini agrees: boost confidence by adjustment
-    - If Gemini disagrees: reduce confidence (but don't flip signal)
-    - Confidence adjustment capped at ±0.3
+    Voting weights:
+    - AI Model: base weight = 1.0
+    - Gemini: weight = conviction / 5 (0.2 to 1.0)
+    - Agreement: combined confidence boost
+    - Disagreement: weighted reduction (high conviction Gemini = bigger impact)
 
     Returns: (adjusted_signal, adjusted_confidence)
     """
@@ -149,18 +170,24 @@ def apply_advisory(signal, confidence, advisory):
         return signal, confidence
 
     adj = float(advisory.get("confidence_adjustment", 0))
-    adj = max(-0.3, min(0.3, adj))  # Cap adjustment
+    adj = max(-0.3, min(0.3, adj))
+    conviction = min(5, max(1, int(advisory.get("conviction", 3))))
+    gemini_weight = conviction / 5.0  # 0.2 to 1.0
 
     gemini_rec = advisory.get("recommendation", "HOLD")
 
     if gemini_rec == signal:
-        # Agreement — boost confidence
-        new_conf = min(1.0, confidence + abs(adj))
+        # Both agree — boost proportional to Gemini's conviction
+        boost = abs(adj) * gemini_weight
+        new_conf = min(1.0, confidence + boost)
     elif gemini_rec == "HOLD":
-        # Gemini says wait — slightly reduce
-        new_conf = max(0.1, confidence - 0.1)
+        # Gemini says wait — reduce based on conviction
+        reduction = 0.05 * gemini_weight
+        new_conf = max(0.1, confidence - reduction)
     else:
-        # Disagreement — reduce confidence but don't flip
-        new_conf = max(0.1, confidence - abs(adj) - 0.1)
+        # Disagreement — reduce proportional to conviction
+        # High conviction Gemini disagreeing = bigger impact
+        reduction = (abs(adj) + 0.1) * gemini_weight
+        new_conf = max(0.1, confidence - reduction)
 
     return signal, round(new_conf, 3)
