@@ -159,7 +159,7 @@ class DashboardPanel(QWidget):
         self.setLayout(layout)
 
         # Auto-refresh timer (every 60 seconds)
-        self._refresh_interval = 60
+        self._refresh_interval = 30
         self._countdown = self._refresh_interval
         self._refresh_countdown_label = QLabel(f"Next refresh: {self._countdown}s")
         self._refresh_countdown_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
@@ -414,25 +414,29 @@ class DashboardPanel(QWidget):
             self.bus.log_entry.emit(f"Chart error: {e}", "error")
 
     def _cancel_order(self, order_id):
-        """Cancel a pending order and log it."""
+        """Cancel a pending order — async with immediate refresh."""
         if not self.broker:
             return
-        # Get order details before cancelling for the log
-        orders = self.broker.get_orders("open")
-        ticker, side, qty = "", "", 0
-        if isinstance(orders, list):
-            for o in orders:
-                if o.get("id") == order_id:
-                    ticker = o.get("symbol", "")
-                    side = o.get("side", "")
-                    qty = o.get("qty", 0)
-                    break
-
-        result = self.broker.cancel_order(order_id)
-        if "error" in result:
-            self.bus.log_entry.emit(f"Cancel failed: {result['error']}", "error")
-        else:
-            self.bus.log_entry.emit(f"Order cancelled: {ticker} {side} x{qty}", "trade")
+        import threading
+        def _do_cancel():
+            orders = self.broker.get_orders("open")
+            ticker, side, qty = "", "", 0
+            if isinstance(orders, list):
+                for o in orders:
+                    if o.get("id") == order_id:
+                        ticker = o.get("symbol", "")
+                        side = o.get("side", "")
+                        qty = o.get("qty", 0)
+                        break
+            result = self.broker.cancel_order(order_id)
+            if "error" in result:
+                self.bus.log_entry.emit(f"Cancel failed: {result['error']}", "error")
+            else:
+                self.bus.log_entry.emit(f"Order cancelled: {ticker} {side} x{qty}", "trade")
+                from core.logger import log_cancellation
+                log_cancellation(ticker, order_id, side, qty)
+            self._refresh_data()
+        threading.Thread(target=_do_cancel, daemon=True).start()
             from core.logger import log_cancellation
             log_cancellation(ticker, order_id, side, qty)
             QTimer.singleShot(1000, self.refresh)
@@ -452,14 +456,21 @@ class DashboardPanel(QWidget):
         if not ok:
             return
 
-        # Use close_position endpoint (not place_order) — avoids 403 short sell restriction
-        result = self.broker.close_position(symbol, qty=qty)
-        if "error" in result:
-            self.bus.log_entry.emit(f"Sell {symbol} x{qty} failed: {result['error']}", "error")
-        else:
-            self.bus.log_entry.emit(f"Sold {symbol} x{qty} — order {result.get('id', '?')}", "trade")
-            self.bus.positions_changed.emit()
-            QTimer.singleShot(2000, self.refresh)
+        # Run sell in background, refresh immediately after
+        self.bus.log_entry.emit(f"Selling {symbol} x{qty}...", "info")
+        import threading
+        def _do_sell():
+            result = self.broker.close_position(symbol, qty=qty)
+            if "error" in result:
+                self.bus.log_entry.emit(f"Sell {symbol} x{qty} failed: {result['error']}", "error")
+            else:
+                self.bus.log_entry.emit(f"Sold {symbol} x{qty} — order {result.get('id', '?')}", "trade")
+                self.bus.positions_changed.emit()
+            # Full re-fetch and refresh
+            self._refresh_data()
+            import time; time.sleep(2)
+            self._refresh_data()
+        threading.Thread(target=_do_sell, daemon=True).start()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
