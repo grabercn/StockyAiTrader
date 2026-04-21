@@ -238,8 +238,8 @@ def _get_penny_stocks(limit=25):
 
     # WSB-popular penny stocks + known active pennies
     wsb_pennies = [
-        "SNDL", "CLOV", "WISH", "BB", "NOK", "PLTR", "SOFI",
-        "TELL", "GSAT", "ASTS", "DNA", "IONQ", "OPEN", "SKLZ",
+        "SNDL", "CLOV", "BB", "NOK", "PLTR", "SOFI",
+        "GSAT", "ASTS", "DNA", "IONQ", "OPEN", "SKLZ",
         "MNMD", "SIRI", "PLUG", "SNAP", "VALE", "NU",
         "GRAB", "RKLB", "JOBY", "AFRM", "HOOD",
     ]
@@ -268,7 +268,7 @@ def _get_penny_stocks(limit=25):
         return verified[:limit]
 
     # Final fallback
-    fallback = ["SNDL", "CLOV", "WISH", "NOK", "GSAT", "TELL", "DNA", "IONQ", "OPEN", "MNMD",
+    fallback = ["SNDL", "CLOV", "NOK", "GSAT", "DNA", "IONQ", "OPEN", "MNMD",
                 "PLUG", "SNAP", "VALE", "NU", "GRAB", "RKLB"]
     _set_cache("penny_stocks", fallback)
     return fallback

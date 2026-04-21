@@ -50,6 +50,9 @@ class ScannerPanel(QWidget):
         from core.widgets import DetailedProgressBar
         from core.discovery import get_all_sectors
 
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+
         outer = QVBoxLayout()
         outer.setSpacing(6)
         outer.setContentsMargins(8, 4, 8, 4)
@@ -711,6 +714,38 @@ class ScannerPanel(QWidget):
         lines.append(f'<b>Price:</b> ${r.price:.2f}  |  <b>ATR:</b> ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)')
         lines.append(f'<b>Position:</b> {r.position_size} shares  |  <b>SL:</b> ${r.stop_loss:.2f}  |  <b>TP:</b> ${r.take_profit:.2f}')
         lines.append("")
+
+        # ── Share Quantity Reasoning ──
+        if r.position_size > 0 and r.price > 0 and r.atr > 0:
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">Why {r.position_size} Shares?</b>')
+            cost = r.position_size * r.price
+            risk_per_share = abs(r.price - r.stop_loss) if r.stop_loss else r.atr
+            total_risk = r.position_size * risk_per_share
+            lines.append(f'  Total cost: ${cost:,.2f}')
+            lines.append(f'  Risk per share: ${risk_per_share:.2f} (ATR-based stop distance)')
+            lines.append(f'  Total risk: ${total_risk:,.2f} if stop-loss triggers')
+            if r.confidence > 0.7:
+                lines.append(f'  Sizing boosted: high confidence ({r.confidence:.0%}) allows larger position')
+            elif r.confidence < 0.4:
+                lines.append(f'  Sizing reduced: low confidence ({r.confidence:.0%}) limits exposure')
+            vol_label = "volatile" if r.atr / r.price > 0.02 else "calm"
+            lines.append(f'  Stock is {vol_label} — {"fewer shares to manage risk" if vol_label == "volatile" else "more shares since risk is lower"}')
+            lines.append("")
+
+        # ── Trend-Based Sell Recommendation ──
+        if r.action == "BUY" and r.take_profit > 0 and r.price > 0:
+            gain_pct = (r.take_profit - r.price) / r.price * 100
+            lines.append(f'<b style="color:{BRAND_PRIMARY}">Sell Recommendation</b>')
+            lines.append(f'  Target exit: ${r.take_profit:.2f} (+{gain_pct:.1f}% from entry)')
+            lines.append(f'  Stop loss: ${r.stop_loss:.2f} (-{abs(r.price - r.stop_loss) / r.price * 100:.1f}%)')
+            if r.probs[2] > 0.7:
+                lines.append(f'  Trend: <b style="color:{COLOR_BUY}">Strong bullish</b> — consider holding past target')
+            elif r.probs[2] > 0.5:
+                lines.append(f'  Trend: Moderate bullish — sell at target')
+            else:
+                lines.append(f'  Trend: Weak — sell quickly if it hits target')
+            lines.append(f'  <i style="color:{BRAND_ACCENT}">Set a limit sell at ${r.take_profit:.2f} using Quick Trade above</i>')
+            lines.append("")
 
         # ── Probabilities ──
         lines.append(f'<b style="color:{BRAND_PRIMARY}">Probabilities</b>')

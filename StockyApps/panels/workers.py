@@ -59,8 +59,10 @@ class ScanWorker(QThread):
                 iv = getattr(result, 'interval_used', '')
                 settings = f" [{p}/{iv}]" if self.auto_settings and p else ""
                 detail = f"{result.action}{settings}"
+            elif result and result.error:
+                detail = f"-- (insufficient data)"
             else:
-                detail = result.action if result else "..."
+                detail = "..."
             with self._progress_lock:
                 self._progress_queue.append((done, total, ticker, detail))
 
