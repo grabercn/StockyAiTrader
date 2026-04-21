@@ -400,18 +400,19 @@ class ScannerPanel(QWidget):
                 "based on volatility and volume characteristics"
             )
 
-        # Estimate time: ~8s per stock with 5 workers
-        est_seconds = int(len(tickers) * 8 / 5)
+        # Estimate time — use saved average if available, else default 8s/stock
+        settings = load_settings()
+        avg_per_stock = settings.get("scan_avg_seconds", 8.0)
+        est_seconds = max(5, int(len(tickers) * avg_per_stock / 5))
         self._scan_total = len(tickers)
         self._scan_est = est_seconds
-        self._scan_times = []  # Track per-stock times for live ETA
         self.progress.set_progress(5, f"Starting scan...",
             f"0/{len(tickers)} — est. ~{est_seconds}s")
         self.progress.add_log(f"Estimated time: ~{est_seconds}s for {len(tickers)} stocks")
 
         self._worker = ScanWorker(tickers, period, interval, self.rm, auto_settings=is_auto)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.finished.connect(self._on_done)
+        self._worker.progress.connect(self._on_progress, Qt.QueuedConnection)
+        self._worker.finished.connect(self._on_done, Qt.QueuedConnection)
         self._worker.start()
 
     def _on_progress(self, done, total, ticker, detail):
@@ -452,6 +453,15 @@ class ScannerPanel(QWidget):
             f"Scan complete — {len(results)} stocks in {elapsed:.1f}s",
             f"Est. was {est}s ({speed} than expected)"
         )
+
+        # Save timing for better future estimates (rolling average)
+        if len(results) > 0:
+            per_stock = elapsed / len(results) * 5  # Normalize for 5 workers
+            settings = load_settings()
+            old_avg = settings.get("scan_avg_seconds", 8.0)
+            # Weighted average: 70% new, 30% old
+            settings["scan_avg_seconds"] = round(per_stock * 0.7 + old_avg * 0.3, 2)
+            save_settings(settings)
         self.scan_btn.setEnabled(True)
         self.selected.clear()
 
