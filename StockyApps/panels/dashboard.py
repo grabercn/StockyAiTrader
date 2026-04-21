@@ -36,10 +36,13 @@ def save_settings(s):
 class DashboardPanel(QWidget):
     """Portfolio overview: account stats, positions, equity chart."""
 
+    _data_ready = pyqtSignal(object, object, object, object)  # acct, positions, orders, hist
+
     def __init__(self, broker, event_bus):
         super().__init__()
         self.broker = broker
         self.bus = event_bus
+        self._data_ready.connect(self._apply_refresh)
         self._build()
         self.bus.positions_changed.connect(self.refresh)
         self.bus.trade_executed.connect(lambda *_: self.refresh())
@@ -216,8 +219,8 @@ class DashboardPanel(QWidget):
             positions = self.broker.get_positions()
             orders = self.broker.get_orders("open")
             hist = self.broker.get_portfolio_history(period="1W", timeframe="1H")
-            # Update UI on main thread
-            QTimer.singleShot(0, lambda: self._apply_refresh(acct, positions, orders, hist))
+            # Update UI on main thread via signal (QTimer doesn't work from threads)
+            self._data_ready.emit(acct, positions, orders, hist)
         except Exception:
             pass
 

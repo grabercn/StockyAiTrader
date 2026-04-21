@@ -36,10 +36,13 @@ def save_settings(s):
 class PortfolioPanel(QWidget):
     """Detailed portfolio view: holdings, trade history, watchlist, performance."""
 
+    _data_ready = pyqtSignal(object, object, object, object, object)  # acct, positions, open, closed, hist
+
     def __init__(self, broker, event_bus):
         super().__init__()
         self.broker = broker
         self.bus = event_bus
+        self._data_ready.connect(self._apply_refresh)
         self._build()
         self.bus.positions_changed.connect(self.refresh)
         self.bus.trade_executed.connect(lambda *_: self.refresh())
@@ -329,7 +332,7 @@ class PortfolioPanel(QWidget):
             open_orders = self.broker.get_orders("open")
             closed_orders = self.broker.get_orders("closed")
             hist = self.broker.get_portfolio_history(period="1M", timeframe="1D")
-            QTimer.singleShot(0, lambda: self._apply_refresh(acct, positions, open_orders, closed_orders, hist))
+            self._data_ready.emit(acct, positions, open_orders, closed_orders, hist)
         except Exception:
             pass
 
