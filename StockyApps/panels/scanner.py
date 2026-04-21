@@ -651,10 +651,26 @@ class ScannerPanel(QWidget):
                     except Exception:
                         self._stock_info_cache[r.ticker] = {}
 
-                # Build full detail HTML on the thread
+                # Build detail HTML (fast, no LLM)
                 html = self._build_detail_html(r)
-                # Update UI on main thread
                 QTimer.singleShot(0, lambda: self._apply_detail(r, html))
+
+                # Then load LLM reasoning separately
+                try:
+                    from core.llm_reasoner import generate_reasoning
+                    llm_text = generate_reasoning(
+                        r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
+                        feature_importances=r.feature_importances,
+                    )
+                    if llm_text and self._selected_result is r:
+                        # Replace "Loading AI reasoning..." placeholder
+                        updated = html.replace(
+                            '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
+                            "<br>".join(f"  {p}" for p in llm_text.split(" | "))
+                        )
+                        QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -763,20 +779,10 @@ class ScannerPanel(QWidget):
             except Exception:
                 pass
 
-        # ── LLM Analysis ──
-        try:
-            from core.llm_reasoner import generate_reasoning
-            llm_text = generate_reasoning(
-                r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
-                feature_importances=r.feature_importances,
-            )
-            if llm_text:
-                lines.append(f'<b style="color:{BRAND_ACCENT}">AI Analysis</b>')
-                for part in llm_text.split(" | "):
-                    lines.append(f'  {part}')
-                lines.append("")
-        except Exception:
-            pass
+        # ── LLM Analysis (loaded separately, appended async) ──
+        lines.append(f'<b style="color:{BRAND_ACCENT}">AI Analysis</b>')
+        lines.append(f'  <i style="color:{TEXT_MUTED}">Loading AI reasoning...</i>')
+        lines.append("")
 
         # ── Signal Overview ──
         lines.append(f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%} confidence, score {r.score:.3f})')
