@@ -90,9 +90,9 @@ def auto_determine_settings(ticker):
         return _auto_cache[cached_key][0]
 
     try:
-        import yfinance as yf
-        # Use a minimal fetch — just 1 day of daily data for quick vol check
-        data = yf.Ticker(ticker).history(period="5d", interval="1d")
+        # Use the cached price data fetcher
+        from .data import _fetch_price_data
+        data = _fetch_price_data(ticker, "5d", "1d")
         if data.empty or len(data) < 2:
             return "5d", "5m", "default"
 
@@ -189,17 +189,10 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
                 if idx < len(feat_names):
                     importances[feat_names[idx]] = float(imp[idx])
 
-        # Generate reasoning — use LLM if available, fallback to template
-        try:
-            from .llm_reasoner import generate_reasoning as llm_reason
-            reasoning = llm_reason(
-                ticker, last_action, last_conf, last_price, atr, last_probs,
-                feature_importances=importances,
-            )
-        except Exception:
-            reasoning = _generate_reasoning(
-                ticker, last_action, last_conf, last_price, atr, last_probs, importances, data
-            )
+        # Generate reasoning — use template in scan (fast), LLM runs on-demand in detail
+        reasoning = _generate_reasoning(
+            ticker, last_action, last_conf, last_price, atr, last_probs, importances, data
+        )
 
         # Composite score for ranking (higher = better opportunity)
         # Weights: confidence matters most, BUY/SELL bonus, volume factor

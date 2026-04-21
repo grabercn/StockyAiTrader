@@ -102,19 +102,43 @@ def fetch_longterm(ticker, period="1y"):
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 
+_price_cache = {}  # {(ticker, period, interval): (data, timestamp)}
+
 def _fetch_price_data(ticker, period, interval):
-    """Download OHLCV data from Yahoo Finance."""
+    """Download OHLCV data from Yahoo Finance with short-term caching."""
+    import time
+    key = (ticker, period, interval)
+    if key in _price_cache:
+        data, ts = _price_cache[key]
+        if time.time() - ts < 120:  # Cache for 2 minutes
+            return data.copy()
+
     stock = yf.Ticker(ticker)
     data = stock.history(period=period, interval=interval)
+    if not data.empty:
+        _price_cache[key] = (data, time.time())
+        # Keep cache small
+        if len(_price_cache) > 50:
+            oldest = min(_price_cache, key=lambda k: _price_cache[k][1])
+            del _price_cache[oldest]
     return data if not data.empty else pd.DataFrame()
 
 
+_sentiment_cache = {}
+
 def _add_sentiment(data, ticker):
-    """Fetch news and add core sentiment scores as columns."""
+    """Fetch news and add core sentiment scores as columns. Cached per ticker."""
+    import time
+    if ticker in _sentiment_cache and time.time() - _sentiment_cache[ticker][2] < 300:
+        data["vader_sentiment"] = _sentiment_cache[ticker][0]
+        data["finbert_sentiment"] = _sentiment_cache[ticker][1]
+        return
+
     headlines = fetch_news(ticker)
     vader_score, finbert_score = compute_sentiment(headlines)
     data["vader_sentiment"] = vader_score
     data["finbert_sentiment"] = finbert_score
+    _sentiment_cache[ticker] = (vader_score, finbert_score, time.time())
 
 
 def _add_addon_features(data, ticker):
