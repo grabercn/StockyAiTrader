@@ -265,10 +265,17 @@ class StockySuite(QMainWindow):
             pass
 
     def closeEvent(self, event):
-        """Minimize to tray instead of quitting."""
+        """Minimize to tray with particle dissolve effect."""
         if self._tray and self._tray.tray and self._tray.tray.isVisible():
             event.ignore()
+            # Particle dissolve then hide
+            from core.ui.boot_screen import _DissolveOverlay
+            snapshot = self.grab()
+            geo = self.geometry()
             self.hide()
+            overlay = _DissolveOverlay(snapshot, geo)
+            overlay.start()
+            self._close_overlay = overlay  # prevent GC
             self._tray.send_notification(
                 "Stocky Suite",
                 "Running in background. Double-click tray icon to restore.",

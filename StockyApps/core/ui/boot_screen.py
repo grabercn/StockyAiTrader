@@ -286,109 +286,126 @@ class BootScreen(QWidget):
             self._detail.setText(detail)
         QApplication.processEvents()
 
+
     def finish(self):
-        """Dissolve into particles then clean up."""
+        """Dissolve into a fullscreen particle overlay so particles fly beyond the boot window."""
         self._bg.stop()
         self._bar.stop()
+        snapshot = self.grab()
+        boot_geo = self.geometry()
+        self.hide()
+        self.deleteLater()
 
-        # Capture a screenshot of the boot screen before hiding widgets
-        self._snapshot = self.grab()
+        # Launch fullscreen dissolve overlay
+        overlay = _DissolveOverlay(snapshot, boot_geo)
+        overlay.start()
+        QApplication.instance()._dissolve_overlay = overlay
 
-        # Hide all child widgets so we paint from scratch
-        for child in self.findChildren(QWidget):
-            child.setVisible(False)
 
-        # Generate particles — mix of sizes, speeds, behaviors
+class _DissolveOverlay(QWidget):
+    """Fullscreen transparent overlay — particles burst outward from the boot screen across the entire screen."""
+
+    def __init__(self, snapshot, boot_geo):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setGeometry(screen)
+
+        self._snapshot = snapshot
+        self._bx = boot_geo.x() - screen.x()
+        self._by = boot_geo.y() - screen.y()
+        self._bw = boot_geo.width()
+        self._bh = boot_geo.height()
+
+        cx = self._bx + self._bw / 2
+        cy = self._by + self._bh / 2
+
         import random
-        w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
         self._particles = []
         colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#e2e8f0", "#ffffff"]
 
-        for _ in range(120):
-            # Spawn from center-ish area with radial burst
+        for _ in range(140):
             angle = random.uniform(0, 6.28)
-            speed = random.uniform(1, 6)
-            dist = random.uniform(0, 80)
+            speed = random.uniform(2, 10)
+            dist = random.uniform(0, 60)
             self._particles.append({
                 "x": cx + math.cos(angle) * dist,
                 "y": cy + math.sin(angle) * dist,
-                "vx": math.cos(angle) * speed + random.uniform(-0.5, 0.5),
-                "vy": math.sin(angle) * speed + random.uniform(-0.5, 0.5),
-                "size": random.uniform(1.5, 8),
+                "vx": math.cos(angle) * speed + random.uniform(-1, 1),
+                "vy": math.sin(angle) * speed + random.uniform(-1, 1),
+                "size": random.uniform(1.5, 7),
                 "color": random.choice(colors),
                 "alpha": random.uniform(0.7, 1.0),
-                "decay": random.uniform(0.012, 0.03),
-                "spin": random.uniform(-0.03, 0.03),  # Slight rotation
-                "trail": random.random() > 0.6,  # 40% leave trails
+                "decay": random.uniform(0.01, 0.025),
+                "spin": random.uniform(-0.04, 0.04),
+                "trail": random.random() > 0.5,
             })
 
-        self._dissolve_phase = 0.0
-        self._snapshot_alpha = 1.0
+        self._phase = 0.0
+        self._snap_alpha = 1.0
 
-        self._dissolve_timer = QTimer(self)
-        self._dissolve_timer.timeout.connect(self._tick_dissolve)
-        self._dissolve_timer.start(25)
+    def start(self):
+        self.show()
+        self.raise_()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(20)
 
-    def _tick_dissolve(self):
-        self._dissolve_phase += 0.035
-        self._snapshot_alpha = max(0, 1.0 - self._dissolve_phase * 1.8)
+    def _tick(self):
+        self._phase += 0.03
+        self._snap_alpha = max(0, 1.0 - self._phase * 2.5)
 
         all_dead = True
         for p in self._particles:
-            # Spiral motion
             spin = p.get("spin", 0)
             if spin:
                 cs, sn = math.cos(spin), math.sin(spin)
                 p["vx"], p["vy"] = p["vx"] * cs - p["vy"] * sn, p["vx"] * sn + p["vy"] * cs
-
             p["x"] += p["vx"]
             p["y"] += p["vy"]
-            p["vy"] += 0.03  # Light gravity
-            p["vx"] *= 1.015  # Gradual spread
+            p["vy"] += 0.02
+            p["vx"] *= 1.01
             p["alpha"] -= p["decay"]
             if p["alpha"] > 0:
                 all_dead = False
 
         self.update()
 
-        if all_dead or self._dissolve_phase > 2.5:
-            self._dissolve_timer.stop()
+        if all_dead or self._phase > 2.5:
+            self._timer.stop()
             self.hide()
             self.deleteLater()
 
     def paintEvent(self, event):
-        if not hasattr(self, '_particles'):
-            return super().paintEvent(event)
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
 
-        # Dark background
-        painter.fillRect(0, 0, w, h, QColor(8, 10, 18))
-
-        # Initial flash — bright burst from center
-        if self._dissolve_phase < 0.3:
-            flash_alpha = (0.3 - self._dissolve_phase) / 0.3 * 0.25
-            flash = QRadialGradient(QPointF(w / 2, h / 2), max(w, h) * 0.6)
+        # Flash from center at start
+        if self._phase < 0.25:
+            flash_a = (0.25 - self._phase) / 0.25 * 0.3
+            cx = self._bx + self._bw / 2
+            cy = self._by + self._bh / 2
+            flash = QRadialGradient(QPointF(cx, cy), max(self.width(), self.height()) * 0.5)
             fc = QColor(BRAND_PRIMARY)
-            fc.setAlphaF(flash_alpha)
+            fc.setAlphaF(flash_a)
             flash.setColorAt(0, fc)
             fc2 = QColor(BRAND_PRIMARY)
             fc2.setAlphaF(0)
             flash.setColorAt(1, fc2)
             painter.setBrush(flash)
             painter.setPen(Qt.NoPen)
-            painter.drawRect(0, 0, w, h)
+            painter.drawRect(self.rect())
 
-        # Fading snapshot
-        if self._snapshot_alpha > 0:
-            painter.setOpacity(self._snapshot_alpha)
-            painter.drawPixmap(0, 0, self._snapshot)
+        # Fading boot screen snapshot at original position
+        if self._snap_alpha > 0:
+            painter.setOpacity(self._snap_alpha)
+            painter.drawPixmap(self._bx, self._by, self._snapshot)
             painter.setOpacity(1.0)
 
-        # Particles with optional motion trails
+        # Particles flying across the whole screen
         painter.setPen(Qt.NoPen)
         for p in self._particles:
             if p["alpha"] <= 0:
@@ -396,20 +413,19 @@ class BootScreen(QWidget):
             a = max(0.0, min(1.0, p["alpha"]))
             s = p["size"] * (0.3 + a * 0.7)
 
-            # Motion trail — faint line behind particle
+            # Motion trail
             if p.get("trail") and a > 0.2:
-                trail_len = math.sqrt(p["vx"]**2 + p["vy"]**2) * 3
-                tc = QColor(p["color"])
-                tc.setAlphaF(a * 0.15)
-                painter.setPen(QPen(tc, max(1, s * 0.4)))
-                painter.drawLine(
-                    QPointF(p["x"], p["y"]),
-                    QPointF(p["x"] - p["vx"] * trail_len / max(1, abs(p["vx"]) + abs(p["vy"])),
-                            p["y"] - p["vy"] * trail_len / max(1, abs(p["vx"]) + abs(p["vy"]))),
-                )
-                painter.setPen(Qt.NoPen)
+                speed = math.sqrt(p["vx"]**2 + p["vy"]**2)
+                if speed > 0.5:
+                    tc = QColor(p["color"])
+                    tc.setAlphaF(a * 0.12)
+                    painter.setPen(QPen(tc, max(1, s * 0.3)))
+                    nx, ny = -p["vx"] / speed, -p["vy"] / speed
+                    tl = speed * 2.5
+                    painter.drawLine(QPointF(p["x"], p["y"]), QPointF(p["x"] + nx * tl, p["y"] + ny * tl))
+                    painter.setPen(Qt.NoPen)
 
-            # Particle dot
+            # Bright core
             c = QColor(p["color"])
             c.setAlphaF(a)
             painter.setBrush(c)
@@ -418,7 +434,7 @@ class BootScreen(QWidget):
             # Glow halo
             if a > 0.15:
                 gc = QColor(p["color"])
-                gc.setAlphaF(a * 0.1)
+                gc.setAlphaF(a * 0.08)
                 glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 4)
                 glow.setColorAt(0, gc)
                 gc2 = QColor(p["color"])
