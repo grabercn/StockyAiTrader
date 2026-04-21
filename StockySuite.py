@@ -266,22 +266,53 @@ class StockySuite(QMainWindow):
             pass
 
     def _save_agent_state(self):
-        """Save autonomous agent state for resume on next boot."""
+        """Save full agent + auto-trader state for resume on next boot."""
         settings = load_settings()
-        # Save agent running state
+
+        # Save autonomous agent state
         ai_agent = getattr(self, 'ai_agent', None)
         agent_was_running = ai_agent and getattr(ai_agent, '_agent_running', False)
         settings["agent_was_running"] = agent_was_running
 
-        # Save monitored stocks
+        # Save monitored stocks with full state
         scanner = getattr(self, 'scanner', None)
         if scanner and hasattr(scanner, '_auto_service') and scanner._auto_service:
             monitored = {}
             for ticker, stock in scanner._auto_service.get_monitored().items():
                 monitored[ticker] = {
-                    "period": stock.period, "interval": stock.interval,
+                    "period": stock.period,
+                    "interval": stock.interval,
+                    "last_signal": stock.last_signal,
+                    "last_confidence": stock.last_confidence,
+                    "last_price": stock.last_price,
+                    "last_check": stock.last_check,
+                    "check_count": stock.check_count,
+                    "auto_execute": stock.auto_execute,
                 }
             settings["monitored_stocks"] = monitored
+
+        # Save last known positions the agent was managing
+        if self.broker:
+            try:
+                positions = self.broker.get_positions()
+                if isinstance(positions, list):
+                    managed = []
+                    monitored_tickers = set(settings.get("monitored_stocks", {}).keys())
+                    for p in positions:
+                        sym = p.get("symbol", "")
+                        if sym in monitored_tickers or agent_was_running:
+                            managed.append({
+                                "symbol": sym,
+                                "qty": p.get("qty", "0"),
+                                "side": p.get("side", ""),
+                                "avg_entry": p.get("avg_entry_price", "0"),
+                                "current_price": p.get("current_price", "0"),
+                                "unrealized_pl": p.get("unrealized_pl", "0"),
+                            })
+                    settings["agent_managed_positions"] = managed
+            except Exception:
+                pass
+
         save_settings(settings)
 
     def closeEvent(self, event):
@@ -748,29 +779,56 @@ def boot_app():
         suite._entrance_anim = fade_in
 
     def _check_agent_resume():
-        """Ask user if they want to resume the autonomous agent."""
+        """Ask user if they want to resume the autonomous agent and/or auto-trader."""
         settings = load_settings()
         was_running = settings.get("agent_was_running", False)
         monitored = settings.get("monitored_stocks", {})
+        managed_positions = settings.get("agent_managed_positions", [])
 
-        if was_running and monitored:
-            reply = QMessageBox.question(
-                suite, "Resume AI Agent",
-                f"The AI Agent was managing {len(monitored)} stocks when you last closed.\n\n"
-                f"Stocks: {', '.join(list(monitored.keys())[:8])}"
-                + (f" +{len(monitored)-8} more" if len(monitored) > 8 else "") +
-                f"\n\nResume autonomous trading?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                # Navigate to AI Agent tab and start
+        if not was_running and not monitored:
+            return
+
+        # Build a detailed resume message
+        lines = []
+        if was_running:
+            lines.append("The Autonomous Agent was running.")
+        if monitored:
+            lines.append(f"\nAuto-trading {len(monitored)} stocks:")
+            for ticker, info in list(monitored.items())[:10]:
+                sig = info.get("last_signal", "?")
+                conf = info.get("last_confidence", 0)
+                lines.append(f"  {ticker}: {sig} ({conf:.0%})")
+            if len(monitored) > 10:
+                lines.append(f"  +{len(monitored)-10} more...")
+        if managed_positions:
+            total_value = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0))
+                             for p in managed_positions)
+            total_pl = sum(float(p.get("unrealized_pl", 0)) for p in managed_positions)
+            lines.append(f"\nManaged positions: {len(managed_positions)} stocks")
+            lines.append(f"Total value: ${total_value:,.2f}")
+            lines.append(f"Unrealized P&L: ${total_pl:+,.2f}")
+
+        lines.append("\nResume where you left off?")
+
+        reply = QMessageBox.question(
+            suite, "Resume AI Trading",
+            "\n".join(lines),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+
+        if reply == QMessageBox.Yes:
+            if was_running:
+                # Start autonomous agent
                 suite.tabs.setCurrentIndex(1)  # AI Agent tab
                 ai = getattr(suite, 'ai_agent', None)
                 if ai:
                     QTimer.singleShot(500, ai._toggle_agent)
-        elif monitored and not was_running:
-            # Just monitored stocks, no agent — already restored by scanner
-            pass
+            # Monitored stocks are already restored by scanner._restore_monitored_stocks
+        else:
+            # User chose manual — clear saved state
+            settings["agent_was_running"] = False
+            settings["agent_managed_positions"] = []
+            save_settings(settings)
 
     reveal = WindowReveal(suite, on_done=_on_reveal_done)
     reveal.start()
