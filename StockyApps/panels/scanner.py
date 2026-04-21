@@ -547,14 +547,15 @@ class ScannerPanel(QWidget):
                     self.table.setItem(i, j + 1, it)
 
             # Auto-trade toggle button with icon
+            from core.ui.icons import StockyIcons as _Icons
             is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
             monitor_btn = QPushButton()
             if is_monitored:
-                monitor_btn.setIcon(StockyIcons.get_icon("robot", 14, BRAND_ACCENT))
+                monitor_btn.setIcon(_Icons.get_icon("robot", 14, BRAND_ACCENT))
                 monitor_btn.setToolTip(f"Auto-trading {r.ticker} — click to stop")
                 monitor_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}30; border: 1px solid {BRAND_ACCENT}; padding: 3px 6px; border-radius: 4px;")
             else:
-                monitor_btn.setIcon(StockyIcons.get_icon("play", 14, TEXT_MUTED))
+                monitor_btn.setIcon(_Icons.get_icon("play", 14, TEXT_MUTED))
                 monitor_btn.setToolTip(f"Start auto-trading {r.ticker}")
                 monitor_btn.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; padding: 3px 6px; border-radius: 4px;")
             monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))

@@ -20,7 +20,7 @@
     "scanner_workers": 3,
     "custom_profiles": {},
     "setup_complete": true,
-    "theme": "light",
+    "theme": "auto",
     "watchlists": {
         "Test": [
             "AAPL",
@@ -48,5 +48,5 @@
     "ui_zoom": 1.0,
     "aggressivity": "Default",
     "quit_on_close": false,
-    "scan_avg_seconds": 16.82
+    "scan_avg_seconds": 26.83
 }
