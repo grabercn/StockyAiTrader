@@ -55,9 +55,10 @@ class ScanWorker(QThread):
             else:
                 detail = result.action if result else "..."
             self.progress.emit(done, total, ticker, detail)
+        from core.profiles import get_optimal_workers
         results = scan_multiple(self.tickers, self.period, self.interval,
-                                self.risk_manager, max_workers=5, progress_callback=cb,
-                                auto_settings=self.auto_settings)
+                                self.risk_manager, max_workers=get_optimal_workers(),
+                                progress_callback=cb, auto_settings=self.auto_settings)
         self.finished.emit(results)
 
 

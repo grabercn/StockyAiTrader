@@ -17,6 +17,22 @@ import copy
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "settings.json")
 
+
+def get_optimal_workers():
+    """Auto-detect optimal worker count from system CPU cores.
+
+    Uses physical cores (not logical/hyperthreaded) since LightGBM
+    training is CPU-bound. Reserves 2 cores for the UI + OS.
+    Clamped to 2-8 range (more than 8 hits yfinance rate limits).
+    """
+    try:
+        import psutil
+        physical = psutil.cpu_count(logical=False) or 4
+    except ImportError:
+        physical = os.cpu_count() or 4
+    workers = max(2, min(8, physical - 2))
+    return workers
+
 # ─── Built-in Presets ────────────────────────────────────────────────────────
 # True = enabled, False = disabled.
 # Addons not listed inherit their current state.

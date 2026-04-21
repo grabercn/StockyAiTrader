@@ -401,9 +401,11 @@ class ScannerPanel(QWidget):
             )
 
         # Estimate time — use saved average if available, else default 8s/stock
+        from core.profiles import get_optimal_workers
         settings = load_settings()
         avg_per_stock = settings.get("scan_avg_seconds", 8.0)
-        est_seconds = max(5, int(len(tickers) * avg_per_stock / 5))
+        workers = get_optimal_workers()
+        est_seconds = max(5, int(len(tickers) * avg_per_stock / workers))
         self._scan_total = len(tickers)
         self._scan_est = est_seconds
         self.progress.set_progress(5, f"Starting scan...",
@@ -422,7 +424,8 @@ class ScannerPanel(QWidget):
         # Calculate live ETA
         if done > 0:
             per_stock = elapsed / done
-            remaining = (total - done) * per_stock / 5  # 5 workers
+            from core.profiles import get_optimal_workers
+            remaining = (total - done) * per_stock / get_optimal_workers()
             eta = max(0, int(remaining))
             eta_str = f"{eta}s left" if eta < 120 else f"{eta//60}m {eta%60}s left"
         else:
@@ -456,7 +459,8 @@ class ScannerPanel(QWidget):
 
         # Save timing for better future estimates (rolling average)
         if len(results) > 0:
-            per_stock = elapsed / len(results) * 5  # Normalize for 5 workers
+            from core.profiles import get_optimal_workers
+            per_stock = elapsed / len(results) * get_optimal_workers()
             settings = load_settings()
             old_avg = settings.get("scan_avg_seconds", 8.0)
             # Weighted average: 70% new, 30% old
