@@ -244,6 +244,12 @@ class AIDashboardPanel(QWidget):
             sb.setValue(sb.maximum())
 
     def refresh(self):
+        # Decrement countdowns every refresh (5 sec)
+        for ticker, info in self._agent_stocks.items():
+            ns = info.get("next_secs", 0)
+            if ns > 0:
+                info["next_secs"] = max(0, ns - 5)
+
         svc = self._get_svc()
         svc_monitored = svc.get_monitored() if svc else {}
 
@@ -337,10 +343,11 @@ class AIDashboardPanel(QWidget):
             mins = next_secs // 60 if isinstance(next_secs, (int, float)) else 0
             secs = next_secs % 60 if isinstance(next_secs, (int, float)) else 0
 
+            next_str = f"{mins}m{secs:02d}s" if next_secs > 0 else "scanning..."
             vals = [ticker, mode, signal, f"{conf:.0%}",
                     f"${price:.2f}" if price else "--",
                     str(last_check) if last_check else "--",
-                    f"{mins}m{secs}s", interval, str(checks)]
+                    next_str, interval, str(checks)]
 
             sig_colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
             for j, v in enumerate(vals):
