@@ -817,13 +817,19 @@ def boot_app():
         )
 
         if reply == QMessageBox.Yes:
+            suite.event_bus.log_entry.emit(
+                f"Resuming AI — {len(monitored)} monitored stocks, "
+                f"{len(managed_positions)} positions loaded", "trade")
             if was_running:
-                # Start autonomous agent
-                suite.tabs.setCurrentIndex(1)  # AI Agent tab
+                suite.event_bus.log_entry.emit("Starting autonomous agent...", "system")
+                suite.tabs.setCurrentIndex(1)
                 ai = getattr(suite, 'ai_agent', None)
                 if ai:
                     QTimer.singleShot(500, ai._toggle_agent)
-            # Monitored stocks are already restored by scanner._restore_monitored_stocks
+            for ticker, info in monitored.items():
+                sig = info.get("last_signal", "?")
+                suite.event_bus.log_entry.emit(
+                    f"Restored {ticker}: {sig} ({info.get('last_confidence', 0):.0%})", "system")
         else:
             # User chose manual — clear saved state
             settings["agent_was_running"] = False
