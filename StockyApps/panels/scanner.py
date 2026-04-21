@@ -400,6 +400,15 @@ class ScannerPanel(QWidget):
                 "based on volatility and volume characteristics"
             )
 
+        # Estimate time: ~8s per stock with 5 workers
+        est_seconds = int(len(tickers) * 8 / 5)
+        self._scan_total = len(tickers)
+        self._scan_est = est_seconds
+        self._scan_times = []  # Track per-stock times for live ETA
+        self.progress.set_progress(5, f"Starting scan...",
+            f"0/{len(tickers)} — est. ~{est_seconds}s")
+        self.progress.add_log(f"Estimated time: ~{est_seconds}s for {len(tickers)} stocks")
+
         self._worker = ScanWorker(tickers, period, interval, self.rm, auto_settings=is_auto)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_done)
@@ -407,8 +416,28 @@ class ScannerPanel(QWidget):
 
     def _on_progress(self, done, total, ticker, detail):
         pct = 10 + int(done / total * 85) if total > 0 else 0
-        self.progress.set_progress(pct, f"Scanning {ticker}...", f"{done}/{total} complete")
-        # detail contains "BUY [2d/1m]" or "HOLD" etc
+        elapsed = time.time() - self._t0
+
+        # Calculate live ETA
+        if done > 0:
+            per_stock = elapsed / done
+            remaining = (total - done) * per_stock / 5  # 5 workers
+            eta = max(0, int(remaining))
+            eta_str = f"{eta}s left" if eta < 120 else f"{eta//60}m {eta%60}s left"
+        else:
+            eta_str = f"~{self._scan_est}s"
+
+        # Color the time red if over estimate
+        elapsed_int = int(elapsed)
+        time_color = ""
+        if elapsed_int > self._scan_est:
+            time_color = f" <span style='color:#ef4444'>({elapsed_int}s / est. {self._scan_est}s)</span>"
+        else:
+            time_color = f" ({elapsed_int}s / est. {self._scan_est}s)"
+
+        self.progress.set_progress(pct, f"Scanning {ticker}...",
+            f"{done}/{total} — {eta_str}{time_color}")
+
         action = detail.split(" ")[0] if detail else "..."
         colors = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#f59e0b"}
         color = colors.get(action, "#94a3b8")
@@ -417,7 +446,12 @@ class ScannerPanel(QWidget):
     def _on_done(self, results):
         self.results = results
         elapsed = time.time() - self._t0
-        self.progress.set_progress(100, f"Scan complete — {len(results)} stocks analyzed", f"{elapsed:.1f}s")
+        est = getattr(self, '_scan_est', 0)
+        speed = "faster" if elapsed < est else "slower"
+        self.progress.set_progress(100,
+            f"Scan complete — {len(results)} stocks in {elapsed:.1f}s",
+            f"Est. was {est}s ({speed} than expected)"
+        )
         self.scan_btn.setEnabled(True)
         self.selected.clear()
 

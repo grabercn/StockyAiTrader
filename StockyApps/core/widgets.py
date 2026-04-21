@@ -297,6 +297,10 @@ class DetailedProgressBar(QWidget):
             self._status.setText(status)
         if detail:
             self._detail.setText(detail)
+        # Force immediate repaint so progress is visible during scans
+        self._bar.repaint()
+        self._status.repaint()
+        self._detail.repaint()
 
     def add_log(self, msg):
         """Add a line to the detail log."""
