@@ -592,6 +592,26 @@ class AIDashboardPanel(QWidget):
                 results = scan_multiple(tickers, "5d", "5m", rm,
                     max_workers=get_optimal_workers(), buying_power=bp)
 
+                # Pre-load Gemini + addon data once
+                use_gemini = False
+                addon_signals = {}
+                try:
+                    from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
+                    use_gemini = gemini_enabled()
+                except: pass
+                if use_gemini:
+                    try:
+                        from addons import get_all_addons
+                        for addon in get_all_addons():
+                            if addon.available and addon.enabled:
+                                try:
+                                    feats = addon.get_features("MARKET")
+                                    if feats:
+                                        for k, v in list(feats.items())[:3]:
+                                            addon_signals[f"{addon.name}_{k}"] = v
+                                except: pass
+                    except: pass
+
                 # Apply RL quality scores
                 if rl_model:
                     for r in results:
@@ -600,108 +620,62 @@ class AIDashboardPanel(QWidget):
                                 atr_pct = r.atr / r.price if r.price > 0 else 0
                                 q = get_quality_score(rl_model, r.confidence, r.probs, atr_pct, r.action)
                                 r.confidence = min(1.0, r.confidence * q)
-                            except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                            except: pass
 
-                # Apply Gemini advisory BEFORE filtering (adjusts confidence)
-                try:
-                    from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
-                    if gemini_enabled():
-                        # Gather addon data once
-                        addon_signals = {}
+                # ── Per-stock pipeline: Gemini → Decide → Execute → Update table ──
+                buys, sells, holds, skipped = 0, 0, 0, 0
+
+                for r in sorted(results, key=lambda x: -x.score):
+                    if r.error:
+                        continue
+                    if not getattr(self, '_agent_running', False):
+                        break
+
+                    # 1. Gemini advisory (immediate per stock)
+                    if use_gemini and r.action in ("BUY", "SELL"):
                         try:
-                            from addons import get_all_addons
-                            for addon in get_all_addons():
-                                if addon.available and addon.enabled:
-                                    try:
-                                        feats = addon.get_features("MARKET")
-                                        if feats:
-                                            for k, v in list(feats.items())[:3]:
-                                                addon_signals[f"{addon.name}_{k}"] = v
-                                    except: pass
+                            pos_info = None
+                            if r.ticker in self._agent_stocks:
+                                s = self._agent_stocks[r.ticker]
+                                pos_info = f"qty={s.get('qty',0)}, last={s.get('signal','?')}"
+
+                            advisory = get_advisory(
+                                r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
+                                feature_importances=r.feature_importances,
+                                addon_data=addon_signals if addon_signals else None,
+                                position_info=pos_info,
+                                portfolio_context=f"BP=${bp:,.0f}, {trades_today}/{max_trades} trades")
+                            if advisory:
+                                old_conf = r.confidence
+                                _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
+                                conv = advisory.get("conviction", "?")
+                                self.bus.log_entry.emit(
+                                    f"  Gemini: {r.ticker} {advisory.get('recommendation','?')} "
+                                    f"[{conv}/5] {old_conf:.0%}→{r.confidence:.0%} — "
+                                    f"{advisory.get('reasoning','')}", "info")
                         except: pass
 
-                        for r in results:
-                            if not r.error and r.action in ("BUY", "SELL"):
-                                # Get position info if we hold this stock
-                                pos_info = None
-                                if r.ticker in self._agent_stocks:
-                                    s = self._agent_stocks[r.ticker]
-                                    pos_info = f"qty={s.get('qty',0)}, last_signal={s.get('signal','?')}"
+                    # 2. Update table immediately with latest signal
+                    existing = self._agent_stocks.get(r.ticker, {})
+                    self._agent_stocks[r.ticker] = {
+                        "signal": r.action, "confidence": r.confidence,
+                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
+                        "checks": existing.get("checks", 0) + 1,
+                        "qty": existing.get("qty", 0),
+                        "mode": existing.get("mode", "Scanned"),
+                        "interval": "5m", "next_secs": 300,
+                    }
 
-                                # Get per-stock addon data
-                                stock_addons = dict(addon_signals)
-                                try:
-                                    from addons import get_all_addons as _ga
-                                    for addon in _ga():
-                                        if addon.available and addon.enabled:
-                                            try:
-                                                f = addon.get_features(r.ticker)
-                                                if f:
-                                                    for k, v in list(f.items())[:3]:
-                                                        stock_addons[f"{addon.name}_{k}"] = v
-                                            except: pass
-                                except: pass
+                    # 3. Classify and execute immediately
+                    if r.action == "HOLD" or r.confidence < min_conf:
+                        if r.action == "HOLD":
+                            holds += 1
+                        else:
+                            skipped += 1
+                        continue
 
-                                advisory = get_advisory(
-                                    r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
-                                    feature_importances=r.feature_importances,
-                                    addon_data=stock_addons if stock_addons else None,
-                                    position_info=pos_info,
-                                    rl_quality=getattr(r, '_rl_quality', None),
-                                    portfolio_context=f"BP=${bp:,.0f}, {trades_today}/{max_trades} trades today")
-                                if advisory:
-                                    old_conf = r.confidence
-                                    _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
-                                    reasoning = advisory.get("reasoning", "")
-                                    model = advisory.get("model_used", "?")
-                                    conv = advisory.get("conviction", "?")
-                                    self.bus.log_entry.emit(
-                                        f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
-                                        f"[{conv}/5] adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
-                                # No response — log why
-                                else:
-                                    err = getattr(get_advisory, '_last_error', 'unknown')
-                                    self.bus.log_entry.emit(f"  Gemini: {r.ticker} failed — {err}", "warn")
-                except Exception as e:
-                    self.bus.log_entry.emit(f"Gemini error: {e}", "error")
-
-                # Classify signals AFTER all adjustments (RL + Gemini)
-                buys = [r for r in results if r.action == "BUY" and r.confidence >= min_conf and not r.error]
-                sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
-                holds = [r for r in results if r.action == "HOLD" and not r.error]
-
-                skipped = [r for r in results if not r.error and r.action in ("BUY","SELL")
-                          and r.confidence < min_conf]
-                self.bus.log_entry.emit(
-                    f"Cycle {cycle}: {len(buys)}B {len(sells)}S {len(holds)}H "
-                    f"({len(skipped)} below {min_conf:.0%} threshold)", "trade")
-
-                # Update _agent_stocks with latest scan data for ALL results
-                for r in results:
-                    if not r.error:
-                        existing = self._agent_stocks.get(r.ticker, {})
-                        self._agent_stocks[r.ticker] = {
-                            "signal": r.action,
-                            "confidence": r.confidence,
-                            "price": r.price,
-                            "last_check": datetime.now().strftime("%H:%M:%S"),
-                            "checks": existing.get("checks", 0) + 1,
-                            "qty": existing.get("qty", 0),
-                            "mode": existing.get("mode", "Scanned"),
-                            "interval": "5m",
-                            "next_secs": 300,
-                        }
-
-                # Log top picks with reasoning
-                for r in sorted(buys, key=lambda x: -x.score)[:3]:
-                    self.bus.log_entry.emit(
-                        f"  Top pick: {r.ticker} BUY ({r.confidence:.0%}) "
-                        f"score={r.score:.2f} @ ${r.price:.2f}", "info")
-
-                # Execute sells first (dynamic — partial or full based on confidence)
-                if sells and self.broker:
-                    for r in sorted(sells, key=lambda x: -x.confidence)[:3]:
-                        if trades_today >= max_trades: break
+                    if r.action == "SELL" and trades_today < max_trades and self.broker:
+                        sells += 1
                         try:
                             positions = self.broker.get_positions()
                             held = 0
@@ -711,84 +685,48 @@ class AIDashboardPanel(QWidget):
                                         held = int(float(p.get("qty", 0)))
                                         break
                             if held > 0:
-                                # Dynamic sell qty based on confidence
-                                if r.confidence > 0.7:
-                                    qty = held
-                                elif r.confidence > 0.5:
-                                    qty = max(1, int(held * 0.5))
-                                else:
-                                    qty = max(1, int(held * 0.25))
-
+                                qty = held if r.confidence > 0.7 else max(1, int(held * 0.5)) if r.confidence > 0.5 else max(1, int(held * 0.25))
                                 result = self.broker.close_position(r.ticker, qty=qty)
                                 if "error" not in result:
                                     trades_today += 1
-                                    self.bus.log_entry.emit(
-                                        f"Agent SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
-                                    self._agent_stocks[r.ticker] = {
-                                        "signal": "SELL", "confidence": r.confidence,
-                                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
-                                        "checks": self._agent_stocks.get(r.ticker, {}).get("checks", 0) + 1,
-                                        "qty": held - qty, "mode": "Auto",
-                                    }
-                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                                    self.bus.log_entry.emit(f"Agent SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
+                                    self._agent_stocks[r.ticker]["qty"] = held - qty
+                                    self._agent_stocks[r.ticker]["mode"] = "Auto"
+                        except Exception as _e:
+                            self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
-                # Execute buys — re-check BP before each, respect limits
-                if buys and self.broker and bp > 50:
-                    # Re-fetch actual BP (may have changed from sells)
-                    try:
-                        acct = self.broker.get_account()
-                        bp = float(acct.get("buying_power", 0))
-                    except Exception as _e: pass
-
-                    max_buys = min(len(buys), max(1, int(5 * size_mult)))
-                    initial_bp = bp
-
-                    for r in sorted(buys, key=lambda x: -x.score)[:max_buys]:
-                        if not getattr(self, '_agent_running', False): break
-                        if trades_today >= max_trades: break
-
-                        # Re-check actual BP before EACH buy
+                    elif r.action == "BUY" and trades_today < max_trades and self.broker:
+                        buys += 1
                         try:
                             acct = self.broker.get_account()
                             bp = float(acct.get("buying_power", 0))
-                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                        except: pass
+                        if bp >= 100:
+                            max_spend = min(bp * 0.20, initial_bp / max(1, 5))
+                            try:
+                                qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
+                                cost = qty * r.price
+                                if qty > 0 and cost <= bp:
+                                    result = self.broker.place_order(r.ticker, qty, "buy",
+                                        stop_loss=r.stop_loss, take_profit=r.take_profit)
+                                    if "error" not in result:
+                                        trades_today += 1
+                                        bp -= cost
+                                        self.bus.log_entry.emit(f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} (${cost:,.0f}, {r.confidence:.0%})", "trade")
+                                        self._agent_stocks[r.ticker]["qty"] = qty
+                                        self._agent_stocks[r.ticker]["mode"] = "Auto"
+                                        try:
+                                            mon_svc = self._get_svc()
+                                            if mon_svc and not mon_svc.is_monitoring(r.ticker):
+                                                mon_svc.add_stock(r.ticker, period="5d", interval="5m", auto_execute=True, min_confidence=0.5)
+                                        except: pass
+                                    else:
+                                        self.bus.log_entry.emit(f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
+                            except Exception as _e:
+                                self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
-                        if bp < 100: break
-
-                        # Cap at 20% of CURRENT bp (not initial)
-                        max_spend = min(bp * 0.20, initial_bp / max_buys)
-                        try:
-                            qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
-                            cost = qty * r.price
-                            if qty > 0 and cost <= bp:
-                                result = self.broker.place_order(r.ticker, qty, "buy",
-                                    stop_loss=r.stop_loss, take_profit=r.take_profit)
-                                if "error" not in result:
-                                    trades_today += 1
-                                    bp -= cost
-                                    self.bus.log_entry.emit(
-                                        f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} "
-                                        f"(${cost:,.0f}, {r.confidence:.0%})", "trade")
-                                    # Track in agent's own stock list
-                                    self._agent_stocks[r.ticker] = {
-                                        "signal": "BUY", "confidence": r.confidence,
-                                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
-                                        "checks": 1, "qty": qty, "mode": "Auto",
-                                    }
-                                    # Also add to auto-trader if available
-                                    try:
-                                        mon_svc = self._get_svc()
-                                        if mon_svc and not mon_svc.is_monitoring(r.ticker):
-                                            mon_svc.add_stock(r.ticker, period="5d", interval="5m",
-                                                             auto_execute=True, min_confidence=0.5)
-                                    except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
-                                else:
-                                    self.bus.log_entry.emit(
-                                        f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
-                            else:
-                                self.bus.log_entry.emit(
-                                    f"Agent: skip {r.ticker} — cost ${cost:,.0f} > BP ${bp:,.0f}", "info")
-                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                self.bus.log_entry.emit(
+                    f"Cycle {cycle}: {buys}B {sells}S {holds}H ({skipped} skipped)", "trade")
 
                 self.bus.log_entry.emit(
                     f"Cycle {cycle} done. {trades_today}/{max_trades} trades today. Next in 5 min.", "system")
