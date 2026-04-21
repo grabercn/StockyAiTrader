@@ -77,40 +77,37 @@ def generate_reasoning(ticker, action, confidence, price, atr, probs,
         sorted_feats = sorted(feature_importances.items(), key=lambda x: -x[1])[:5]
         top_features = ", ".join(f"{k}" for k, _ in sorted_feats)
 
-    # Try LLM generation
+    # Always use template as the base (reliable, structured)
+    base = _template_reasoning(ticker, action, confidence, price, atr, probs,
+                                volatility, direction, top_features)
+
+    # Try to prepend a short LLM-generated summary sentence
     gen = _get_generator()
     if gen:
         prompt = (
-            f"Stock analysis for {ticker} at ${price:.2f}: "
-            f"The AI model recommends {action} with {confidence:.0%} confidence. "
-            f"Volatility is {volatility}, trend is {direction}. "
-            f"Key factors: {top_features}. "
-            f"Reasoning:"
+            f"In one sentence, explain why a trader should {action.lower()} "
+            f"{ticker} stock at ${price:.2f} with {volatility} volatility and "
+            f"{direction} trend:"
         )
         try:
-            result = gen(prompt, max_new_tokens=60, num_return_sequences=1)
-            generated = result[0]["generated_text"]
-            # Extract only the part after "Reasoning:"
-            if "Reasoning:" in generated:
-                reasoning = generated.split("Reasoning:")[-1].strip()
-            else:
-                reasoning = generated[len(prompt):].strip()
+            result = gen(prompt, max_new_tokens=40, num_return_sequences=1)
+            generated = result[0]["generated_text"][len(prompt):].strip()
 
-            # Clean up — take first complete sentence
+            # Take first sentence only, filter out garbage
             for end in [".", "!", "\n"]:
-                if end in reasoning:
-                    reasoning = reasoning[:reasoning.index(end) + 1]
+                if end in generated:
+                    generated = generated[:generated.index(end) + 1]
                     break
-            reasoning = reasoning[:200]  # Cap length
+            generated = generated[:150]
 
-            if len(reasoning) > 10:
-                return f"{action} {ticker} @ ${price:.2f} — {reasoning}"
+            # Quality check — reject if too short, has questions, or is nonsensical
+            bad_signs = ["?", "I'm not sure", "I don't know", "which is", "however"]
+            if len(generated) > 15 and not any(b in generated.lower() for b in bad_signs):
+                return f"{action} {ticker} @ ${price:.2f} — {generated} | {base}"
         except Exception:
             pass
 
-    # Fallback: template-based reasoning (always works, no model needed)
-    return _template_reasoning(ticker, action, confidence, price, atr, probs,
-                                volatility, direction, top_features)
+    return base
 
 
 def _template_reasoning(ticker, action, confidence, price, atr, probs,

@@ -514,7 +514,7 @@ class ScannerPanel(QWidget):
             i_used = getattr(r, 'interval_used', '5m')
             settings_str = f"{p_used}/{i_used}" if (p_used != "5d" or i_used != "5m") else ""
 
-            is_insufficient = r.error and "Not enough data" in r.error
+            is_insufficient = bool(r.error)
             grey = TEXT_MUTED
 
             items = [
@@ -873,28 +873,43 @@ class ScannerPanel(QWidget):
         self._draw_detail_chart(r.ticker)
 
     def _draw_detail_chart(self, ticker):
-        """Fetch and draw a quick price chart for the detail panel."""
+        """Draw price chart using the scan's period/interval for the selected stock."""
         self.detail_figure.clear()
         cc = chart_colors(); self.detail_figure.set_facecolor(cc["fig_bg"])
         try:
-            data = yf.Ticker(ticker).history(period="1mo", interval="1d")
+            # Use the same period the scan used, or default to 5d intraday
+            r = self._selected_result
+            period = getattr(r, 'period_used', '5d') if r else '5d'
+            interval = getattr(r, 'interval_used', '5m') if r else '5m'
+
+            data = yf.Ticker(ticker).history(period=period, interval=interval)
+            if data.empty or len(data) < 2:
+                # Fallback to 1 month daily
+                data = yf.Ticker(ticker).history(period="1mo", interval="1d")
+                period, interval = "1mo", "1d"
             if data.empty:
                 return
+
             ax = self.detail_figure.add_subplot(111)
             ax.set_facecolor(cc["ax_bg"])
             closes = data["Close"].values
             x = range(len(closes))
 
-            # Determine color by trend
             trending_up = closes[-1] >= closes[0]
             color = COLOR_BUY if trending_up else COLOR_SELL
 
             ax.plot(x, closes, color=color, linewidth=1.5)
             ax.fill_between(x, closes, alpha=0.08, color=color)
-            ax.set_title(f"{ticker} — 1 Month", color=cc["text"], fontsize=10)
+
+            # Show current price annotation
+            ax.annotate(f"${closes[-1]:.2f}", xy=(len(closes)-1, closes[-1]),
+                       fontsize=8, fontweight="bold", color=color,
+                       xytext=(-50, 8), textcoords="offset points")
+
+            ax.set_title(f"{ticker} — {period} @ {interval}", color=cc["text"], fontsize=10)
             ax.tick_params(colors=cc["muted"], labelsize=7)
             ax.grid(True, alpha=0.15, color=cc["grid"])
-            self.detail_figure.tight_layout()
+            self.detail_figure.subplots_adjust(left=0.12, right=0.95, top=0.88, bottom=0.1)
         except Exception:
             pass
         self.detail_canvas.draw()
