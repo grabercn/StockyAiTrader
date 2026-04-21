@@ -86,8 +86,8 @@ def save_settings(settings):
 from panels.workers import ScanWorker, TrainWorker, DownloadWorker, _DeepAnalyzeWorker
 from panels.dashboard import DashboardPanel
 from panels.scanner import ScannerPanel
-from panels.day_trade import DayTradePanel
-from panels.long_trade import LongTradePanel
+from panels.trade import TradePanel
+from panels.ai_dashboard import AIDashboardPanel
 from panels.logs import LogsPanel
 from panels.portfolio import PortfolioPanel
 from panels.settings_panel import SettingsPanel
@@ -312,15 +312,15 @@ class StockySuite(QMainWindow):
 
         # Tab definitions: (name, icon_key, factory)
         panels = [
-            ("Dashboard",   "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
-            ("Scanner",     "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
-            ("Portfolio",   "wallet",    lambda: PortfolioPanel(self.broker, self.event_bus)),
-            ("Day Trade",   "bolt",      lambda: DayTradePanel(self.broker, self.risk_manager, self.event_bus)),
-            ("Long Trade",  "chart_up",  lambda: LongTradePanel(self.event_bus)),
-            ("Logs",        "log",       lambda: LogsPanel(self.event_bus)),
-            ("Tax Reports", "tax",       lambda: TaxPanel(self.broker, self.event_bus)),
-            ("Testing",     "test",      lambda: TestingPanel(self.broker, self.event_bus)),
-            ("Settings",    "settings",  lambda: SettingsPanel(self.event_bus)),
+            ("Dashboard",    "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
+            ("Scanner",      "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
+            ("Portfolio",    "wallet",    lambda: PortfolioPanel(self.broker, self.event_bus)),
+            ("Trade",        "bolt",      lambda: TradePanel(self.broker, self.risk_manager, self.event_bus)),
+            ("AI Agent",     "robot",     lambda: AIDashboardPanel(self.broker, self.event_bus)),
+            ("Logs",         "log",       lambda: LogsPanel(self.event_bus)),
+            ("Tax Reports",  "tax",       lambda: TaxPanel(self.broker, self.event_bus)),
+            ("Testing",      "test",      lambda: TestingPanel(self.broker, self.event_bus)),
+            ("Settings",     "settings",  lambda: SettingsPanel(self.event_bus)),
         ]
 
         for tab_name, icon_key, factory in panels:
@@ -354,11 +354,12 @@ class StockySuite(QMainWindow):
         secret = settings.get("alpaca_secret_key", "")
         if key and secret:
             self.broker = AlpacaBroker(key, secret)
-            self.dashboard.broker = self.broker
-            self.scanner.broker = self.broker
-            self.day_trade.broker = self.broker
-            self.tax_panel.broker = self.broker
-            self.testing_panel.broker = self.broker
+            # Update broker on all panels that have one
+            for attr in ("dashboard", "scanner", "trade", "portfolio", "ai_agent",
+                         "tax_panel", "testing_panel"):
+                p = getattr(self, attr, None)
+                if p and hasattr(p, "broker"):
+                    p.broker = self.broker
             self.dashboard.refresh()
 
     def _on_log(self, msg, level):
@@ -573,21 +574,27 @@ def boot_app():
     step(80, "Building interface...",         "9 panels · event bus · signal routing")
     suite = StockySuite()
 
-    # Wait for preload to finish before proceeding
-    step(88, "Waiting for data preload...",   "Almost ready")
-    _preload_done.wait(timeout=10)
+    # Wait for preload but keep splash responsive
+    step(88, "Waiting for data...", "Almost ready")
+    for _ in range(50):  # Up to 5 seconds, non-blocking
+        if _preload_done.is_set():
+            break
+        time.sleep(0.1)
+        app.processEvents()
 
-    # Inject preloaded data into dashboard so it renders instantly
-    if _preload_data.get("acct") and hasattr(suite, 'dashboard'):
-        try:
-            suite.dashboard._apply_refresh(
-                _preload_data.get("acct", {}),
-                _preload_data.get("positions", []),
-                _preload_data.get("orders", []),
-                _preload_data.get("hist", {}),
-            )
-        except Exception:
-            pass
+    # Inject preloaded data into dashboard (async — don't block)
+    def _inject_preload():
+        if _preload_data.get("acct") and hasattr(suite, 'dashboard'):
+            try:
+                suite.dashboard._apply_refresh(
+                    _preload_data.get("acct", {}),
+                    _preload_data.get("positions", []),
+                    _preload_data.get("orders", []),
+                    _preload_data.get("hist", {}),
+                )
+            except Exception:
+                pass
+    QTimer.singleShot(500, _inject_preload)
 
     step(90, "Loading log history...",        "Decision logs · trade history")
 
@@ -598,7 +605,7 @@ def boot_app():
     view_menu = suite.menuBar().addMenu("View")
     for i, (name, icon_key) in enumerate([
         ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Portfolio", "wallet"),
-        ("Day Trade", "bolt"), ("Long Trade", "chart_up"), ("Logs", "log"),
+        ("Trade", "bolt"), ("AI Agent", "robot"), ("Logs", "log"),
         ("Tax Reports", "tax"), ("Testing", "test"), ("Settings", "settings"),
     ]):
         action = QAction(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY), name, suite)
@@ -627,7 +634,7 @@ def boot_app():
         wizard.setStyleSheet(get_stylesheet("auto"))
         wizard.exec_()
         suite.broker = suite._init_broker()
-        for attr in ("dashboard", "scanner", "portfolio", "day_trade", "tax_reports", "testing"):
+        for attr in ("dashboard", "scanner", "portfolio", "trade", "ai_agent", "tax_reports", "testing"):
             p = getattr(suite, attr, None)
             if p and hasattr(p, "broker"):
                 p.broker = suite.broker

@@ -36,6 +36,8 @@ def save_settings(s):
 class DayTradePanel(QWidget):
     """Single-stock intraday analysis with chart and signals."""
 
+    _analysis_done = pyqtSignal(str, object, object, list)  # ticker, model, data, features
+
     def __init__(self, broker, risk_manager, event_bus):
         super().__init__()
         self.broker = broker
@@ -43,6 +45,7 @@ class DayTradePanel(QWidget):
         self.bus = event_bus
         self.model = None
         self.features = []
+        self._analysis_done.connect(self._on_done)
         self._build()
         self.bus.ticker_selected.connect(self._set_ticker)
 
@@ -116,26 +119,26 @@ class DayTradePanel(QWidget):
         self.progress.setVisible(True)
         self.progress.reset()
         self.progress.set_progress(10, f"Fetching {ticker} data...", "Downloading from Yahoo Finance")
-        self.progress.add_log(f"Fetching {ticker} {self.period_cb.currentText()} @ {self.interval_cb.currentText()}")
+        self.progress.add_log(f"Fetching {ticker}")
         self.bus.log_entry.emit(f"Analyzing {ticker}...", "info")
-        QApplication.processEvents()
 
-        data = fetch_intraday(ticker, self.period_cb.currentText(), self.interval_cb.currentText())
-        if data.empty or len(data) < 30:
-            self.bus.log_entry.emit(f"{ticker}: not enough data", "error")
-            self.progress.set_progress(100, "Failed — not enough data", "Try a longer period")
-            self.run_btn.setEnabled(True)
-            return
+        # Run fetch + train entirely in background thread
+        import threading
+        period = self.period_cb.currentText()
+        interval = self.interval_cb.currentText()
 
-        self.progress.set_progress(40, "Training LightGBM model...", f"{len(data)} bars, computing features")
-        self.progress.add_log(f"Got {len(data)} bars — training model")
+        def _fetch_and_train():
+            data = fetch_intraday(ticker, period, interval)
+            if data.empty or len(data) < 30:
+                self._analysis_done.emit(ticker, None, None, [])
+                return
+            feats = get_all_features("intraday")
+            model, used = train_lgbm(data, feats, ticker)
+            self._analysis_done.emit(ticker, model, data, used if used else [])
 
-        feats = get_all_features("intraday")
-        self._worker = TrainWorker(data, feats, ticker)
-        self._worker.finished.connect(lambda m, f, d: self._on_done(ticker, m, f, d))
-        self._worker.start()
+        threading.Thread(target=_fetch_and_train, daemon=True).start()
 
-    def _on_done(self, ticker, model, features, data):
+    def _on_done(self, ticker, model, data, features):
         self.run_btn.setEnabled(True)
         if model is None:
             self.progress.set_progress(100, "Training failed", "Not enough usable data")

@@ -1,12 +1,9 @@
 """Panels package — each panel is a separate module."""
-from .workers import ScanWorker
-from .workers import TrainWorker
-from .workers import DownloadWorker
-from .workers import _DeepAnalyzeWorker
+from .workers import ScanWorker, TrainWorker, DownloadWorker, _DeepAnalyzeWorker
 from .dashboard import DashboardPanel
 from .scanner import ScannerPanel
-from .day_trade import DayTradePanel
-from .long_trade import LongTradePanel
+from .trade import TradePanel
+from .ai_dashboard import AIDashboardPanel
 from .logs import LogsPanel
 from .portfolio import PortfolioPanel
 from .settings_panel import SettingsPanel
