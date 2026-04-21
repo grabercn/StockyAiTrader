@@ -677,7 +677,22 @@ class AIDashboardPanel(QWidget):
                                     f"    Reasoning: {advisory.get('reasoning','')}", "system")
                         except: pass
 
-                    # 2. Update table immediately with latest signal
+                    # 2. Calculate dynamic interval based on ATR volatility
+                    atr_pct = r.atr / r.price if r.price > 0 and r.atr > 0 else 0.01
+                    if atr_pct > 0.02:
+                        dyn_interval = 120   # Volatile: 2 min
+                        dyn_label = "2m"
+                    elif atr_pct > 0.01:
+                        dyn_interval = 300   # Normal: 5 min
+                        dyn_label = "5m"
+                    elif atr_pct > 0.005:
+                        dyn_interval = 600   # Calm: 10 min
+                        dyn_label = "10m"
+                    else:
+                        dyn_interval = 900   # Very calm: 15 min
+                        dyn_label = "15m"
+
+                    # Update table immediately with latest signal + dynamic interval
                     existing = self._agent_stocks.get(r.ticker, {})
                     self._agent_stocks[r.ticker] = {
                         "signal": r.action, "confidence": r.confidence,
@@ -685,7 +700,7 @@ class AIDashboardPanel(QWidget):
                         "checks": existing.get("checks", 0) + 1,
                         "qty": existing.get("qty", 0),
                         "mode": existing.get("mode", "Scanned"),
-                        "interval": "5m", "next_secs": 300,
+                        "interval": dyn_label, "next_secs": dyn_interval,
                     }
 
                     # 3. Classify and execute immediately
