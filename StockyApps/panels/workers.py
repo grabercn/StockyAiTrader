@@ -46,7 +46,13 @@ class ScanWorker(QThread):
         self.auto_settings = auto_settings
 
     def run(self):
-        import time as _time
+        # Use a thread-safe list for progress updates instead of cross-thread signals
+        import threading
+        self._progress_queue = []
+        self._progress_lock = threading.Lock()
+
+        from core.profiles import get_optimal_workers
+
         def cb(done, total, ticker, result):
             if result and not result.error:
                 p = getattr(result, 'period_used', '')
@@ -55,16 +61,22 @@ class ScanWorker(QThread):
                 detail = f"{result.action}{settings}"
             else:
                 detail = result.action if result else "..."
-            self.progress.emit(done, total, ticker, detail)
-            # Small yield so Qt event loop can process the signal
-            _time.sleep(0.05)
-        from core.profiles import get_optimal_workers
+            with self._progress_lock:
+                self._progress_queue.append((done, total, ticker, detail))
+
         results = scan_multiple(self.tickers, self.period, self.interval,
                                 self.risk_manager, max_workers=get_optimal_workers(),
                                 progress_callback=cb, auto_settings=self.auto_settings)
-        # Small delay before finished so last progress signals are processed
-        _time.sleep(0.2)
         self.finished.emit(results)
+
+    def poll_progress(self):
+        """Called by main thread timer to drain the progress queue."""
+        if not hasattr(self, '_progress_lock'):
+            return []
+        with self._progress_lock:
+            items = list(self._progress_queue)
+            self._progress_queue.clear()
+        return items
 
 
 class TrainWorker(QThread):

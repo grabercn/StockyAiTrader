@@ -414,10 +414,21 @@ class ScannerPanel(QWidget):
 
         from panels.workers import ScanWorker as _SW
         self._worker = _SW(tickers, period, interval, self.rm, auto_settings=is_auto)
-        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
-        print(f"[SCANNER] Worker started, {len(tickers)} tickers, signals connected", flush=True)
+
+        # Poll worker progress from main thread (cross-thread signals unreliable)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_progress)
+        self._poll_timer.start(250)  # Check 4x per second
+
+    def _poll_progress(self):
+        """Poll worker for progress updates (runs on main thread via QTimer)."""
+        if not hasattr(self, '_worker') or not self._worker:
+            return
+        items = self._worker.poll_progress()
+        for done, total, ticker, detail in items:
+            self._on_progress(done, total, ticker, detail)
 
     def _on_progress(self, done, total, ticker, detail):
         try:
@@ -452,7 +463,10 @@ class ScannerPanel(QWidget):
             print(f"[PROGRESS ERROR] {e}", flush=True)
 
     def _on_done(self, results):
-        print(f"[SCANNER] _on_done called with {len(results)} results", flush=True)
+        # Stop polling, drain any remaining progress
+        if hasattr(self, '_poll_timer'):
+            self._poll_timer.stop()
+            self._poll_progress()  # Drain final items
         self.results = results
         elapsed = time.time() - self._t0
         est = getattr(self, '_scan_est', 0)
