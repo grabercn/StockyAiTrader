@@ -48,6 +48,12 @@
     "ui_zoom": 1.0,
     "aggressivity": "Default",
     "quit_on_close": false,
-    "scan_avg_seconds": 55.65,
-    "sim_trade_delay": true
+    "scan_avg_seconds": 50.02,
+    "sim_trade_delay": true,
+    "monitored_stocks": {
+        "AAPL": {
+            "period": "5d",
+            "interval": "5m"
+        }
+    }
 }

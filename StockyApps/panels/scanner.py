@@ -186,119 +186,125 @@ class ScannerPanel(QWidget):
         left.setLayout(layout)
         splitter.addWidget(left)
 
-        # ── RIGHT: Detail Panel (shows when a stock is clicked) ──
+        # ── RIGHT: Detail Panel — scrollable sidebar ──
         self.detail_panel = QWidget()
-        dp_layout = QVBoxLayout()
-        dp_layout.setSpacing(6)
-        dp_layout.setContentsMargins(8, 4, 8, 4)
+        dp_outer = QVBoxLayout()
+        dp_outer.setSpacing(0)
+        dp_outer.setContentsMargins(0, 0, 0, 0)
 
         self.detail_title = QLabel("Click a stock to view details")
-        self.detail_title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
-        self.detail_title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-        dp_layout.addWidget(self.detail_title)
+        self.detail_title.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        self.detail_title.setStyleSheet(f"color: {BRAND_PRIMARY}; padding: 4px 8px;")
+        dp_outer.addWidget(self.detail_title)
 
-        # Mini chart
-        self.detail_figure = plt.Figure(figsize=(4, 2.5), dpi=100, facecolor=chart_colors()["fig_bg"])
+        # Scrollable content area
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setStyleSheet("QScrollArea { border: none; }")
+        detail_inner = QWidget()
+        dp_layout = QVBoxLayout()
+        dp_layout.setSpacing(4)
+        dp_layout.setContentsMargins(8, 2, 8, 4)
+
+        # Compact chart
+        self.detail_figure = plt.Figure(figsize=(3.5, 1.8), dpi=100, facecolor=chart_colors()["fig_bg"])
         self.detail_canvas = FigureCanvas(self.detail_figure)
-        self.detail_canvas.setMinimumHeight(150)
+        self.detail_canvas.setMinimumHeight(120)
+        self.detail_canvas.setMaximumHeight(160)
         dp_layout.addWidget(self.detail_canvas)
 
-        # Stats grid
+        # Stats
         self.detail_stats = QTextEdit()
         self.detail_stats.setReadOnly(True)
-        self.detail_stats.setFont(QFont(FONT_MONO, 10))
+        self.detail_stats.setFont(QFont(FONT_MONO, 9))
+        self.detail_stats.setMaximumHeight(200)
         dp_layout.addWidget(self.detail_stats)
 
-        # Quick Trade panel — matches Alpaca UI
+        # Quick Trade — compact Alpaca-style
         trade_box = QGroupBox("Quick Trade")
+        trade_box.setStyleSheet(f"QGroupBox {{ font-size: 11px; font-weight: bold; color: {BRAND_PRIMARY}; }}")
         tbl = QVBoxLayout()
-        tbl.setSpacing(6)
+        tbl.setSpacing(3)
+        tbl.setContentsMargins(4, 8, 4, 4)
 
-        # Direct ticker input (trade without scanning)
-        ticker_row = QHBoxLayout()
-        ticker_row.addWidget(QLabel("Ticker:"))
+        # Ticker + price on one row
+        tp_row = QHBoxLayout()
         self.trade_ticker_input = QLineEdit()
-        self.trade_ticker_input.setPlaceholderText("e.g. AAPL (or select from scan)")
-        self.trade_ticker_input.setStyleSheet(f"padding: 4px 8px;")
-        ticker_row.addWidget(self.trade_ticker_input, 1)
-        tbl.addLayout(ticker_row)
-
-        # Market price display
-        self.trade_price_label = QLabel("Market Price: --")
+        self.trade_ticker_input.setPlaceholderText("Ticker")
+        self.trade_ticker_input.setFixedWidth(80)
+        self.trade_ticker_input.setStyleSheet(f"padding: 3px 6px;")
+        tp_row.addWidget(self.trade_ticker_input)
+        self.trade_price_label = QLabel("--")
         self.trade_price_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
-        tbl.addWidget(self.trade_price_label)
+        tp_row.addWidget(self.trade_price_label, 1)
+        tbl.addLayout(tp_row)
 
-        # Quantity
-        qty_row = QHBoxLayout()
-        qty_row.addWidget(QLabel("Quantity:"))
+        # Qty + Order Type on one row
+        qo_row = QHBoxLayout()
         self.detail_qty = QSpinBox()
         self.detail_qty.setRange(1, 100000)
         self.detail_qty.setValue(1)
-        self.detail_qty.setStyleSheet(f"padding: 4px 8px; min-width: 80px;")
-        qty_row.addWidget(self.detail_qty, 1)
-        tbl.addLayout(qty_row)
-        self.detail_qty_label = QLabel("")
-        self.detail_qty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
-        tbl.addWidget(self.detail_qty_label)
-
-        # Order Type
-        order_row = QHBoxLayout()
-        order_row.addWidget(QLabel("Order Type:"))
+        self.detail_qty.setStyleSheet(f"padding: 2px 4px;")
+        self.detail_qty.setFixedWidth(70)
+        qo_row.addWidget(QLabel("Qty"))
+        qo_row.addWidget(self.detail_qty)
         self.order_type_cb = QComboBox()
         self.order_type_cb.addItems(["Market", "Limit", "Stop", "Stop Limit"])
-        order_row.addWidget(self.order_type_cb, 1)
-        tbl.addLayout(order_row)
+        self.order_type_cb.setFixedWidth(90)
+        qo_row.addWidget(self.order_type_cb)
+        tbl.addLayout(qo_row)
 
-        # Limit/Stop price (shown when not Market)
-        price_row = QHBoxLayout()
-        price_row.addWidget(QLabel("Price:"))
+        self.detail_qty_label = QLabel("")
+        self.detail_qty_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8px;")
+        tbl.addWidget(self.detail_qty_label)
+
+        # Price + TIF on one row
+        pt_row = QHBoxLayout()
         self.limit_price_input = QLineEdit()
-        self.limit_price_input.setPlaceholderText("Limit/Stop price")
-        self.limit_price_input.setStyleSheet(f"padding: 4px 8px;")
+        self.limit_price_input.setPlaceholderText("Price")
+        self.limit_price_input.setStyleSheet(f"padding: 2px 4px;")
         self.limit_price_input.setEnabled(False)
-        price_row.addWidget(self.limit_price_input, 1)
-        tbl.addLayout(price_row)
+        pt_row.addWidget(self.limit_price_input, 1)
+        self.tif_cb = QComboBox()
+        self.tif_cb.addItems(["DAY", "GTC", "IOC", "FOK"])
+        self.tif_cb.setFixedWidth(65)
+        self.tif_cb.setToolTip("DAY=close, GTC=til cancel, IOC=immediate, FOK=fill or kill")
+        pt_row.addWidget(self.tif_cb)
+        tbl.addLayout(pt_row)
         self.order_type_cb.currentTextChanged.connect(
             lambda t: self.limit_price_input.setEnabled(t != "Market")
         )
 
-        # Time in Force
-        tif_row = QHBoxLayout()
-        tif_row.addWidget(QLabel("Time in Force:"))
-        self.tif_cb = QComboBox()
-        self.tif_cb.addItems(["DAY", "GTC", "IOC", "FOK"])
-        self.tif_cb.setToolTip("DAY=expires at close, GTC=good til cancelled, IOC=immediate or cancel, FOK=fill or kill")
-        tif_row.addWidget(self.tif_cb, 1)
-        tbl.addLayout(tif_row)
+        # Estimates
+        est_row = QHBoxLayout()
+        self.trade_estimate_label = QLabel("Cost: --")
+        self.trade_estimate_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9px;")
+        est_row.addWidget(self.trade_estimate_label)
+        self.trade_bp_label = QLabel("BP: --")
+        self.trade_bp_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        est_row.addWidget(self.trade_bp_label)
+        tbl.addLayout(est_row)
 
-        # Estimated cost/value + buying power
-        self.trade_estimate_label = QLabel("Estimated Cost: --")
-        self.trade_estimate_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
-        tbl.addWidget(self.trade_estimate_label)
-        self.trade_bp_label = QLabel("Buying Power: --")
-        self.trade_bp_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
-        tbl.addWidget(self.trade_bp_label)
-
-        # Update estimate when qty changes
         self.detail_qty.valueChanged.connect(self._update_trade_estimate)
 
-        # Buy button
-        self.detail_buy_btn = QPushButton("  BUY")
-        self.detail_buy_btn.setIcon(StockyIcons.get_icon("arrow_up", 14, "white"))
-        self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 12px; padding: 8px;")
+        # Buy + Sell buttons side by side
+        btn_row = QHBoxLayout()
+        self.detail_buy_btn = QPushButton("BUY")
+        self.detail_buy_btn.setIcon(StockyIcons.get_icon("arrow_up", 12, "white"))
+        self.detail_buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 11px; padding: 6px;")
         self.detail_buy_btn.clicked.connect(lambda: self._quick_trade("buy"))
-        tbl.addWidget(self.detail_buy_btn)
+        btn_row.addWidget(self.detail_buy_btn)
 
-        # Sell button
-        self.detail_sell_btn = QPushButton("  SELL")
-        self.detail_sell_btn.setIcon(StockyIcons.get_icon("arrow_down", 14, "white"))
-        self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 12px; padding: 8px;")
+        self.detail_sell_btn = QPushButton("SELL")
+        self.detail_sell_btn.setIcon(StockyIcons.get_icon("arrow_down", 12, "white"))
+        self.detail_sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px; padding: 6px;")
         self.detail_sell_btn.clicked.connect(lambda: self._quick_trade("sell"))
         self.detail_sell_btn.setVisible(False)
-        tbl.addWidget(self.detail_sell_btn)
+        btn_row.addWidget(self.detail_sell_btn)
+        tbl.addLayout(btn_row)
 
         self.detail_owned_label = QLabel("")
-        self.detail_owned_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        self.detail_owned_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8px;")
         tbl.addWidget(self.detail_owned_label)
 
         # Deep analyze button
@@ -311,7 +317,10 @@ class ScannerPanel(QWidget):
         trade_box.setLayout(tbl)
         dp_layout.addWidget(trade_box)
 
-        self.detail_panel.setLayout(dp_layout)
+        detail_inner.setLayout(dp_layout)
+        detail_scroll.setWidget(detail_inner)
+        dp_outer.addWidget(detail_scroll)
+        self.detail_panel.setLayout(dp_outer)
         splitter.addWidget(self.detail_panel)
         splitter.setSizes([600, 300])
 
