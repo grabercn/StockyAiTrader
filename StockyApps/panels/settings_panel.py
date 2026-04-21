@@ -192,7 +192,7 @@ class SettingsPanel(QWidget):
              "1. Go to finnhub.io and create a free account\n"
              "2. Your API key is shown on the dashboard\n"
              "3. Copy the key (starts with 'c...')"),
-            ("nixtla_api_key", "Nixtla TimeGPT Key", "nixtla-tok-XXXXXXXXXXXX",
+            ("timegpt_api_key", "Nixtla TimeGPT Key", "nixtla-tok-XXXXXXXXXXXX",
              "https://dashboard.nixtla.io/",
              "1. Go to dashboard.nixtla.io\n"
              "2. Sign up for a free account\n"
@@ -400,13 +400,14 @@ class SettingsPanel(QWidget):
             c.setForeground(QColor(STATUS_ACTIVE if cfg == "Key set" else (STATUS_ERROR if cfg == "Needs key" else TEXT_MUTED)))
             self.addon_table.setItem(i, 4, c)
 
-            # Install button for unavailable addons
+            # Install link for unavailable addons
             if not a.available and a.dependencies:
-                install_btn = QPushButton("Install")
-                install_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 9px; padding: 2px 6px;")
-                install_btn.setToolTip(f"pip install {' '.join(a.dependencies)}")
-                install_btn.clicked.connect(lambda _, addon=a: self._install_addon(addon))
-                self.addon_table.setCellWidget(i, 5, install_btn)
+                install_link = QLabel(f'<a href="#" style="color:{BRAND_ACCENT};">Install dependencies</a>')
+                install_link.setCursor(Qt.PointingHandCursor)
+                install_link.setStyleSheet(f"padding: 4px 8px;")
+                install_link.setToolTip(f"pip install {' '.join(a.dependencies)}")
+                install_link.mousePressEvent = lambda _, addon=a: self._install_addon(addon)
+                self.addon_table.setCellWidget(i, 5, install_link)
             elif a.available:
                 ok_item = QTableWidgetItem("Ready")
                 ok_item.setForeground(QColor(STATUS_ACTIVE))
@@ -446,7 +447,7 @@ class SettingsPanel(QWidget):
         dlg.exec_()
 
     def _install_addon(self, addon):
-        """Install addon dependencies via pip with confirmation."""
+        """Install addon dependencies via pip with confirmation. Runs in background thread."""
         deps = " ".join(addon.dependencies)
         confirm = QMessageBox.question(
             self, f"Install {addon.name}",
@@ -459,22 +460,28 @@ class SettingsPanel(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        self.bus.log_entry.emit(f"Installing {addon.name} dependencies: {deps}", "system")
+        self.bus.log_entry.emit(f"Installing {addon.name}...", "system")
 
         import subprocess, threading
         def _do_install():
             try:
-                result = subprocess.run(
+                proc = subprocess.Popen(
                     [sys.executable, "-m", "pip", "install"] + addon.dependencies,
-                    capture_output=True, text=True, timeout=300,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 )
-                if result.returncode == 0:
-                    self.bus.log_entry.emit(f"{addon.name} installed successfully! Restart to activate.", "trade")
-                    # Re-discover addons
+                # Stream output to status bar
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line and ("Downloading" in line or "Installing" in line or "Collecting" in line):
+                        self.bus.log_entry.emit(f"[{addon.name}] {line[:80]}", "system")
+
+                proc.wait(timeout=300)
+                if proc.returncode == 0:
+                    self.bus.log_entry.emit(f"{addon.name} installed successfully!", "trade")
                     discover_addons()
                     QTimer.singleShot(500, self._refresh)
                 else:
-                    self.bus.log_entry.emit(f"{addon.name} install failed: {result.stderr[:200]}", "error")
+                    self.bus.log_entry.emit(f"{addon.name} install failed (exit code {proc.returncode})", "error")
             except Exception as e:
                 self.bus.log_entry.emit(f"{addon.name} install error: {e}", "error")
 
