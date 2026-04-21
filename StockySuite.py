@@ -138,7 +138,8 @@ class StockySuite(QMainWindow):
 
         # Refresh dashboard on startup
         if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh'):
-            QTimer.singleShot(500, self.dashboard.refresh)
+            # Dashboard data is preloaded during splash — only refresh if needed later
+            QTimer.singleShot(3000, self.dashboard.refresh)
 
         # Activity feed forwarding
         self.event_bus.log_entry.connect(self._on_log)

@@ -89,9 +89,9 @@ class PortfolioPanel(QWidget):
         holdings_w = QWidget()
         hl = QVBoxLayout()
         self.holdings_table = QTableWidget()
-        self.holdings_table.setColumnCount(10)
+        self.holdings_table.setColumnCount(11)
         self.holdings_table.setHorizontalHeaderLabels([
-            "Symbol", "Side", "Qty", "Avg Cost", "Current", "Market Value", "P&L", "P&L %", "Orders", ""
+            "Symbol", "Side", "Qty", "Avg Cost", "Current", "Market Value", "P&L", "P&L %", "Type", "Orders", ""
         ])
         self.holdings_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.holdings_table.verticalHeader().setVisible(False)
@@ -371,10 +371,20 @@ class PortfolioPanel(QWidget):
                 pnl_pct = float(p.get("unrealized_plpc", 0)) * 100
                 pending = order_counts.get(sym, 0)
 
+                # Determine trade type
+                is_auto = False
+                main = self.window()
+                if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
+                    svc = main.scanner._auto_service
+                    if svc and svc.is_monitoring(sym):
+                        is_auto = True
+                trade_type = "Auto" if is_auto else ("Bracket" if pending > 0 else "Manual")
+
                 vals = [
                     sym, p.get("side", ""),
                     f"{qty:.0f}", f"${avg:.2f}", f"${cur:.2f}",
                     f"${mv:,.2f}", f"${pnl:+,.2f}", f"{pnl_pct:+.2f}%",
+                    trade_type,
                     f"{pending} pending" if pending > 0 else "—",
                 ]
                 for j, v in enumerate(vals):
@@ -383,7 +393,10 @@ class PortfolioPanel(QWidget):
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     if j >= 6 and j <= 7:
                         item.setForeground(QColor(COLOR_PROFIT if pnl >= 0 else COLOR_LOSS))
-                    if j == 8 and pending > 0:
+                    if j == 8:
+                        type_colors = {"Auto": BRAND_ACCENT, "Bracket": COLOR_HOLD, "Manual": TEXT_MUTED}
+                        item.setForeground(QColor(type_colors.get(v, TEXT_MUTED)))
+                    if j == 9 and pending > 0:
                         item.setForeground(QColor(COLOR_HOLD))
                     self.holdings_table.setItem(i, j, item)
 
@@ -391,7 +404,7 @@ class PortfolioPanel(QWidget):
                 sell_btn = QPushButton("Sell")
                 sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 10px; padding: 3px 8px;")
                 sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_holding(s, q))
-                self.holdings_table.setCellWidget(i, 9, sell_btn)
+                self.holdings_table.setCellWidget(i, 10, sell_btn)
         else:
             self.card_positions.set_value("0")
             self.holdings_table.setRowCount(0)

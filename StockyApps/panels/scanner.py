@@ -544,6 +544,7 @@ class ScannerPanel(QWidget):
                          elapsed)
 
         # Populate table
+        self._cached_positions = None  # Clear position cache for fresh check
         self.table.setRowCount(len(results))
         for i, r in enumerate(results):
             cb = QCheckBox()
@@ -588,31 +589,57 @@ class ScannerPanel(QWidget):
                         it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
                     self.table.setItem(i, j + 1, it)
 
-            # Auto-trade toggle — filled when active, subtle when inactive
+            # Auto-trade toggle — shows status info when active
             from core.ui.icons import StockyIcons as _Icons
             is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
             if not is_insufficient:
-                monitor_btn = QPushButton()
-                monitor_btn.setFixedSize(28, 28)
-                monitor_btn.setCursor(Qt.PointingHandCursor)
-                if is_monitored:
-                    monitor_btn.setIcon(_Icons.get_icon("robot", 16, "#ffffff"))
-                    monitor_btn.setToolTip(f"Monitoring {r.ticker} — click to stop")
-                    monitor_btn.setStyleSheet(
-                        f"background: {BRAND_ACCENT}; border: none; border-radius: 14px;"
-                    )
-                else:
-                    monitor_btn.setIcon(_Icons.get_icon("play", 16, TEXT_MUTED))
-                    monitor_btn.setToolTip(f"Auto-trade {r.ticker}")
-                    monitor_btn.setStyleSheet(
-                        f"background: transparent; border: 1px solid {BORDER}; border-radius: 14px;"
-                    )
-                monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
                 w = QWidget()
                 l = QHBoxLayout(w)
-                l.addWidget(monitor_btn)
+                l.setContentsMargins(2, 0, 2, 0)
+                l.setSpacing(4)
+
+                monitor_btn = QPushButton()
+                monitor_btn.setFixedSize(24, 24)
+                monitor_btn.setCursor(Qt.PointingHandCursor)
+                # Check if user owns this stock
+                is_owned = False
+                if self.broker:
+                    try:
+                        positions = getattr(self, '_cached_positions', None)
+                        if positions is None:
+                            positions = self.broker.get_positions()
+                            self._cached_positions = positions
+                        if isinstance(positions, list):
+                            is_owned = any(p.get("symbol", "").upper() == r.ticker.upper() for p in positions)
+                    except Exception:
+                        pass
+
+                if is_monitored and is_owned:
+                    monitor_btn.setIcon(_Icons.get_icon("robot", 14, "#ffffff"))
+                    monitor_btn.setStyleSheet(f"background: {BRAND_ACCENT}; border: 2px solid {BRAND_PRIMARY}; border-radius: 12px;")
+                    monitor_btn.setToolTip(f"Owned + Monitoring {r.ticker}")
+                elif is_monitored:
+                    monitor_btn.setIcon(_Icons.get_icon("robot", 14, "#ffffff"))
+                    monitor_btn.setStyleSheet(f"background: {BRAND_ACCENT}; border: none; border-radius: 12px;")
+                    svc = self._auto_service
+                    stock = svc.get_monitored().get(r.ticker)
+                    if stock:
+                        info_lbl = QLabel(getattr(stock, 'interval', '5m'))
+                        info_lbl.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 8px;")
+                        l.addWidget(info_lbl)
+                    monitor_btn.setToolTip(f"Monitoring {r.ticker} — click to stop")
+                elif is_owned:
+                    monitor_btn.setIcon(_Icons.get_icon("wallet", 14, BRAND_PRIMARY))
+                    monitor_btn.setStyleSheet(f"background: {BRAND_PRIMARY}30; border: 1px solid {BRAND_PRIMARY}; border-radius: 12px;")
+                    monitor_btn.setToolTip(f"You own {r.ticker} — click to auto-trade")
+                else:
+                    monitor_btn.setIcon(_Icons.get_icon("play", 14, TEXT_MUTED))
+                    monitor_btn.setStyleSheet(f"background: transparent; border: 1px solid {BORDER}; border-radius: 12px;")
+                    monitor_btn.setToolTip(f"Auto-trade {r.ticker}")
+
+                monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
+                l.insertWidget(0, monitor_btn)
                 l.setAlignment(Qt.AlignCenter)
-                l.setContentsMargins(0, 0, 0, 0)
                 self.table.setCellWidget(i, 8, w)
 
             # Reasoning (last column)

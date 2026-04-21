@@ -332,7 +332,13 @@ def _fetch_sector_map():
     sector_map["Biotech"] = ["MRNA", "BNTX", "REGN", "VRTX", "BIIB", "GILD", "SGEN", "ALNY", "BMRN", "EXEL", "IONS", "NBIX", "PCVX", "SRPT", "RARE"]
     sector_map["REITs"] = ["O", "AMT", "PLD", "CCI", "EQIX", "SPG", "DLR", "WELL", "AVB", "EQR", "VTR", "ARE", "MAA", "UDR", "ESS"]
     sector_map["Banks"] = ["JPM", "BAC", "WFC", "C", "GS", "MS", "USB", "PNC", "TFC", "SCHW", "BK", "STT", "FITB", "KEY", "CFG"]
-    sector_map["Penny Stocks (Popular)"] = _get_penny_stocks()
+    # Use fallback penny stocks immediately (no network calls during boot)
+    sector_map["Penny Stocks (Popular)"] = [
+        "SNDL", "CLOV", "BB", "NOK", "PLTR", "SOFI",
+        "GSAT", "ASTS", "DNA", "IONQ", "OPEN", "SKLZ",
+        "SIRI", "PLUG", "SNAP", "VALE", "NU",
+        "GRAB", "RKLB", "JOBY",
+    ]
 
     _set_cache("sector_map", sector_map)
     return sector_map
