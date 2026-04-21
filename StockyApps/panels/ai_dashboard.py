@@ -878,17 +878,48 @@ class AIDashboardPanel(QWidget):
                 self.bus.log_entry.emit(
                     f"Cycle {cycle}: {buys}B {sells}S {holds}H ({skipped} skipped)", "trade")
 
+                # Dynamic next cycle timing based on what happened
+                # More action = check sooner, quiet market = wait longer
+                base_wait = 300  # 5 min default
+
+                # Factor 1: trades executed — more trades = check sooner
+                if trades_today > 3:
+                    base_wait = int(base_wait * 0.5)   # 2.5 min
+                elif trades_today > 0:
+                    base_wait = int(base_wait * 0.75)  # 3.75 min
+
+                # Factor 2: strong signals found — opportunity = check sooner
+                strong_signals = buys + sells
+                if strong_signals > 5:
+                    base_wait = int(base_wait * 0.6)
+                elif strong_signals == 0:
+                    base_wait = int(base_wait * 1.5)   # Quiet = wait longer
+
+                # Factor 3: aggressivity — aggressive profiles check faster
+                if profile_name == "YOLO":
+                    base_wait = int(base_wait * 0.5)
+                elif profile_name == "Aggressive":
+                    base_wait = int(base_wait * 0.7)
+                elif profile_name == "Chill":
+                    base_wait = int(base_wait * 1.5)
+
+                # Clamp: minimum 1 min, maximum 15 min
+                wait_secs = max(60, min(900, base_wait))
+                wait_min = wait_secs / 60
+
                 self.bus.log_entry.emit(
-                    f"Cycle {cycle} done. {trades_today}/{max_trades} trades today. Next in 5 min.", "system")
+                    f"Cycle {cycle} done. {trades_today}/{max_trades} trades. "
+                    f"Next in {wait_min:.1f} min (dynamic).", "system")
                 self._last_cycle = cycle
                 self._last_trades_today = trades_today
 
             except Exception as e:
                 self.bus.log_entry.emit(f"Agent error: {e}", "error")
+                wait_secs = 300  # Default on error
 
-            # Wait 5 minutes with countdown
-            self._countdown_secs = 300
-            for _ in range(300):
+            # Dynamic countdown
+            self._countdown_secs = wait_secs
+            for _ in range(wait_secs):
                 if not getattr(self, '_agent_running', False): break
                 time.sleep(1)
                 self._countdown_secs = max(0, self._countdown_secs - 1)
