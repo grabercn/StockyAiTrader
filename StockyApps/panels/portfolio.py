@@ -42,7 +42,8 @@ class PortfolioPanel(QWidget):
         self.bus = event_bus
         self._build()
         self.bus.positions_changed.connect(self.refresh)
-        self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
+        self.bus.trade_executed.connect(lambda *_: self.refresh())
+        self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(3000, self.refresh))
         # Initial data load after a short delay (let UI finish building)
         QTimer.singleShot(1000, self.refresh)
 
@@ -317,9 +318,25 @@ class PortfolioPanel(QWidget):
     def refresh(self):
         if not self.broker:
             return
+        import threading
+        threading.Thread(target=self._refresh_data, daemon=True).start()
 
+    def _refresh_data(self):
+        """Fetch all data in background thread."""
+        try:
+            acct = self.broker.get_account()
+            positions = self.broker.get_positions()
+            open_orders = self.broker.get_orders("open")
+            closed_orders = self.broker.get_orders("closed")
+            hist = self.broker.get_portfolio_history(period="1M", timeframe="1D")
+            QTimer.singleShot(0, lambda: self._apply_refresh(acct, positions, open_orders, closed_orders, hist))
+        except Exception:
+            pass
+
+    def _apply_refresh(self, acct, positions, open_orders, closed_orders, hist):
+        """Apply fetched data to UI (main thread)."""
         # Account stats
-        acct = self.broker.get_account()
+        acct = acct
         if "error" not in acct:
             eq = float(acct.get("equity", 0))
             leq = float(acct.get("last_equity", eq))
@@ -331,9 +348,7 @@ class PortfolioPanel(QWidget):
                 COLOR_PROFIT if pnl >= 0 else COLOR_LOSS,
             )
 
-        # Holdings + pending orders
-        positions = self.broker.get_positions()
-        open_orders = self.broker.get_orders("open")
+        # Holdings + pending orders (use passed-in data)
         order_counts = {}
         if isinstance(open_orders, list):
             for o in open_orders:
@@ -379,7 +394,7 @@ class PortfolioPanel(QWidget):
             self.holdings_table.setRowCount(0)
 
         # Open orders — populate table with cancel buttons
-        orders = self.broker.get_orders("open")
+        orders = open_orders
         if isinstance(orders, list):
             self.card_orders.set_value(str(len(orders)))
             self.open_orders_table.setRowCount(len(orders))
@@ -415,7 +430,7 @@ class PortfolioPanel(QWidget):
         # Trade history with running totals
         limit_map = {"Last 20": 20, "Last 50": 50, "Last 100": 100, "All": 500}
         limit = limit_map.get(self.hist_count.currentText(), 20)
-        closed = self.broker.get_orders("closed")
+        closed = closed_orders
         if isinstance(closed, list):
             closed = closed[:limit]
             # Add cost column to table if not already there

@@ -42,7 +42,8 @@ class DashboardPanel(QWidget):
         self.bus = event_bus
         self._build()
         self.bus.positions_changed.connect(self.refresh)
-        self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(2000, self.refresh))
+        self.bus.trade_executed.connect(lambda *_: self.refresh())
+        self.bus.trade_executed.connect(lambda *_: QTimer.singleShot(3000, self.refresh))
 
     def _build(self):
         from core.widgets import StatCard, GradientDivider
