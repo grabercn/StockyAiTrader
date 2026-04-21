@@ -66,7 +66,7 @@ class DashboardPanel(QWidget):
         cards_row.setSpacing(8)
         self.card_portfolio = StatCard("Portfolio Value", "--", BRAND_PRIMARY)
         self.card_buying = StatCard("Buying Power", "--", BRAND_SECONDARY)
-        self.card_cash = StatCard("Cash", "--", TEXT_SECONDARY)
+        self.card_cash = StatCard("Cash Balance", "--", TEXT_SECONDARY)
         self.card_pnl = StatCard("Day P&L", "--", BRAND_ACCENT)
         self._stat_cards = [self.card_portfolio, self.card_buying, self.card_cash, self.card_pnl]
         for card in self._stat_cards:
@@ -238,6 +238,8 @@ class DashboardPanel(QWidget):
         self.card_portfolio.set_value(f"${pv:,.2f}")
         self.card_buying.set_value(f"${bp:,.2f}")
         self.card_cash.set_value(f"${cash:,.2f}")
+        if cash < 0:
+            self.card_cash.setToolTip(f"Negative = using margin. You've invested more than your cash deposit.")
         pnl_color = COLOR_PROFIT if pnl >= 0 else COLOR_LOSS
         self.card_pnl.set_value(f"${pnl:+,.2f} ({pct:+.2f}%)", pnl_color)
 

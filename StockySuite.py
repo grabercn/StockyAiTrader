@@ -266,22 +266,26 @@ class StockySuite(QMainWindow):
             pass
 
     def _save_agent_state(self):
-        """Save full agent + auto-trader state for resume on next boot."""
+        """Save COMPLETE agent state for seamless resume."""
         settings = load_settings()
 
-        # Save autonomous agent state
+        # Agent running state
         ai_agent = getattr(self, 'ai_agent', None)
         agent_was_running = ai_agent and getattr(ai_agent, '_agent_running', False)
         settings["agent_was_running"] = agent_was_running
 
-        # Save monitored stocks with full state
+        # Save agent's own tracked stocks with full metadata
+        if ai_agent and hasattr(ai_agent, '_agent_stocks'):
+            settings["agent_tracked_stocks"] = dict(ai_agent._agent_stocks)
+
+        # Save auto-trader monitored stocks
+        monitored = {}
+        # Check scanner's service
         scanner = getattr(self, 'scanner', None)
         if scanner and hasattr(scanner, '_auto_service') and scanner._auto_service:
-            monitored = {}
             for ticker, stock in scanner._auto_service.get_monitored().items():
                 monitored[ticker] = {
-                    "period": stock.period,
-                    "interval": stock.interval,
+                    "period": stock.period, "interval": stock.interval,
                     "last_signal": stock.last_signal,
                     "last_confidence": stock.last_confidence,
                     "last_price": stock.last_price,
@@ -289,29 +293,45 @@ class StockySuite(QMainWindow):
                     "check_count": stock.check_count,
                     "auto_execute": stock.auto_execute,
                 }
-            settings["monitored_stocks"] = monitored
+        # Also check AI dashboard's service
+        if ai_agent and hasattr(ai_agent, '_auto_svc') and ai_agent._auto_svc:
+            for ticker, stock in ai_agent._auto_svc.get_monitored().items():
+                if ticker not in monitored:
+                    monitored[ticker] = {
+                        "period": stock.period, "interval": stock.interval,
+                        "last_signal": stock.last_signal,
+                        "last_confidence": stock.last_confidence,
+                        "last_price": stock.last_price,
+                        "last_check": stock.last_check,
+                        "check_count": stock.check_count,
+                        "auto_execute": stock.auto_execute,
+                    }
+        settings["monitored_stocks"] = monitored
 
-        # Save last known positions the agent was managing
+        # Save ALL current positions with full detail
         if self.broker:
             try:
                 positions = self.broker.get_positions()
                 if isinstance(positions, list):
                     managed = []
-                    monitored_tickers = set(settings.get("monitored_stocks", {}).keys())
                     for p in positions:
-                        sym = p.get("symbol", "")
-                        if sym in monitored_tickers or agent_was_running:
-                            managed.append({
-                                "symbol": sym,
-                                "qty": p.get("qty", "0"),
-                                "side": p.get("side", ""),
-                                "avg_entry": p.get("avg_entry_price", "0"),
-                                "current_price": p.get("current_price", "0"),
-                                "unrealized_pl": p.get("unrealized_pl", "0"),
-                            })
+                        managed.append({
+                            "symbol": p.get("symbol", ""),
+                            "qty": p.get("qty", "0"),
+                            "side": p.get("side", ""),
+                            "avg_entry": p.get("avg_entry_price", "0"),
+                            "current_price": p.get("current_price", "0"),
+                            "unrealized_pl": p.get("unrealized_pl", "0"),
+                            "market_value": p.get("market_value", "0"),
+                        })
                     settings["agent_managed_positions"] = managed
             except Exception:
                 pass
+
+        # Save agent cycle metadata
+        if ai_agent:
+            settings["agent_cycle_count"] = getattr(ai_agent, '_last_cycle', 0)
+            settings["agent_trades_today"] = getattr(ai_agent, '_last_trades_today', 0)
 
         save_settings(settings)
 

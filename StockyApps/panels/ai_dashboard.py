@@ -29,6 +29,13 @@ class AIDashboardPanel(QWidget):
         super().__init__()
         self.broker = broker
         self.bus = event_bus
+
+        # Restore agent tracked stocks from last session
+        settings = load_settings()
+        saved_tracked = settings.get("agent_tracked_stocks", {})
+        if saved_tracked:
+            self._agent_stocks = dict(saved_tracked)
+
         self._build()
 
         self._refresh_timer = QTimer(self)
@@ -695,6 +702,8 @@ class AIDashboardPanel(QWidget):
 
                 self.bus.log_entry.emit(
                     f"Cycle {cycle} done. {trades_today}/{max_trades} trades today. Next in 5 min.", "system")
+                self._last_cycle = cycle
+                self._last_trades_today = trades_today
 
             except Exception as e:
                 self.bus.log_entry.emit(f"Agent error: {e}", "error")
