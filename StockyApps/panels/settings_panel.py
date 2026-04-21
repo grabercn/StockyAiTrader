@@ -22,7 +22,7 @@ from core.signals import write_signal
 from core.model_manager import MANAGED_MODELS, get_model_status, get_lgbm_models, download_model, delete_model, delete_lgbm_model, delete_all_lgbm_models
 from addons import get_all_addons, set_addon_enabled, discover_addons
 
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "settings.json")
 def load_settings():
     try:
         with open(SETTINGS_FILE, "r") as f: return json.load(f)
@@ -143,20 +143,17 @@ class SettingsPanel(QWidget):
         theme_row.addWidget(self.theme_combo, 1)
         al2.addLayout(theme_row)
 
-        # Zoom slider
+        # Zoom slider — 90% real = 100% display (offset by 10)
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("UI Scale:"))
         self.zoom_slider = QSpinBox()
         self.zoom_slider.setRange(70, 200)
         self.zoom_slider.setSuffix("%")
         self.zoom_slider.setSingleStep(5)
-        current_zoom = int(settings.get("ui_zoom", 0.95) * 100)
-        self.zoom_slider.setValue(current_zoom)
+        real_zoom = settings.get("ui_zoom", 0.9)
+        self.zoom_slider.setValue(int(real_zoom * 100))
         self.zoom_slider.valueChanged.connect(self._change_zoom)
         zoom_row.addWidget(self.zoom_slider)
-        self.zoom_label = QLabel(f"Current: {current_zoom}%")
-        self.zoom_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
-        zoom_row.addWidget(self.zoom_label)
         al2.addLayout(zoom_row)
 
         appear_box.setLayout(al2)
@@ -291,7 +288,6 @@ class SettingsPanel(QWidget):
             main_window._scale = scale
             main_window._apply_scale()
             main_window._save_zoom()
-        self.zoom_label.setText(f"Current: {value}%")
 
     def _change_aggressivity(self, index):
         name = self.aggr_combo.currentData()
@@ -402,9 +398,8 @@ class SettingsPanel(QWidget):
 
             # Install link for unavailable addons
             if not a.available and a.dependencies:
-                install_link = QLabel(f'<a href="#" style="color:{BRAND_ACCENT};">Install dependencies</a>')
+                install_link = QLabel(f'<a style="color:{BRAND_ACCENT};text-decoration:underline;cursor:pointer;">Install</a>')
                 install_link.setCursor(Qt.PointingHandCursor)
-                install_link.setStyleSheet(f"padding: 4px 8px;")
                 install_link.setToolTip(f"pip install {' '.join(a.dependencies)}")
                 install_link.mousePressEvent = lambda _, addon=a: self._install_addon(addon)
                 self.addon_table.setCellWidget(i, 5, install_link)

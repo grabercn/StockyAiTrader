@@ -22,7 +22,7 @@ from core.signals import write_signal
 from core.model_manager import MANAGED_MODELS, get_model_status, get_lgbm_models, download_model, delete_model, delete_lgbm_model, delete_all_lgbm_models
 from addons import get_all_addons, set_addon_enabled, discover_addons
 
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "settings.json")
 def load_settings():
     try:
         with open(SETTINGS_FILE, "r") as f: return json.load(f)
