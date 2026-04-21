@@ -214,28 +214,42 @@ class StockySuite(QMainWindow):
         log_event("update", f"New version v{latest} available at {url}")
 
     def _check_profile_warnings(self):
-        """Warn user if their profiles have issues."""
+        """Only warn about addons the current profile expects but are missing."""
         try:
-            # Check addon coverage
             from addons import get_all_addons
-            all_addons = get_all_addons()
-            inactive = [a for a in all_addons if a.available and not a.enabled]
-            unavailable = [a for a in all_addons if not a.available]
+            from core.profiles import PRESETS, get_active_profile_name
 
-            if inactive:
-                names = ", ".join(a.name for a in inactive[:3])
-                extra = f" +{len(inactive)-3} more" if len(inactive) > 3 else ""
+            profile_name = get_active_profile_name()
+            profile = PRESETS.get(profile_name, {})
+            profile_addons = profile.get("addons", {})
+
+            # Only check addons that the profile has enabled
+            all_addons = get_all_addons()
+            needs_install = []
+            needs_key = []
+            settings = load_settings()
+
+            for a in all_addons:
+                wanted = profile_addons.get(a.module_name, False)
+                if not wanted:
+                    continue  # Profile doesn't use this addon — no warning
+
+                if not a.available:
+                    needs_install.append(a.name)
+                elif a.requires_api_key and not settings.get(a.api_key_name):
+                    needs_key.append(a.name)
+
+            if needs_install:
+                names = ", ".join(needs_install[:3])
                 self.event_bus.log_entry.emit(
-                    f"{len(inactive)} addons disabled ({names}{extra}) — "
-                    f"check Settings > Hardware Profile",
+                    f"{len(needs_install)} addons need install ({names}) — Settings > Addons",
                     "warn",
                 )
-            if unavailable:
-                names = ", ".join(a.name for a in unavailable[:2])
+            if needs_key:
+                names = ", ".join(needs_key[:3])
                 self.event_bus.log_entry.emit(
-                    f"{len(unavailable)} addons need install ({names}) — "
-                    f"Settings > Addons",
-                    "system",
+                    f"{len(needs_key)} addons need API keys ({names}) — Settings > API Keys",
+                    "warn",
                 )
 
             # Check aggressivity + hardware compatibility
