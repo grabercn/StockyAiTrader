@@ -140,15 +140,29 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
                 sections.append(f"Recent Trades:\n" + "\n".join(trade_lines))
         except: pass
 
-        # User profile from settings
+        # User profile + aggressivity trading style
         try:
             with open(SETTINGS_FILE) as f:
                 user_settings = json.load(f)
             aggr = user_settings.get("aggressivity", "Default")
             manage_manual = user_settings.get("manage_manual_stocks", False)
+
+            style_guide = {
+                "Chill": "Conservative — protect capital, only trade on very strong signals. "
+                         "Rarely rotate positions. Hold winners, cut losers slowly.",
+                "Default": "Balanced — trade on solid signals, occasionally rotate capital "
+                           "from underperformers to better opportunities based on data.",
+                "Aggressive": "Active — actively seek upside, rotate capital from stale positions "
+                              "to higher-momentum opportunities. Sell underperformers to fund winners.",
+                "YOLO": "Maximum aggression — constantly seek highest-return opportunities. "
+                        "Aggressively sell anything not performing to fund the best picks. "
+                        "Maximize capital rotation for maximum upside.",
+            }
+
             sections.append(
-                f"User Profile: {aggr} aggressivity, "
-                f"{'manages manual stocks' if manage_manual else 'AI-only stocks'}"
+                f"User Profile: {aggr} aggressivity\n"
+                f"Trading Style: {style_guide.get(aggr, style_guide['Default'])}\n"
+                f"{'Also managing manually-bought stocks' if manage_manual else 'AI-managed stocks only'}"
             )
         except: pass
     except: pass
@@ -157,8 +171,10 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
 
     prompt = (
         f"You are a senior quantitative trading advisor. You have access to the full trading "
-        f"system data including history, user profile, and all indicators. Analyze ALL data "
-        f"and give your independent recommendation. Cite specific data points.\n\n"
+        f"system data including history, user profile, positions, and all indicators. "
+        f"Match your advice to the user's trading style described below. "
+        f"Consider capital rotation — should they sell underperformers to fund better picks? "
+        f"Cite specific data points.\n\n"
         f"{data_block}\n\n"
         f"Respond in this exact JSON format:\n"
         f'{{"recommendation": "BUY/SELL/HOLD", "confidence_adjustment": -0.3 to 0.3, '
