@@ -365,7 +365,7 @@ class StockySuite(QMainWindow):
             # Qt high DPI scaling is active — ratio > 1 means it's already scaling
             # Just add a slight comfort bump
             if ratio >= 1.5:
-                return 0.95  # Qt already scaled 1.5x — slight reduction for chart room
+                return 1.0   # Qt already handles DPI scaling — default to 100%
             elif ratio > 1.0:
                 return 1.0
             else:
