@@ -308,7 +308,11 @@ class DetailedProgressBar(QWidget):
         ts = datetime.now().strftime("%H:%M:%S")
         color = theme.color('primary')
         self._log_area.append(f'<span style="color:{theme.color("text_muted")}">{ts}</span> <span style="color:{color}">{msg}</span>')
+        sb = self._log_area.verticalScrollBar()
+        sb.setValue(sb.maximum())
         self._toggle.setVisible(True)
+        if self._log_area.isVisible():
+            self._log_area.repaint()
 
     def set_visible(self, visible):
         super().setVisible(visible)

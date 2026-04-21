@@ -418,34 +418,36 @@ class ScannerPanel(QWidget):
         self._worker.start()
 
     def _on_progress(self, done, total, ticker, detail):
-        pct = 10 + int(done / total * 85) if total > 0 else 0
-        elapsed = time.time() - self._t0
+        try:
+            pct = 10 + int(done / total * 85) if total > 0 else 0
+            elapsed = time.time() - getattr(self, '_t0', time.time())
+            est = getattr(self, '_scan_est', 60)
 
-        # Calculate live ETA
-        if done > 0:
-            per_stock = elapsed / done
-            from core.profiles import get_optimal_workers
-            remaining = (total - done) * per_stock / get_optimal_workers()
-            eta = max(0, int(remaining))
-            eta_str = f"{eta}s left" if eta < 120 else f"{eta//60}m {eta%60}s left"
-        else:
-            eta_str = f"~{self._scan_est}s"
+            # Live ETA
+            if done > 0:
+                per_stock = elapsed / done
+                from core.profiles import get_optimal_workers
+                remaining = (total - done) * per_stock / get_optimal_workers()
+                eta = max(0, int(remaining))
+                eta_str = f"{eta}s left" if eta < 120 else f"{eta//60}m {eta%60}s left"
+            else:
+                eta_str = "calculating..."
 
-        # Color the time red if over estimate
-        elapsed_int = int(elapsed)
-        time_color = ""
-        if elapsed_int > self._scan_est:
-            time_color = f" <span style='color:#ef4444'>({elapsed_int}s / est. {self._scan_est}s)</span>"
-        else:
-            time_color = f" ({elapsed_int}s / est. {self._scan_est}s)"
+            elapsed_int = int(elapsed)
+            if elapsed_int > est:
+                detail_text = f"{done}/{total} | {eta_str} | {elapsed_int}s (over est. {est}s)"
+            else:
+                detail_text = f"{done}/{total} | {eta_str} | {elapsed_int}s / est. {est}s"
 
-        self.progress.set_progress(pct, f"Scanning {ticker}...",
-            f"{done}/{total} — {eta_str}{time_color}")
+            self.progress.set_progress(pct, f"Scanning {ticker}...", detail_text)
 
-        action = detail.split(" ")[0] if detail else "..."
-        colors = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#f59e0b"}
-        color = colors.get(action, "#94a3b8")
-        self.progress.add_log(f"{ticker}: <b style='color:{color}'>{detail}</b>")
+            action = detail.split(" ")[0] if detail else "..."
+            colors = {"BUY": "#10b981", "SELL": "#ef4444", "HOLD": "#f59e0b"}
+            color = colors.get(action, "#94a3b8")
+            self.progress.add_log(f"{ticker}: <b style='color:{color}'>{detail}</b>")
+            QApplication.processEvents()
+        except Exception as e:
+            print(f"[PROGRESS ERROR] {e}", flush=True)
 
     def _on_done(self, results):
         self.results = results
