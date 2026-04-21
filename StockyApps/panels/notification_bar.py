@@ -103,6 +103,9 @@ class _NotificationBar(QWidget):
         self._msg = f"{APP_NAME} v{APP_VERSION} — Ready"
         self._time = ""
         self._click_url = None
+        self._icon_name = "check"
+        self._icon_color = TEXT_MUTED
+        self._text_color = QColor(TEXT_MUTED)
         self.setCursor(Qt.ArrowCursor)
         self.update()
 
