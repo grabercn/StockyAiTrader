@@ -117,12 +117,27 @@ class _DeepAnalyzeWorker(QThread):
     def __init__(self, scan_result):
         super().__init__()
         self.r = scan_result
+        import threading
+        self._progress_queue = []
+        self._progress_lock = threading.Lock()
+
+    def _emit_progress(self, pct, status, detail):
+        """Thread-safe progress update via polling queue."""
+        with self._progress_lock:
+            self._progress_queue.append((pct, status, detail))
+
+    def poll_progress(self):
+        """Called by main thread timer to drain progress queue."""
+        with self._progress_lock:
+            items = list(self._progress_queue)
+            self._progress_queue.clear()
+        return items
 
     def run(self):
         r = self.r
         report = []
 
-        self.progress_update.emit(10, "Building report header...", r.ticker)
+        self._emit_progress(10, "Building report header...", r.ticker)
         report.append("=" * 60)
         report.append(f"  DEEP ANALYSIS REPORT: {r.ticker}")
         report.append(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -131,7 +146,7 @@ class _DeepAnalyzeWorker(QThread):
         report.append(f"VERDICT: {r.action}  |  Confidence: {r.confidence:.1%}  |  Score: {r.score:.3f}")
         report.append(f"Price: ${r.price:.2f}  |  ATR: ${r.atr:.2f} ({r.atr/r.price*100:.1f}%)")
 
-        self.progress_update.emit(20, "Analyzing probabilities...", "")
+        self._emit_progress(20, "Analyzing probabilities...", "")
         report.append("")
         report.append("-" * 60)
         report.append("SIGNAL PROBABILITIES")
@@ -139,7 +154,7 @@ class _DeepAnalyzeWorker(QThread):
             bar = bar_char * int(prob * 40)
             report.append(f"  {label:5s}  {prob:6.1%}  [{bar:<40s}]")
 
-        self.progress_update.emit(35, "Calculating risk metrics...", "")
+        self._emit_progress(35, "Calculating risk metrics...", "")
         report.append("")
         report.append("-" * 60)
         report.append("RISK MANAGEMENT")
@@ -152,7 +167,7 @@ class _DeepAnalyzeWorker(QThread):
             report.append(f"  Max Loss:         ${r.position_size * (r.price - r.stop_loss):,.2f}")
             report.append(f"  Max Gain:         ${r.position_size * (r.take_profit - r.price):,.2f}")
 
-        self.progress_update.emit(50, "Analyzing feature importances...", "")
+        self._emit_progress(50, "Analyzing feature importances...", "")
         if r.feature_importances:
             report.append("")
             report.append("-" * 60)
@@ -164,7 +179,7 @@ class _DeepAnalyzeWorker(QThread):
                 bar_len = int((imp / max_imp) * 30)
                 report.append(f"  {'#' * bar_len:<30s}  {feat}: {imp:.0f}")
 
-        self.progress_update.emit(65, "Generating LLM reasoning...", "")
+        self._emit_progress(65, "Generating LLM reasoning...", "")
         try:
             from core.llm_reasoner import generate_reasoning
             llm_text = generate_reasoning(
@@ -179,7 +194,7 @@ class _DeepAnalyzeWorker(QThread):
         except Exception as e:
             report.append(f"\n  (LLM reasoning unavailable: {e})")
 
-        self.progress_update.emit(80, "Computing final scores...", "")
+        self._emit_progress(80, "Computing final scores...", "")
         report.append("")
         report.append("-" * 60)
         report.append("FINAL SCORES")
@@ -191,7 +206,7 @@ class _DeepAnalyzeWorker(QThread):
         report.append("")
         report.append("=" * 60)
 
-        self.progress_update.emit(95, "Report complete", r.ticker)
+        self._emit_progress(95, "Report complete", r.ticker)
         import time; time.sleep(0.3)
         self.finished_signal.emit("\n".join(report), r.ticker)
 

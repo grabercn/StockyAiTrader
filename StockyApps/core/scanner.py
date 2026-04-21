@@ -275,10 +275,11 @@ def scan_multiple(tickers, period="5d", interval="5m", risk_manager=None,
                 results.append(result)
             except Exception as e:
                 results.append(ScanResult(
-                    ticker=ticker, action="HOLD", confidence=0, price=0,
+                    ticker=ticker, action="--", confidence=0, price=0,
                     position_size=0, stop_loss=0, take_profit=0, atr=0,
-                    probs=[0, 1, 0], feature_importances={},
-                    reasoning=f"Timeout/Error: {e}", score=0, error=str(e),
+                    probs=[0, 0, 0], feature_importances={},
+                    reasoning=f"Error: {str(e)[:80]}", score=-1,
+                    error=str(e)[:100],
                 ))
 
             if progress_callback:

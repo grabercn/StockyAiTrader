@@ -515,7 +515,7 @@ class ScannerPanel(QWidget):
             settings_str = f"{p_used}/{i_used}" if (p_used != "5d" or i_used != "5m") else ""
 
             is_insufficient = bool(r.error)
-            grey = TEXT_MUTED
+            grey = "#8899aa"  # Lighter grey that's visible on both dark and light backgrounds
 
             items = [
                 (r.ticker, None),
@@ -556,10 +556,10 @@ class ScannerPanel(QWidget):
             monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
             self.table.setCellWidget(i, 8, monitor_btn)
 
-            # Reasoning (last column) — red for errors, normal for reasoning
-            if r.error:
-                reason_it = QTableWidgetItem(f"FAILED: {r.error[:60]}")
-                reason_it.setForeground(QColor(COLOR_SELL))
+            # Reasoning (last column)
+            if is_insufficient:
+                reason_it = QTableWidgetItem(r.error[:60] if r.error else "No data")
+                reason_it.setForeground(QColor(grey))
             else:
                 reason_it = QTableWidgetItem(r.reasoning[:80] if r.reasoning else "")
             reason_it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -987,16 +987,30 @@ class ScannerPanel(QWidget):
         self.progress.add_log(f"Starting deep analysis for {r.ticker}")
         self.detail_analyze_btn.setEnabled(False)
 
-        # Run in background
-        self._deep_worker = _DeepAnalyzeWorker(r)
-        self._deep_worker.progress_update.connect(
-            lambda pct, msg, detail: (self.progress.set_progress(pct, msg, detail), self.progress.add_log(msg))
-        )
+        # Run in background with polling (cross-thread signals unreliable)
+        from panels.workers import _DeepAnalyzeWorker as _DAW
+        self._deep_worker = _DAW(r)
         self._deep_worker.finished_signal.connect(self._on_deep_done)
         self._deep_worker.start()
 
+        # Poll for progress updates
+        self._deep_poll = QTimer(self)
+        self._deep_poll.timeout.connect(self._poll_deep_progress)
+        self._deep_poll.start(200)
+
+    def _poll_deep_progress(self):
+        if not hasattr(self, '_deep_worker') or not self._deep_worker:
+            return
+        for pct, msg, detail in self._deep_worker.poll_progress():
+            self.progress.set_progress(pct, msg, detail)
+            self.progress.add_log(msg)
+            QApplication.processEvents()
+
     def _on_deep_done(self, report_text, ticker):
         """Open the report popup when deep analysis completes."""
+        if hasattr(self, '_deep_poll'):
+            self._deep_poll.stop()
+            self._poll_deep_progress()  # Drain remaining
         self.detail_analyze_btn.setEnabled(True)
         self.progress.set_progress(100, f"Deep analysis complete", ticker)
         self.bus.log_entry.emit(f"Deep analysis complete for {ticker}", "trade")
