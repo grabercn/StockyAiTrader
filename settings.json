@@ -50,96 +50,39 @@
     "quit_on_close": false,
     "scan_avg_seconds": 9.74,
     "sim_trade_delay": true,
-    "monitored_stocks": {
-        "AAPL": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "NVDA": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "MDB": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "ZS": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "GOOGL": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "DDOG": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "CRM": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "AI": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "SNOW": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "PATH": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "PLTR": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "MSFT": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "CRWD": {
-            "period": "5d",
-            "interval": "5m"
-        },
-        "NET": {
-            "period": "5d",
-            "interval": "5m"
-        }
-    },
+    "monitored_stocks": {},
     "agent_was_running": true,
     "agent_managed_positions": [
         {
             "symbol": "DDOG",
             "qty": "1",
             "side": "long",
-            "current_price": "130.3",
-            "unrealized_pl": "0.94",
+            "current_price": "130.04",
+            "unrealized_pl": "0.68",
             "avg_entry": "129.36"
         },
         {
             "symbol": "HIMS",
             "qty": "2942",
             "side": "long",
-            "current_price": "30.28",
-            "unrealized_pl": "1218.079202",
+            "current_price": "29.9",
+            "unrealized_pl": "100.119202",
             "avg_entry": "29.865969"
         },
         {
             "symbol": "NOK",
             "qty": "4309",
             "side": "long",
-            "current_price": "10.43",
-            "unrealized_pl": "8.536129",
+            "current_price": "10.4501",
+            "unrealized_pl": "95.147029",
             "avg_entry": "10.428019"
         },
         {
             "symbol": "NVTS",
             "qty": "57",
             "side": "long",
-            "current_price": "15.45",
-            "unrealized_pl": "4.580007",
+            "current_price": "15.5517",
+            "unrealized_pl": "10.376907",
             "avg_entry": "15.369649"
         },
         {
@@ -154,20 +97,222 @@
             "symbol": "SNAP",
             "qty": "9",
             "side": "long",
-            "current_price": "5.74",
-            "unrealized_pl": "0.860589",
+            "current_price": "5.72",
+            "unrealized_pl": "0.680589",
             "avg_entry": "5.644379"
         },
         {
             "symbol": "SOFI",
             "qty": "3733",
             "side": "long",
-            "current_price": "19.16",
-            "unrealized_pl": "1340.199262",
+            "current_price": "19.19",
+            "unrealized_pl": "1452.189262",
             "avg_entry": "18.800986"
         }
     ],
     "manage_manual_stocks": true,
     "gemini_enabled": true,
-    "gemini_api_key": "AIzaSyAfjA1p4bqRIh8oUKixRri6OUfZrqi5Irg"
+    "gemini_api_key": "AIzaSyAfjA1p4bqRIh8oUKixRri6OUfZrqi5Irg",
+    "agent_tracked_stocks": {
+        "NVDA": {
+            "signal": "SELL",
+            "confidence": 1.0,
+            "price": 199.91000366210938,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "FFAI": {
+            "signal": "SELL",
+            "confidence": 1.0,
+            "price": 0.5340999960899353,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "SOFI": {
+            "signal": "BUY",
+            "confidence": 0.9556176692835956,
+            "price": 18.825000762939453,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "PLUG": {
+            "signal": "SELL",
+            "confidence": 0.9222272632172968,
+            "price": 3.065000057220459,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "OPEN": {
+            "signal": "BUY",
+            "confidence": 0.8288479543601059,
+            "price": 5.440000057220459,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "INTC": {
+            "signal": "BUY",
+            "confidence": 0.8240926398411332,
+            "price": 66.30000305175781,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "MLI": {
+            "signal": "SELL",
+            "confidence": 0.7791826727303186,
+            "price": 134.77000427246094,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "ISRG": {
+            "signal": "SELL",
+            "confidence": 0.7899962954043943,
+            "price": 451.42999267578125,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "NOK": {
+            "signal": "BUY",
+            "confidence": 0.7471004365356737,
+            "price": 10.390000343322754,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "AAL": {
+            "signal": "SELL",
+            "confidence": 0.7419296244631517,
+            "price": 11.795000076293945,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "UAL": {
+            "signal": "SELL",
+            "confidence": 0.7266256001704884,
+            "price": 97.18000030517578,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "COF": {
+            "signal": "SELL",
+            "confidence": 0.23568967710625596,
+            "price": 202.6999969482422,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "NVTS": {
+            "signal": "BUY",
+            "confidence": 0.707390652488918,
+            "price": 15.319999694824219,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "ONDS": {
+            "signal": "SELL",
+            "confidence": 0.7137710499000307,
+            "price": 10.885000228881836,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "PBI": {
+            "signal": "BUY",
+            "confidence": 0.2088201255863942,
+            "price": 14.630000114440918,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "CAR": {
+            "signal": "BUY",
+            "confidence": 0.2100143087758616,
+            "price": 714.0,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "VMI": {
+            "signal": "SELL",
+            "confidence": 0.19327162951870414,
+            "price": 458.6650085449219,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        },
+        "BTG": {
+            "signal": "HOLD",
+            "confidence": 0.7418707722027467,
+            "price": 4.710000038146973,
+            "last_check": "17:40:28",
+            "checks": 1,
+            "qty": 0,
+            "mode": "Scanned",
+            "interval": "5m",
+            "next_secs": 300
+        }
+    },
+    "agent_cycle_count": 1,
+    "agent_trades_today": 0
 }

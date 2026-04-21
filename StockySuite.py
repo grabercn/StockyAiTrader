@@ -803,21 +803,81 @@ def boot_app():
             if not monitored and not managed_positions:
                 return
 
-            # Simple, safe message box
-            stock_list = ", ".join(list(monitored.keys())[:8])
-            if len(monitored) > 8:
-                stock_list += f" +{len(monitored)-8} more"
+            # Custom dialog with position summary table
+            dlg = QDialog(suite)
+            dlg.setWindowTitle("Resume AI Trading")
+            dlg.setWindowIcon(QApplication.instance().windowIcon())
+            dlg.setMinimumSize(520, 380)
 
-            msg = f"Resume AI Trading?\n\n"
-            msg += f"Monitoring: {len(monitored)} stocks\n"
-            msg += f"({stock_list})\n"
+            lay = QVBoxLayout()
+            title = QLabel("Resume AI Trading?")
+            title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            # Position summary table
             if managed_positions:
+                total_value = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0)) for p in managed_positions)
                 total_pl = sum(float(p.get("unrealized_pl", 0)) for p in managed_positions)
-                msg += f"\nPositions: {len(managed_positions)} stocks (P&L: ${total_pl:+,.2f})\n"
-            msg += f"\nResume = Start AI agent\nNo = Manual management"
+                pl_color = COLOR_PROFIT if total_pl >= 0 else COLOR_LOSS
 
-            reply = QMessageBox.question(suite, "Resume AI Trading", msg,
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                summary = QLabel(f"{len(managed_positions)} positions  |  "
+                                 f"Value: ${total_value:,.0f}  |  P&L: ${total_pl:+,.2f}")
+                summary.setStyleSheet(f"color: {pl_color}; font-size: 11px; font-weight: bold;")
+                lay.addWidget(summary)
+
+                tbl = QTableWidget()
+                tbl.setColumnCount(5)
+                tbl.setHorizontalHeaderLabels(["Stock", "Qty", "Price", "P&L", "Value"])
+                tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                tbl.verticalHeader().setVisible(False)
+                tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                tbl.setRowCount(len(managed_positions))
+                tbl.setMaximumHeight(180)
+                for i, p in enumerate(managed_positions):
+                    sym = p.get("symbol", "")
+                    qty = float(p.get("qty", 0))
+                    price = float(p.get("current_price", 0))
+                    pl = float(p.get("unrealized_pl", 0))
+                    mv = qty * price
+                    vals = [sym, f"{qty:.0f}", f"${price:.2f}", f"${pl:+,.2f}", f"${mv:,.0f}"]
+                    for j, v in enumerate(vals):
+                        item = QTableWidgetItem(v)
+                        item.setTextAlignment(Qt.AlignCenter)
+                        if j == 3:
+                            item.setForeground(QColor(COLOR_PROFIT if pl >= 0 else COLOR_LOSS))
+                        tbl.setItem(i, j, item)
+                lay.addWidget(tbl)
+
+            # Monitored stocks count
+            if monitored:
+                tracked = settings.get("agent_tracked_stocks", {})
+                signals = [tracked.get(t, {}).get("signal", "?") for t in monitored]
+                buy_c = signals.count("BUY")
+                sell_c = signals.count("SELL")
+                hold_c = len(signals) - buy_c - sell_c
+                mon_label = QLabel(f"Monitoring {len(monitored)} stocks: {buy_c}B {sell_c}S {hold_c}H")
+                mon_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+                lay.addWidget(mon_label)
+
+            note = QLabel("Resume = Start AI agent with these stocks\nNo = Keep positions, manage manually")
+            note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+            lay.addWidget(note)
+
+            btn_row = QHBoxLayout()
+            yes_btn = QPushButton("Resume AI")
+            yes_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 12px; padding: 8px 20px;")
+            yes_btn.clicked.connect(dlg.accept)
+            btn_row.addWidget(yes_btn)
+            no_btn = QPushButton("Manual")
+            no_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 12px; padding: 8px 20px;")
+            no_btn.clicked.connect(dlg.reject)
+            btn_row.addWidget(no_btn)
+            lay.addLayout(btn_row)
+
+            dlg.setLayout(lay)
+            reply_val = dlg.exec_()
+            reply = QMessageBox.Yes if reply_val == QDialog.Accepted else QMessageBox.No
 
             if reply == QMessageBox.Yes:
                 suite.event_bus.log_entry.emit(
