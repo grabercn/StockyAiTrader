@@ -425,6 +425,19 @@ class AIDashboardPanel(QWidget):
         self.bus.log_entry.emit("Autonomous agent started", "trade")
         log_event("agent", "Autonomous agent started")
 
+        # Log resume context
+        settings = load_settings()
+        monitored = settings.get("monitored_stocks", {})
+        if monitored:
+            self.bus.log_entry.emit(f"Resuming with {len(monitored)} monitored stocks", "system")
+            for ticker, info in list(monitored.items())[:5]:
+                sig = info.get("last_signal", "pending")
+                self.bus.log_entry.emit(f"  {ticker}: {sig} ({info.get('interval', '5m')})", "system")
+            if len(monitored) > 5:
+                self.bus.log_entry.emit(f"  +{len(monitored)-5} more...", "system")
+        if settings.get("gemini_enabled"):
+            self.bus.log_entry.emit("Gemini AI Advisor: enabled", "system")
+
         threading.Thread(target=self._run_agent, daemon=True).start()
 
     def _run_agent(self):
@@ -551,8 +564,11 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(
                                         f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
                                         f"adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
-                except Exception:
-                    pass
+                                else:
+                                    self.bus.log_entry.emit(
+                                        f"  Gemini: {r.ticker} — no response (API may be unavailable)", "warn")
+                except Exception as e:
+                    self.bus.log_entry.emit(f"Gemini error: {e}", "error")
 
                 skipped = [r for r in results if not r.error and r.action in ("BUY","SELL")
                           and r.confidence < min_conf]

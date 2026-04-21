@@ -108,82 +108,18 @@
             "interval": "5m"
         }
     },
-    "agent_was_running": true,
+    "agent_was_running": false,
     "agent_managed_positions": [
         {
             "symbol": "DDOG",
             "qty": "1",
             "side": "long",
             "avg_entry": "129.36",
-            "current_price": "130.52",
-            "unrealized_pl": "1.16"
-        },
-        {
-            "symbol": "HIMS",
-            "qty": "1729",
-            "side": "long",
-            "avg_entry": "30.32",
-            "current_price": "30.41",
-            "unrealized_pl": "155.61"
-        },
-        {
-            "symbol": "INTC",
-            "qty": "1112",
-            "side": "long",
-            "avg_entry": "66.343886",
-            "current_price": "66.2601",
-            "unrealized_pl": "-93.170032"
-        },
-        {
-            "symbol": "MSFT",
-            "qty": "23",
-            "side": "long",
-            "avg_entry": "426.33",
-            "current_price": "425.84",
-            "unrealized_pl": "-11.27"
-        },
-        {
-            "symbol": "NVDA",
-            "qty": "426",
-            "side": "long",
-            "avg_entry": "200.341407",
-            "current_price": "200.61",
-            "unrealized_pl": "114.420618"
-        },
-        {
-            "symbol": "ONDS",
-            "qty": "4782",
-            "side": "long",
-            "avg_entry": "10.95",
-            "current_price": "10.9699",
-            "unrealized_pl": "95.1618"
-        },
-        {
-            "symbol": "PLTR",
-            "qty": "68",
-            "side": "long",
-            "avg_entry": "146.54",
-            "current_price": "146.58",
-            "unrealized_pl": "2.72"
-        },
-        {
-            "symbol": "SNAP",
-            "qty": "1100",
-            "side": "long",
-            "avg_entry": "5.644379",
-            "current_price": "5.685",
-            "unrealized_pl": "44.6831"
-        },
-        {
-            "symbol": "SOFI",
-            "qty": "2769",
-            "side": "long",
-            "avg_entry": "18.94",
-            "current_price": "18.955",
-            "unrealized_pl": "41.535"
+            "current_price": "129.29",
+            "unrealized_pl": "-0.07"
         }
     ],
     "manage_manual_stocks": true,
     "gemini_enabled": true,
-    "gemini_api_key": "15:52:53 Autonomous agent started\n15:52:55 Gemini advisor enabled\n15:52:55 Agent: RL model loaded (40 trades, 88% accuracy)\n15:52:55 Agent cycle 1: scanning market...\n15:52:55 Agent: BP=$394,936, profile=Default\n15:52:56 Agent: scanning 17 tickers from Active(10), Gainers(5), Trending(5)\n15:53:45 Autonomous agent stopped\n15:53:51 Autonomous agent started\n15:53:51 Agent: RL model loaded (40 trades, 88% accuracy)\n15:53:51 Agent cycle 1: scanning market...\n15:53:54 Agent: BP=$394,936, profile=Default\n15:53:54 Agent: scanning 17 tickers from Active(10), Gainers(5), Trending(5)\n15:53:55 Gemini (gemini-2.5-flash): HIMS BUY adj 100%\u2192100% \u2014 The AI signal is a strong BUY at 100% confidence, heavily supported by a 79% buy\n15:54:01 Gemini (gemini-2.5-flash): NVDA SELL adj 100%\u2192100% \u2014 The AI signal indicates a strong SELL with 100% confidence, which is heavily rei\n15:54:08 Gemini (gemini-2.5-flash): INTC BUY adj 100%\u2192100% \u2014 The AI signal is a strong BUY with 100% confidence, strongly supported by the hi\n15:54:14 Gemini (gemini-2.5-flash): HIMS BUY adj 100%\u2192100% \u2014 The AI signal indicates a strong BUY with 100% confidence, supported by probabil\n15:54:15 Gemini (gemini-2.5-flash): SOFI BUY adj 100%\u2192100% \u2014 The AI signal strongly recommends BUY with 100% confidence, heavily supported by"
+    "gemini_api_key": "AIzaSyAfjA1p4bqRIh8oUKixRri6OUfZrqi5Irg"
 }
