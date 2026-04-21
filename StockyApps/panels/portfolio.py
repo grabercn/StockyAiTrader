@@ -410,8 +410,8 @@ class PortfolioPanel(QWidget):
             self.history_table.setRowCount(len(closed))
             running_total = 0
             for i, o in enumerate(closed):
-                qty = float(o.get("filled_qty", 0))
-                price = float(o.get("filled_avg_price", 0))
+                qty = float(o.get("filled_qty", 0) or 0)
+                price = float(o.get("filled_avg_price", 0) or 0)
                 side = o.get("side", "")
                 cost = qty * price
                 # Buys are negative cash flow, sells are positive
