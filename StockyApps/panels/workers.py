@@ -46,6 +46,7 @@ class ScanWorker(QThread):
         self.auto_settings = auto_settings
 
     def run(self):
+        import time as _time
         def cb(done, total, ticker, result):
             if result and not result.error:
                 p = getattr(result, 'period_used', '')
@@ -55,10 +56,14 @@ class ScanWorker(QThread):
             else:
                 detail = result.action if result else "..."
             self.progress.emit(done, total, ticker, detail)
+            # Small yield so Qt event loop can process the signal
+            _time.sleep(0.05)
         from core.profiles import get_optimal_workers
         results = scan_multiple(self.tickers, self.period, self.interval,
                                 self.risk_manager, max_workers=get_optimal_workers(),
                                 progress_callback=cb, auto_settings=self.auto_settings)
+        # Small delay before finished so last progress signals are processed
+        _time.sleep(0.2)
         self.finished.emit(results)
 
 

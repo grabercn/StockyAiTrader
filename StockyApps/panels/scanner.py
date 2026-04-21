@@ -412,10 +412,12 @@ class ScannerPanel(QWidget):
             f"0/{len(tickers)} — est. ~{est_seconds}s")
         self.progress.add_log(f"Estimated time: ~{est_seconds}s for {len(tickers)} stocks")
 
-        self._worker = ScanWorker(tickers, period, interval, self.rm, auto_settings=is_auto)
-        self._worker.progress.connect(self._on_progress, Qt.QueuedConnection)
-        self._worker.finished.connect(self._on_done, Qt.QueuedConnection)
+        from panels.workers import ScanWorker as _SW
+        self._worker = _SW(tickers, period, interval, self.rm, auto_settings=is_auto)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_done)
         self._worker.start()
+        print(f"[SCANNER] Worker started, {len(tickers)} tickers, signals connected", flush=True)
 
     def _on_progress(self, done, total, ticker, detail):
         try:
@@ -450,6 +452,7 @@ class ScannerPanel(QWidget):
             print(f"[PROGRESS ERROR] {e}", flush=True)
 
     def _on_done(self, results):
+        print(f"[SCANNER] _on_done called with {len(results)} results", flush=True)
         self.results = results
         elapsed = time.time() - self._t0
         est = getattr(self, '_scan_est', 0)

@@ -46,5 +46,7 @@
         ]
     },
     "ui_zoom": 1.0,
-    "aggressivity": "Default"
+    "aggressivity": "Default",
+    "quit_on_close": false,
+    "scan_avg_seconds": 8.68
 }
