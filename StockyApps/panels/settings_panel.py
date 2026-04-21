@@ -252,6 +252,7 @@ class SettingsPanel(QWidget):
         for c in [1, 2, 4]:
             self.model_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.model_table.verticalHeader().setVisible(False)
+        self.model_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.model_table.setMinimumHeight(120)
         ml.addWidget(self.model_table)
         self.dl_status = QLabel("")
@@ -272,6 +273,7 @@ class SettingsPanel(QWidget):
         for c in [2, 4, 5, 6]:
             self.addon_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.addon_table.verticalHeader().setVisible(False)
+        self.addon_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         al.addWidget(self.addon_table)
         addon_box.setLayout(al)
         inner_layout.addWidget(addon_box)

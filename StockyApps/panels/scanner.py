@@ -147,6 +147,7 @@ class ScannerPanel(QWidget):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.cellClicked.connect(self._on_row_clicked)
         layout.addWidget(self.table)

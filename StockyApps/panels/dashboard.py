@@ -106,6 +106,7 @@ class DashboardPanel(QWidget):
             self.pos_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
         self.pos_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.pos_table.verticalHeader().setVisible(False)
+        self.pos_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         pl.addWidget(self.pos_table)
         pos_widget.setLayout(pl)
         bl.addWidget(pos_widget, 3)
@@ -129,6 +130,7 @@ class DashboardPanel(QWidget):
             self.orders_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
         self.orders_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.orders_table.verticalHeader().setVisible(False)
+        self.orders_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.orders_table.setMaximumHeight(120)
         rl.addWidget(self.orders_table)
 
