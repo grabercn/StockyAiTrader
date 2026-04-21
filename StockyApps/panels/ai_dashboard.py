@@ -22,7 +22,8 @@ def save_settings(s):
 class AIDashboardPanel(QWidget):
     """Mission control + autonomous agent for the AI auto-trader."""
 
-    _auto_svc = None  # Shared auto-trade service reference
+    _auto_svc = None
+    _agent_stocks = {}  # {ticker: {signal, confidence, price, last_check, checks}}
 
     def __init__(self, broker, event_bus):
         super().__init__()
@@ -61,73 +62,46 @@ class AIDashboardPanel(QWidget):
             cards.addWidget(c)
         layout.addLayout(cards)
 
-        # Autonomous agent controls
-        agent_box = QGroupBox("Autonomous Agent")
-        agent_box.setStyleSheet(f"QGroupBox {{ font-weight: bold; color: {BRAND_ACCENT}; }}")
-        al = QVBoxLayout()
-        al.setSpacing(4)
-
-        agent_desc = QLabel(
-            "The autonomous agent runs scans, picks the best stocks, and manages trades automatically. "
-            "It respects your aggressivity profile, buying power limits, and HOLD signals."
-        )
-        agent_desc.setWordWrap(True)
-        agent_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
-        al.addWidget(agent_desc)
-
+        # Autonomous agent controls — compact single row
         agent_row = QHBoxLayout()
         self.agent_start_btn = QPushButton("Start Agent")
-        self.agent_start_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 12px; padding: 8px 16px;")
+        self.agent_start_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 11px; padding: 6px 14px;")
         self.agent_start_btn.clicked.connect(self._toggle_agent)
         agent_row.addWidget(self.agent_start_btn)
-
-        self.agent_status = QLabel("Agent: Stopped")
+        self.agent_status = QLabel("Stopped")
         self.agent_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
         agent_row.addWidget(self.agent_status)
-
         self.agent_countdown = QLabel("")
         self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
         agent_row.addWidget(self.agent_countdown)
-        al.addLayout(agent_row)
+        agent_row.addStretch()
+        layout.addLayout(agent_row)
 
         # Countdown timer
         self._countdown_timer = QTimer(self)
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self._countdown_secs = 0
 
-        # Toggle: manage manually-bought stocks
-        manual_row = QHBoxLayout()
-        self.manage_manual_cb = QCheckBox("Also manage manually-bought stocks")
-        self.manage_manual_cb.setToolTip(
-            "When enabled, the AI will also monitor and trade stocks you bought manually. "
-            "Disabled by default — only manages stocks the AI bought.")
+        # Options — single compact row
         settings = load_settings()
+        opts = QHBoxLayout()
+        self.manage_manual_cb = QCheckBox("Manage manual stocks")
         self.manage_manual_cb.setChecked(settings.get("manage_manual_stocks", False))
         self.manage_manual_cb.toggled.connect(self._toggle_manage_manual)
-        manual_row.addWidget(self.manage_manual_cb)
-        al.addLayout(manual_row)
+        opts.addWidget(self.manage_manual_cb)
 
-        # Gemini AI Advisor (experimental)
-        gemini_row = QHBoxLayout()
-        self.gemini_cb = QCheckBox("Gemini AI Advisor (experimental)")
-        self.gemini_cb.setToolTip("Uses Google Gemini to provide advisory reasoning that skews trading decisions.")
+        self.gemini_cb = QCheckBox("Gemini Advisor")
         self.gemini_cb.setChecked(settings.get("gemini_enabled", False))
         self.gemini_cb.toggled.connect(self._toggle_gemini)
-        gemini_row.addWidget(self.gemini_cb)
+        opts.addWidget(self.gemini_cb)
         self.gemini_key_input = QLineEdit(settings.get("gemini_api_key", ""))
-        self.gemini_key_input.setPlaceholderText("Gemini API Key")
+        self.gemini_key_input.setPlaceholderText("API Key")
         self.gemini_key_input.setEchoMode(QLineEdit.Password)
-        self.gemini_key_input.setFixedWidth(180)
+        self.gemini_key_input.setFixedWidth(140)
         self.gemini_key_input.editingFinished.connect(self._save_gemini_key)
-        gemini_row.addWidget(self.gemini_key_input)
-        al.addLayout(gemini_row)
-
-        gemini_note = QLabel("Advisory only — skews but doesn't dictate. Models: gemini-3.1-flash-preview → 2.5-flash")
-        gemini_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8px;")
-        al.addWidget(gemini_note)
-
-        agent_box.setLayout(al)
-        layout.addWidget(agent_box)
+        opts.addWidget(self.gemini_key_input)
+        opts.addStretch()
+        layout.addLayout(opts)
 
         # Monitored stocks table with unmonitor buttons
         self.table = QTableWidget()
@@ -264,41 +238,62 @@ class AIDashboardPanel(QWidget):
 
     def refresh(self):
         svc = self._get_svc()
-        if not svc:
+        svc_monitored = svc.get_monitored() if svc else {}
+
+        # Merge auto-service monitored + agent's own tracked stocks
+        all_stocks = {}
+        for ticker, stock in svc_monitored.items():
+            all_stocks[ticker] = {
+                "signal": getattr(stock, 'last_signal', 'HOLD'),
+                "confidence": getattr(stock, 'last_confidence', 0),
+                "price": getattr(stock, 'last_price', 0),
+                "last_check": getattr(stock, 'last_check', '--'),
+                "next_secs": getattr(stock, 'next_check_seconds', 0),
+                "interval": getattr(stock, 'interval', '5m'),
+                "checks": getattr(stock, 'check_count', 0),
+                "mode": "Auto" if getattr(stock, 'auto_execute', False) else "Signal",
+            }
+        # Add agent-tracked stocks not already in auto-service
+        for ticker, info in self._agent_stocks.items():
+            if ticker not in all_stocks:
+                all_stocks[ticker] = info
+
+        if not all_stocks:
             self.card_monitored.set_value("0")
-            self.card_mode.set_value("No agent")
+            self.card_mode.set_value("No agent" if not getattr(self, '_agent_running', False) else "Running")
             self.table.setRowCount(0)
             return
 
-        monitored = svc.get_monitored()
+        monitored = all_stocks
         self.card_monitored.set_value(str(len(monitored)))
 
         settings = load_settings()
-        self.card_mode.set_value(settings.get("aggressivity", "Default"))
+        aggr = settings.get("aggressivity", "Default")
+        is_running = getattr(self, '_agent_running', False)
+        self.card_mode.set_value(f"{aggr}" if is_running else aggr)
 
-        buys = sum(1 for s in monitored.values() if s.last_signal == "BUY")
-        sells = sum(1 for s in monitored.values() if s.last_signal == "SELL")
-        holds = sum(1 for s in monitored.values() if s.last_signal == "HOLD")
+        buys = sum(1 for s in monitored.values() if s.get("signal") == "BUY")
+        sells = sum(1 for s in monitored.values() if s.get("signal") == "SELL")
+        holds = sum(1 for s in monitored.values() if s.get("signal") == "HOLD")
         self.card_signals.set_value(f"{buys}B {sells}S {holds}H")
 
-        total_trades = sum(getattr(s, 'check_count', 0) for s in monitored.values())
-        self.card_trades.set_value(str(total_trades))
+        total_checks = sum(s.get("checks", 0) for s in monitored.values())
+        self.card_trades.set_value(str(total_checks))
 
-        # Table with unmonitor buttons
+        # Table
         self.table.setRowCount(len(monitored))
-        for i, (ticker, stock) in enumerate(monitored.items()):
-            signal = getattr(stock, 'last_signal', 'HOLD')
-            conf = getattr(stock, 'last_confidence', 0)
-            price = getattr(stock, 'last_price', 0)
-            last_check = getattr(stock, 'last_check', '--')
-            next_secs = getattr(stock, 'next_check_seconds', 0)
-            interval = getattr(stock, 'interval', '5m')
-            checks = getattr(stock, 'check_count', 0)
-            auto = getattr(stock, 'auto_execute', False)
+        for i, (ticker, info) in enumerate(monitored.items()):
+            signal = info.get("signal", "HOLD")
+            conf = info.get("confidence", 0)
+            price = info.get("price", 0)
+            last_check = info.get("last_check", "--")
+            next_secs = info.get("next_secs", 0)
+            interval = info.get("interval", "5m")
+            checks = info.get("checks", 0)
+            mode = info.get("mode", "Auto")
 
-            mins = next_secs // 60
-            secs = next_secs % 60
-            mode = "Auto" if auto else "Signal"
+            mins = next_secs // 60 if isinstance(next_secs, (int, float)) else 0
+            secs = next_secs % 60 if isinstance(next_secs, (int, float)) else 0
 
             vals = [ticker, mode, signal, f"{conf:.0%}",
                     f"${price:.2f}" if price else "--",
@@ -615,6 +610,12 @@ class AIDashboardPanel(QWidget):
                                     trades_today += 1
                                     self.bus.log_entry.emit(
                                         f"Agent SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
+                                    self._agent_stocks[r.ticker] = {
+                                        "signal": "SELL", "confidence": r.confidence,
+                                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
+                                        "checks": self._agent_stocks.get(r.ticker, {}).get("checks", 0) + 1,
+                                        "qty": held - qty, "mode": "Auto",
+                                    }
                         except: pass
 
                 # Execute buys — re-check BP before each, respect limits
@@ -654,7 +655,13 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(
                                         f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} "
                                         f"(${cost:,.0f}, {r.confidence:.0%})", "trade")
-                                    # Add to auto-trader monitoring so it shows in table
+                                    # Track in agent's own stock list
+                                    self._agent_stocks[r.ticker] = {
+                                        "signal": "BUY", "confidence": r.confidence,
+                                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
+                                        "checks": 1, "qty": qty, "mode": "Auto",
+                                    }
+                                    # Also add to auto-trader if available
                                     try:
                                         mon_svc = self._get_svc()
                                         if mon_svc and not mon_svc.is_monitoring(r.ticker):
