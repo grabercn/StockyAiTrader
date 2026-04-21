@@ -397,6 +397,9 @@ class AIDashboardPanel(QWidget):
             mins = self._countdown_secs // 60
             secs = self._countdown_secs % 60
             self.agent_countdown.setText(f"Next cycle: {mins}m {secs}s")
+        elif getattr(self, '_agent_running', False):
+            self.agent_countdown.setText("Scanning...")
+            self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
         else:
             self.agent_countdown.setText("")
 
@@ -515,7 +518,7 @@ class AIDashboardPanel(QWidget):
                     try:
                         acct = self.broker.get_account()
                         bp = float(acct.get("buying_power", 0))
-                    except: pass
+                    except Exception as _e: pass
 
                 if trades_today >= max_trades:
                     self.bus.log_entry.emit(
@@ -568,7 +571,7 @@ class AIDashboardPanel(QWidget):
                                 atr_pct = r.atr / r.price if r.price > 0 else 0
                                 q = get_quality_score(rl_model, r.confidence, r.probs, atr_pct, r.action)
                                 r.confidence = min(1.0, r.confidence * q)
-                            except: pass
+                            except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
                 # Apply Gemini advisory BEFORE filtering (adjusts confidence)
                 try:
@@ -640,7 +643,7 @@ class AIDashboardPanel(QWidget):
                                         "checks": self._agent_stocks.get(r.ticker, {}).get("checks", 0) + 1,
                                         "qty": held - qty, "mode": "Auto",
                                     }
-                        except: pass
+                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
                 # Execute buys — re-check BP before each, respect limits
                 if buys and self.broker and bp > 50:
@@ -648,7 +651,7 @@ class AIDashboardPanel(QWidget):
                     try:
                         acct = self.broker.get_account()
                         bp = float(acct.get("buying_power", 0))
-                    except: pass
+                    except Exception as _e: pass
 
                     max_buys = min(len(buys), max(1, int(5 * size_mult)))
                     initial_bp = bp
@@ -661,7 +664,7 @@ class AIDashboardPanel(QWidget):
                         try:
                             acct = self.broker.get_account()
                             bp = float(acct.get("buying_power", 0))
-                        except: pass
+                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
                         if bp < 100: break
 
@@ -691,14 +694,14 @@ class AIDashboardPanel(QWidget):
                                         if mon_svc and not mon_svc.is_monitoring(r.ticker):
                                             mon_svc.add_stock(r.ticker, period="5d", interval="5m",
                                                              auto_execute=True, min_confidence=0.5)
-                                    except: pass
+                                    except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
                                 else:
                                     self.bus.log_entry.emit(
                                         f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
                             else:
                                 self.bus.log_entry.emit(
                                     f"Agent: skip {r.ticker} — cost ${cost:,.0f} > BP ${bp:,.0f}", "info")
-                        except: pass
+                        except Exception as _e: self.bus.log_entry.emit(f"Agent error: {_e}", "error")
 
                 self.bus.log_entry.emit(
                     f"Cycle {cycle} done. {trades_today}/{max_trades} trades today. Next in 5 min.", "system")
