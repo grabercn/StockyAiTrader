@@ -23,17 +23,18 @@ import json
 import os
 
 # ─── Model Configuration (change these to switch models) ──────────────────
-# ─── Available Gemini Models (update as new models release) ───────────
-# Flash (fast + cheap):
-#   gemini-2.0-flash          — stable, fast, good quality
-#   gemini-2.0-flash-lite     — fastest, lowest cost
-#   gemini-2.5-flash-preview-05-20 — latest preview, best quality flash
-# Pro (highest quality):
-#   gemini-2.5-pro-preview-05-06   — best quality, slower
-#   gemini-2.0-pro                 — stable pro
+# ─── Available Gemini Models (verified via API) ──────────────────────
+# Latest:
+#   gemini-3.1-flash-lite-preview  — newest, fast
+#   gemini-3-flash-preview         — gen 3 flash
+#   gemini-3.1-pro-preview         — gen 3 pro (slower, best quality)
+# Stable:
+#   gemini-2.5-flash               — stable flash
+#   gemini-2.5-pro                 — stable pro
+#   gemini-2.0-flash               — older stable
 # ─────────────────────────────────────────────────────────────────────
-PRIMARY_MODEL = "gemini-2.5-flash-preview-05-20"
-FALLBACK_MODEL = "gemini-2.0-flash"
+PRIMARY_MODEL = "gemini-3.1-flash-lite-preview"
+FALLBACK_MODEL = "gemini-2.5-flash"
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "settings.json")
 
