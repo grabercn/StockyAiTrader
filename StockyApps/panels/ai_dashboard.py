@@ -584,7 +584,17 @@ class AIDashboardPanel(QWidget):
                     tickers.update(t)
                     sources_used.append(f"Trending({len(t)})")
                 except: pass
-                tickers = list(tickers)[:20]
+                # Always include stocks we currently hold
+                try:
+                    positions = self.broker.get_positions()
+                    if isinstance(positions, list):
+                        held = [p.get("symbol", "") for p in positions if p.get("symbol")]
+                        tickers.update(held)
+                        if held:
+                            sources_used.append(f"Held({len(held)})")
+                except: pass
+
+                tickers = list(tickers)[:25]  # Allow more to fit held stocks
 
                 self.bus.log_entry.emit(
                     f"Agent: scanning {len(tickers)} tickers from {', '.join(sources_used)}", "system")
