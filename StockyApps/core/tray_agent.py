@@ -173,10 +173,44 @@ class TrayAgent:
                                  icon_map.get(level, QSystemTrayIcon.Information), 5000)
 
     def _show_window(self):
-        self.window.show()
-        self.window.raise_()
-        self.window.activateWindow()
-        self.window.setWindowState(self.window.windowState() & ~Qt.WindowMinimized)
+        """Restore window with reverse collapse animation (particles expand from center)."""
+        try:
+            from core.ui.window_expand import WindowExpand
+            from PyQt5.QtWidgets import QGraphicsOpacityEffect
+            from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+
+            win = self.window
+            geo = win.geometry()
+
+            # Make window invisible first
+            effect = QGraphicsOpacityEffect(win)
+            win.setGraphicsEffect(effect)
+            effect.setOpacity(0.0)
+            win.show()
+            win.raise_()
+            win.activateWindow()
+            win.setWindowState(win.windowState() & ~Qt.WindowMinimized)
+
+            def _on_expand_done():
+                # Fade in the window after particles arrive at edges
+                fade = QPropertyAnimation(effect, b"opacity")
+                fade.setDuration(400)
+                fade.setStartValue(0.0)
+                fade.setEndValue(1.0)
+                fade.setEasingCurve(QEasingCurve.OutCubic)
+                fade.finished.connect(lambda: win.setGraphicsEffect(None))
+                fade.start()
+                win._restore_fade = fade
+
+            expand = WindowExpand(geo, on_done=_on_expand_done)
+            expand.start()
+            win._expand_anim = expand
+        except Exception:
+            # Fallback: just show normally
+            self.window.show()
+            self.window.raise_()
+            self.window.activateWindow()
+            self.window.setWindowState(self.window.windowState() & ~Qt.WindowMinimized)
 
     def _quit_with_animation(self):
         """Quit with particle explosion from tray icon area."""

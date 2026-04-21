@@ -183,5 +183,7 @@
             "unrealized_pl": "41.535"
         }
     ],
-    "manage_manual_stocks": false
+    "manage_manual_stocks": false,
+    "gemini_enabled": true,
+    "gemini_api_key": "AIzaSyAfjA1p4bqRIh8oUKixRri6OUfZrqi5Irg"
 }
