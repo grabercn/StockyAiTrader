@@ -36,8 +36,9 @@ def save_settings(s):
 class ScannerPanel(QWidget):
     """Dynamic multi-stock scanner with live discovery, detail panel, and auto-invest."""
 
-    # Signal for cross-thread detail panel updates
+    # Signals for cross-thread updates
     _detail_ready = pyqtSignal(object, str)  # (ScanResult, html)
+    _trade_done = pyqtSignal(object, str, object, int)  # (result, side, ScanResult, qty)
 
     def __init__(self, broker, risk_manager, event_bus):
         super().__init__()
@@ -47,6 +48,7 @@ class ScannerPanel(QWidget):
         self.results = []
         self.selected = set()
         self._detail_ready.connect(self._on_detail_ready)
+        self._trade_done.connect(self._on_trade_result)
         self._build()
 
     def _build(self):
@@ -1075,8 +1077,8 @@ class ScannerPanel(QWidget):
                     take_profit=r.take_profit if not is_limit else None,
                     limit_price=limit_price,
                 )
-            # Update UI on main thread
-            QTimer.singleShot(0, lambda: self._on_trade_result(result, side, r, qty))
+            # Update UI on main thread via signal
+            self._trade_done.emit(result, side, r, qty)
 
         threading.Thread(target=_execute, daemon=True).start()
 
@@ -1238,6 +1240,14 @@ class ScannerPanel(QWidget):
 
     def _on_auto_update(self, ticker, action, confidence, price, next_secs):
         """Called by auto-trader service when a stock is checked."""
+        # Forward to tray via main window
+        main = self.window()
+        if main and hasattr(main, '_tray') and main._tray:
+            svc = self._auto_service if hasattr(self, '_auto_service') else None
+            stock = svc.get_monitored().get(ticker, {}) if svc else {}
+            interval = getattr(stock, 'interval', '5m') if hasattr(stock, 'interval') else '5m'
+            main._tray.update_stock(ticker, action, confidence, price, next_secs, interval, "auto")
+
         # Update the table row if this ticker is visible
         for i in range(self.table.rowCount()):
             ticker_item = self.table.item(i, 1)
