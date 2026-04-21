@@ -287,24 +287,88 @@ class BootScreen(QWidget):
         QApplication.processEvents()
 
     def finish(self):
-        """Fade out and clean up."""
-        self._bg.stop()
+        """Dissolve into particles, then clean up."""
         self._bar.stop()
 
-        effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity")
-        anim.setDuration(400)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.InCubic)
-        anim.finished.connect(self.hide)
-        anim.finished.connect(self.deleteLater)
-        anim.start()
-        self._fade = anim
+        # Switch to particle dissolve mode
+        self._dissolving = True
+        self._dissolve_phase = 0.0
+        self._particles = []
 
-        # Process events for the fade duration
-        import time
-        for _ in range(20):
-            time.sleep(0.02)
-            QApplication.processEvents()
+        # Generate particles from the content area
+        import random
+        w, h = self.width(), self.height()
+        colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#ffffff"]
+        for _ in range(80):
+            self._particles.append({
+                "x": random.uniform(50, w - 50),
+                "y": random.uniform(30, h - 30),
+                "vx": random.uniform(-3, 3),
+                "vy": random.uniform(-5, -1),
+                "size": random.uniform(2, 6),
+                "color": random.choice(colors),
+                "alpha": 1.0,
+                "decay": random.uniform(0.015, 0.035),
+            })
+
+        # Hide content, keep bg + particles
+        self._content.setVisible(False)
+
+        # Dissolve timer
+        self._dissolve_timer = QTimer(self)
+        self._dissolve_timer.timeout.connect(self._tick_dissolve)
+        self._dissolve_timer.start(25)
+
+    def _tick_dissolve(self):
+        """Animate particles flying away and fading."""
+        self._dissolve_phase += 0.03
+        all_dead = True
+        for p in self._particles:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.05  # slight gravity curve
+            p["vx"] *= 1.01  # spread out
+            p["alpha"] -= p["decay"]
+            if p["alpha"] > 0:
+                all_dead = False
+
+        self.update()
+
+        if all_dead or self._dissolve_phase > 1.5:
+            self._dissolve_timer.stop()
+            self._bg.stop()
+            self.hide()
+            self.deleteLater()
+
+    def paintEvent(self, event):
+        if not getattr(self, '_dissolving', False):
+            return super().paintEvent(event)
+
+        # Draw background (still animating)
+        self._bg.resize(self.size())
+
+        # Draw particles on top
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        for p in self._particles:
+            if p["alpha"] <= 0:
+                continue
+            c = QColor(p["color"])
+            c.setAlphaF(max(0, p["alpha"]))
+            painter.setBrush(c)
+            painter.setPen(Qt.NoPen)
+            s = p["size"] * (0.5 + p["alpha"] * 0.5)  # shrink as they fade
+            painter.drawEllipse(QPointF(p["x"], p["y"]), s, s)
+
+            # Small glow around each particle
+            gc = QColor(p["color"])
+            gc.setAlphaF(max(0, p["alpha"] * 0.15))
+            glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 3)
+            glow.setColorAt(0, gc)
+            gc.setAlphaF(0)
+            glow.setColorAt(1, gc)
+            painter.setBrush(glow)
+            painter.drawEllipse(QPointF(p["x"], p["y"]), s * 3, s * 3)
+
+        painter.end()

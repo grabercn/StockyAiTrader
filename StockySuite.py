@@ -26,9 +26,9 @@ from PyQt5.QtWidgets import (
     QGroupBox, QGridLayout, QTableWidget, QTableWidgetItem, QHeaderView,
     QCheckBox, QTabWidget, QSpinBox, QSplitter, QAction, QMessageBox,
     QAbstractItemView, QFormLayout, QDialog, QStatusBar, QScrollArea,
-    QSplashScreen, QGraphicsDropShadowEffect,
+    QSplashScreen, QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QPainter, QLinearGradient, QPen
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -553,11 +553,32 @@ def boot_app():
         step(100, "Ready.", f"{APP_NAME} v{APP_VERSION}")
         time.sleep(0.5)
 
-    # Fade out boot screen, show main window
+    # Dissolve boot screen into particles, then show main window with fade-in
     boot.finish()
+
+    # Give particles time to animate before showing main window
+    import time as _time
+    for _ in range(30):
+        _time.sleep(0.03)
+        app.processEvents()
+
+    # Main window fade-in
+    effect = QGraphicsOpacityEffect(suite)
+    suite.setGraphicsEffect(effect)
+    effect.setOpacity(0.0)
     suite.show()
     suite.raise_()
     suite.activateWindow()
+
+    fade_in = QPropertyAnimation(effect, b"opacity")
+    fade_in.setDuration(600)
+    fade_in.setStartValue(0.0)
+    fade_in.setEndValue(1.0)
+    fade_in.setEasingCurve(QEasingCurve.OutCubic)
+    fade_in.finished.connect(lambda: suite.setGraphicsEffect(None))  # Remove effect after done
+    fade_in.start()
+    suite._entrance_anim = fade_in  # prevent GC
+
     sys.exit(app.exec_())
 
 
