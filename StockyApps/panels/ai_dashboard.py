@@ -105,6 +105,25 @@ class AIDashboardPanel(QWidget):
         manual_row.addWidget(self.manage_manual_cb)
         al.addLayout(manual_row)
 
+        # Gemini AI Advisor (experimental)
+        gemini_row = QHBoxLayout()
+        self.gemini_cb = QCheckBox("Gemini AI Advisor (experimental)")
+        self.gemini_cb.setToolTip("Uses Google Gemini to provide advisory reasoning that skews trading decisions.")
+        self.gemini_cb.setChecked(settings.get("gemini_enabled", False))
+        self.gemini_cb.toggled.connect(self._toggle_gemini)
+        gemini_row.addWidget(self.gemini_cb)
+        self.gemini_key_input = QLineEdit(settings.get("gemini_api_key", ""))
+        self.gemini_key_input.setPlaceholderText("Gemini API Key")
+        self.gemini_key_input.setEchoMode(QLineEdit.Password)
+        self.gemini_key_input.setFixedWidth(180)
+        self.gemini_key_input.editingFinished.connect(self._save_gemini_key)
+        gemini_row.addWidget(self.gemini_key_input)
+        al.addLayout(gemini_row)
+
+        gemini_note = QLabel("Advisory only — skews but doesn't dictate. Models: gemini-3.1-flash-preview → 2.5-flash")
+        gemini_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8px;")
+        al.addWidget(gemini_note)
+
         agent_box.setLayout(al)
         layout.addWidget(agent_box)
 
@@ -146,6 +165,17 @@ class AIDashboardPanel(QWidget):
 
         self.setLayout(layout)
         self.bus.log_entry.connect(self._on_log)
+
+    def _toggle_gemini(self, checked):
+        settings = load_settings()
+        settings["gemini_enabled"] = checked
+        save_settings(settings)
+        self.bus.log_entry.emit(f"Gemini advisor {'enabled' if checked else 'disabled'}", "system")
+
+    def _save_gemini_key(self):
+        settings = load_settings()
+        settings["gemini_api_key"] = self.gemini_key_input.text()
+        save_settings(settings)
 
     def _toggle_manage_manual(self, checked):
         settings = load_settings()
@@ -483,6 +513,26 @@ class AIDashboardPanel(QWidget):
                 sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
                 holds = [r for r in results if r.action == "HOLD" and not r.error]
 
+                # Apply Gemini advisory if enabled
+                try:
+                    from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
+                    if gemini_enabled():
+                        for r in results:
+                            if not r.error and r.action in ("BUY", "SELL"):
+                                advisory = get_advisory(
+                                    r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
+                                    feature_importances=r.feature_importances)
+                                if advisory:
+                                    old_conf = r.confidence
+                                    _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
+                                    reasoning = advisory.get("reasoning", "")[:80]
+                                    model = advisory.get("model_used", "?")
+                                    self.bus.log_entry.emit(
+                                        f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
+                                        f"adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
+                except Exception:
+                    pass
+
                 skipped = [r for r in results if not r.error and r.action in ("BUY","SELL")
                           and r.confidence < min_conf]
                 self.bus.log_entry.emit(
@@ -532,17 +582,24 @@ class AIDashboardPanel(QWidget):
                     except: pass
 
                     max_buys = min(len(buys), max(1, int(5 * size_mult)))
-                    bp_per = bp / max(1, max_buys)
-                    # Cap per-stock allocation to 20% of total BP
-                    bp_per = min(bp_per, bp * 0.20)
+                    initial_bp = bp
 
                     for r in sorted(buys, key=lambda x: -x.score)[:max_buys]:
                         if not getattr(self, '_agent_running', False): break
                         if trades_today >= max_trades: break
-                        if bp < 50: break  # Stop if BP too low
+
+                        # Re-check actual BP before EACH buy
                         try:
-                            base_qty = max(1, int(bp_per / r.price)) if r.price > 0 else 0
-                            qty = max(1, int(base_qty * size_mult))
+                            acct = self.broker.get_account()
+                            bp = float(acct.get("buying_power", 0))
+                        except: pass
+
+                        if bp < 100: break
+
+                        # Cap at 20% of CURRENT bp (not initial)
+                        max_spend = min(bp * 0.20, initial_bp / max_buys)
+                        try:
+                            qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
                             cost = qty * r.price
                             if qty > 0 and cost <= bp:
                                 result = self.broker.place_order(r.ticker, qty, "buy",

@@ -180,6 +180,18 @@ class AutoTraderService(QThread):
             price = float(data["Close"].iloc[-1])
             atr = float(data["ATRr_14"].iloc[-1]) if "ATRr_14" in data.columns else price * 0.01
 
+            # Apply RL feedback model if available
+            try:
+                from .reinforcement import train_feedback_model, get_quality_score
+                if not hasattr(self, '_rl_model'):
+                    self._rl_model, _, _ = train_feedback_model()
+                if self._rl_model:
+                    atr_pct = atr / price if price > 0 else 0
+                    q = get_quality_score(self._rl_model, confidence, [float(p) for p in probs[-1]], atr_pct, action)
+                    confidence = min(1.0, confidence * q)
+            except Exception:
+                pass
+
             prev_signal = stock.last_signal
             stock.last_signal = action
             stock.last_confidence = confidence

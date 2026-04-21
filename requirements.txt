@@ -16,3 +16,5 @@ pytz
 pytest
 winotify
 packaging
+google-genai
+psutil

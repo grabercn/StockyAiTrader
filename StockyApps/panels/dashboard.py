@@ -248,8 +248,18 @@ class DashboardPanel(QWidget):
                 unrealized = float(p.get("unrealized_pl", 0))
                 sym = p.get("symbol", "")
                 qty = float(p.get("qty", 0))
+
+                # Check if AI-managed
+                is_ai = False
+                main = self.window() if hasattr(self, 'window') else None
+                if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
+                    svc = main.scanner._auto_service
+                    if svc and svc.is_monitoring(sym):
+                        is_ai = True
+                dot = "● " if is_ai else "○ "
+
                 vals = [
-                    sym, p.get("side", ""),
+                    dot + sym, p.get("side", ""),
                     f"{qty:.0f}",
                     f"${float(p.get('avg_entry_price', 0)):.2f}",
                     f"${float(p.get('current_price', 0)):.2f}",
@@ -260,6 +270,9 @@ class DashboardPanel(QWidget):
                     item = QTableWidgetItem(v)
                     item.setTextAlignment(Qt.AlignCenter)
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    if j == 0:
+                        item.setForeground(QColor(BRAND_ACCENT if is_ai else TEXT_MUTED))
+                        item.setToolTip("AI Managed" if is_ai else "Manual")
                     if j >= 5:
                         item.setForeground(QColor(COLOR_PROFIT if unrealized >= 0 else COLOR_LOSS))
                     self.pos_table.setItem(i, j, item)

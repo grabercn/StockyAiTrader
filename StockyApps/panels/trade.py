@@ -236,8 +236,15 @@ class TradePanel(QWidget):
         def _work():
             data = fetch_intraday(ticker, period, interval) if mode == "Intraday" else fetch_longterm(ticker, period)
             if data.empty or len(data) < 30:
-                self._analysis_done.emit(ticker, None, None, [], mode)
-                return
+                # Try fallback with longer period
+                if mode == "Intraday":
+                    for fb_period in ["5d", "10d"]:
+                        data = fetch_intraday(ticker, fb_period, interval)
+                        if not data.empty and len(data) >= 30:
+                            break
+                if data.empty or len(data) < 30:
+                    self._analysis_done.emit(ticker, None, None, [], mode)
+                    return
             feats = get_all_features("intraday" if mode == "Intraday" else "longterm")
             model, used = train_lgbm(data, feats, ticker)
             self._analysis_done.emit(ticker, model, data, used or [], mode)
