@@ -437,9 +437,6 @@ class DashboardPanel(QWidget):
                 log_cancellation(ticker, order_id, side, qty)
             self._refresh_data()
         threading.Thread(target=_do_cancel, daemon=True).start()
-            from core.logger import log_cancellation
-            log_cancellation(ticker, order_id, side, qty)
-            QTimer.singleShot(1000, self.refresh)
 
     def _sell_position(self, symbol, max_qty):
         """Sell a specific position with qty picker. Uses close_position endpoint."""
