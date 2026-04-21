@@ -108,7 +108,7 @@
             "interval": "5m"
         }
     },
-    "agent_was_running": true,
+    "agent_was_running": false,
     "agent_managed_positions": [
         {
             "symbol": "DDOG",
@@ -117,54 +117,6 @@
             "avg_entry": "129.36",
             "current_price": "129.29",
             "unrealized_pl": "-0.07"
-        },
-        {
-            "symbol": "HIMS",
-            "qty": "2942",
-            "side": "long",
-            "avg_entry": "29.865969",
-            "current_price": "29.5",
-            "unrealized_pl": "-1076.680798"
-        },
-        {
-            "symbol": "NOK",
-            "qty": "4309",
-            "side": "long",
-            "avg_entry": "10.428019",
-            "current_price": "10.39",
-            "unrealized_pl": "-163.823871"
-        },
-        {
-            "symbol": "NVTS",
-            "qty": "57",
-            "side": "long",
-            "avg_entry": "15.369649",
-            "current_price": "15.25",
-            "unrealized_pl": "-6.819993"
-        },
-        {
-            "symbol": "OPEN",
-            "qty": "10207",
-            "side": "long",
-            "avg_entry": "5.486977",
-            "current_price": "5.42",
-            "unrealized_pl": "-683.634239"
-        },
-        {
-            "symbol": "SNAP",
-            "qty": "9",
-            "side": "long",
-            "avg_entry": "5.644379",
-            "current_price": "5.62",
-            "unrealized_pl": "-0.219411"
-        },
-        {
-            "symbol": "SOFI",
-            "qty": "3733",
-            "side": "long",
-            "avg_entry": "18.800986",
-            "current_price": "18.8201",
-            "unrealized_pl": "71.352562"
         }
     ],
     "manage_manual_stocks": true,

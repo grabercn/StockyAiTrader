@@ -563,12 +563,7 @@ class AIDashboardPanel(QWidget):
                                 r.confidence = min(1.0, r.confidence * q)
                             except: pass
 
-                # Classify signals using profile thresholds
-                buys = [r for r in results if r.action == "BUY" and r.confidence >= min_conf and not r.error]
-                sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
-                holds = [r for r in results if r.action == "HOLD" and not r.error]
-
-                # Apply Gemini advisory if enabled
+                # Apply Gemini advisory BEFORE filtering (adjusts confidence)
                 try:
                     from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
                     if gemini_enabled():
@@ -585,11 +580,14 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(
                                         f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
                                         f"adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
-                                else:
-                                    self.bus.log_entry.emit(
-                                        f"  Gemini: {r.ticker} — no response (API may be unavailable)", "warn")
+                                # No response = no effect, stock proceeds normally
                 except Exception as e:
                     self.bus.log_entry.emit(f"Gemini error: {e}", "error")
+
+                # Classify signals AFTER all adjustments (RL + Gemini)
+                buys = [r for r in results if r.action == "BUY" and r.confidence >= min_conf and not r.error]
+                sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
+                holds = [r for r in results if r.action == "HOLD" and not r.error]
 
                 skipped = [r for r in results if not r.error and r.action in ("BUY","SELL")
                           and r.confidence < min_conf]
