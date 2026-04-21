@@ -37,12 +37,17 @@ class DashboardPanel(QWidget):
     """Portfolio overview: account stats, positions, equity chart."""
 
     _data_ready = pyqtSignal(object, object, object, object)  # acct, positions, orders, hist
+    _sell_started = pyqtSignal(str, int)   # symbol, qty — move to pending immediately
+    _sell_finished = pyqtSignal(str, bool)  # symbol, success — remove from pending
 
     def __init__(self, broker, event_bus):
         super().__init__()
         self.broker = broker
         self.bus = event_bus
+        self._pending_sells = {}  # symbol -> qty, tracks in-flight sells
         self._data_ready.connect(self._apply_refresh)
+        self._sell_started.connect(self._on_sell_started)
+        self._sell_finished.connect(self._on_sell_finished)
         self._build()
         self.bus.positions_changed.connect(self.refresh)
         self.bus.trade_executed.connect(lambda *_: self.refresh())
@@ -243,8 +248,9 @@ class DashboardPanel(QWidget):
         pnl_color = COLOR_PROFIT if pnl >= 0 else COLOR_LOSS
         self.card_pnl.set_value(f"${pnl:+,.2f} ({pct:+.2f}%)", pnl_color)
 
-        # Positions with per-stock sell buttons
+        # Positions with per-stock sell buttons (exclude stocks mid-sell)
         if isinstance(positions, list):
+            positions = [p for p in positions if p.get("symbol", "") not in self._pending_sells]
             self.pos_table.setRowCount(len(positions))
             for i, p in enumerate(positions):
                 unrealized = float(p.get("unrealized_pl", 0))
@@ -307,10 +313,18 @@ class DashboardPanel(QWidget):
                        and o.get("filled_qty", "0") != o.get("qty", "0")]
             open_orders = pending
         if not isinstance(open_orders, list) or not open_orders:
-            self.orders_table.setRowCount(0)
             open_orders = []
-        self.orders_table.setRowCount(len(open_orders))
-        for i, o in enumerate(open_orders):
+
+        # Build selling... pseudo-entries for in-flight sells
+        sell_entries = []
+        for sym, qty in self._pending_sells.items():
+            sell_entries.append({"symbol": sym, "side": "sell", "qty": str(qty),
+                                "type": "market", "status": "selling...",
+                                "_synthetic": True})
+
+        total_orders = sell_entries + open_orders
+        self.orders_table.setRowCount(len(total_orders))
+        for i, o in enumerate(total_orders):
             price_str = "market"
             if o.get("type") == "limit" and o.get("limit_price"):
                 price_str = f"${float(o['limit_price']):.2f}"
@@ -328,13 +342,19 @@ class DashboardPanel(QWidget):
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 if j == 1:
                     item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
+                if j == 5 and v == "selling...":
+                    item.setForeground(QColor(BRAND_ACCENT))
                 self.orders_table.setItem(i, j, item)
 
-            oid = o.get("id", "")
-            cancel_btn = QPushButton("Cancel")
-            cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
-            cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
-            self.orders_table.setCellWidget(i, 6, cancel_btn)
+            if o.get("_synthetic"):
+                # No cancel button for in-flight sells
+                self.orders_table.setCellWidget(i, 6, QWidget())
+            else:
+                oid = o.get("id", "")
+                cancel_btn = QPushButton("Cancel")
+                cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
+                cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
+                self.orders_table.setCellWidget(i, 6, cancel_btn)
 
         # Chart (already fetched)
         if "error" not in hist and hist.get("equity"):
@@ -438,6 +458,46 @@ class DashboardPanel(QWidget):
             self._refresh_data()
         threading.Thread(target=_do_cancel, daemon=True).start()
 
+    def _on_sell_started(self, symbol, qty):
+        """Immediately move stock from Open Positions to Pending Orders (main thread)."""
+        self._pending_sells[symbol] = qty
+
+        # Remove from positions table
+        for row in range(self.pos_table.rowCount()):
+            item = self.pos_table.item(row, 0)
+            if item and item.text().lstrip("● ○ ").strip() == symbol:
+                self.pos_table.removeRow(row)
+                break
+
+        # Add to pending orders table as "Selling..."
+        r = self.orders_table.rowCount()
+        self.orders_table.setRowCount(r + 1)
+        vals = [symbol, "sell", str(qty), "market", "market", "selling..."]
+        for j, v in enumerate(vals):
+            item = QTableWidgetItem(v)
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            if j == 1:
+                item.setForeground(QColor(COLOR_SELL))
+            if j == 5:
+                item.setForeground(QColor(BRAND_ACCENT))
+            self.orders_table.setItem(r, j, item)
+
+    def _on_sell_finished(self, symbol, success):
+        """Remove the selling entry from Pending Orders (main thread), then full refresh."""
+        self._pending_sells.pop(symbol, None)
+
+        # Remove the "selling..." row from orders table
+        for row in range(self.orders_table.rowCount()):
+            item = self.orders_table.item(row, 0)
+            status_item = self.orders_table.item(row, 5)
+            if item and item.text() == symbol and status_item and status_item.text() == "selling...":
+                self.orders_table.removeRow(row)
+                break
+
+        # Full refresh to get accurate state from broker
+        self._refresh_data()
+
     def _sell_position(self, symbol, max_qty):
         """Sell a specific position with qty picker. Uses close_position endpoint."""
         if not self.broker:
@@ -453,20 +513,20 @@ class DashboardPanel(QWidget):
         if not ok:
             return
 
-        # Run sell in background, refresh immediately after
+        # Immediately move to pending orders via signal (main thread safe)
         self.bus.log_entry.emit(f"Selling {symbol} x{qty}...", "info")
+        self._sell_started.emit(symbol, qty)
+
         import threading
         def _do_sell():
             result = self.broker.close_position(symbol, qty=qty)
             if "error" in result:
                 self.bus.log_entry.emit(f"Sell {symbol} x{qty} failed: {result['error']}", "error")
+                self._sell_finished.emit(symbol, False)
             else:
                 self.bus.log_entry.emit(f"Sold {symbol} x{qty} — order {result.get('id', '?')}", "trade")
                 self.bus.positions_changed.emit()
-            # Full re-fetch and refresh
-            self._refresh_data()
-            import time; time.sleep(2)
-            self._refresh_data()
+                self._sell_finished.emit(symbol, True)
         threading.Thread(target=_do_sell, daemon=True).start()
 
 
