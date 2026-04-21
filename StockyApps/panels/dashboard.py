@@ -350,14 +350,27 @@ class DashboardPanel(QWidget):
             self.bus.log_entry.emit(f"Chart error: {e}", "error")
 
     def _cancel_order(self, order_id):
-        """Cancel a pending order."""
+        """Cancel a pending order and log it."""
         if not self.broker:
             return
+        # Get order details before cancelling for the log
+        orders = self.broker.get_orders("open")
+        ticker, side, qty = "", "", 0
+        if isinstance(orders, list):
+            for o in orders:
+                if o.get("id") == order_id:
+                    ticker = o.get("symbol", "")
+                    side = o.get("side", "")
+                    qty = o.get("qty", 0)
+                    break
+
         result = self.broker.cancel_order(order_id)
         if "error" in result:
             self.bus.log_entry.emit(f"Cancel failed: {result['error']}", "error")
         else:
-            self.bus.log_entry.emit(f"Order cancelled: {order_id[:12]}", "trade")
+            self.bus.log_entry.emit(f"Order cancelled: {ticker} {side} x{qty}", "trade")
+            from core.logger import log_cancellation
+            log_cancellation(ticker, order_id, side, qty)
             QTimer.singleShot(1000, self.refresh)
 
     def _sell_position(self, symbol, max_qty):

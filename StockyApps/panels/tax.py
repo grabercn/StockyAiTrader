@@ -48,6 +48,7 @@ class TaxPanel(QWidget):
 
         layout = QVBoxLayout()
         layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
 
         header = GradientHeader("Tax Reports", "IRS Form 8949 — Capital Gains & Losses")
         layout.addWidget(header)

@@ -111,6 +111,21 @@ def log_trade_execution(ticker, side, qty, order_type, order_id,
     return entry
 
 
+def log_cancellation(ticker, order_id, side, qty, reason="user_cancelled"):
+    """Log when an order is cancelled."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": "cancellation",
+        "ticker": ticker,
+        "order_id": order_id,
+        "side": side,
+        "qty": qty,
+        "reason": reason,
+    }
+    _append_jsonl(entry)
+    return entry
+
+
 def log_scan_results(tickers_scanned, results_summary, duration_seconds):
     """Log a portfolio scan session summary."""
     entry = {

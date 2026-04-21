@@ -281,6 +281,11 @@ class SettingsPanel(QWidget):
         self.setLayout(layout)
         self._refresh()
 
+        # Auto-refresh every 30 seconds to pick up model/addon changes
+        self._auto_refresh = QTimer(self)
+        self._auto_refresh.timeout.connect(self._refresh)
+        self._auto_refresh.start(30000)
+
     def _change_zoom(self, value):
         scale = value / 100.0
         main_window = self.window()
@@ -485,15 +490,27 @@ class SettingsPanel(QWidget):
 
                 proc.wait(timeout=300)
                 if proc.returncode == 0:
-                    self.bus.log_entry.emit(f"{addon.name} installed successfully!", "trade")
-                    discover_addons()
-                    QTimer.singleShot(500, self._refresh)
+                    self.bus.log_entry.emit(f"{addon.name} installed! Refreshing...", "trade")
+                    # Re-check availability on main thread
+                    QTimer.singleShot(100, self._rediscover_addons)
                 else:
                     self.bus.log_entry.emit(f"{addon.name} install failed (exit code {proc.returncode})", "error")
             except Exception as e:
                 self.bus.log_entry.emit(f"{addon.name} install error: {e}", "error")
 
         threading.Thread(target=_do_install, daemon=True).start()
+
+    def _rediscover_addons(self):
+        """Re-import and re-check all addons after pip install."""
+        import importlib
+        import addons as addons_pkg
+        importlib.reload(addons_pkg)
+        discover_addons()
+        # Force re-check availability
+        for a in get_all_addons():
+            a.check_available()
+        self._refresh()
+        self.bus.log_entry.emit(f"Addons refreshed — {sum(1 for a in get_all_addons() if a.available)} available", "system")
 
     def _toggle_addon(self, name, enabled):
         set_addon_enabled(name, enabled)

@@ -51,8 +51,8 @@ class ScannerPanel(QWidget):
         from core.discovery import get_all_sectors
 
         outer = QVBoxLayout()
-        outer.setSpacing(8)
-        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
+        outer.setContentsMargins(8, 4, 8, 4)
 
         header = GradientHeader("Scanner", "Live market discovery + AI-ranked opportunities")
         outer.addWidget(header)
