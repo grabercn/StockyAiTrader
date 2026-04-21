@@ -552,7 +552,7 @@ class ScannerPanel(QWidget):
                         it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
                     self.table.setItem(i, j + 1, it)
 
-            # Auto-trade toggle — minimal icon button
+            # Auto-trade toggle — filled when active, subtle when inactive
             from core.ui.icons import StockyIcons as _Icons
             is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
             if not is_insufficient:
@@ -560,15 +560,18 @@ class ScannerPanel(QWidget):
                 monitor_btn.setFixedSize(28, 28)
                 monitor_btn.setCursor(Qt.PointingHandCursor)
                 if is_monitored:
-                    monitor_btn.setIcon(_Icons.get_icon("robot", 16, BRAND_ACCENT))
+                    monitor_btn.setIcon(_Icons.get_icon("robot", 16, "#ffffff"))
                     monitor_btn.setToolTip(f"Monitoring {r.ticker} — click to stop")
-                    monitor_btn.setStyleSheet(f"background: {BRAND_ACCENT}25; border: none; border-radius: 14px;")
+                    monitor_btn.setStyleSheet(
+                        f"background: {BRAND_ACCENT}; border: none; border-radius: 14px;"
+                    )
                 else:
                     monitor_btn.setIcon(_Icons.get_icon("play", 16, TEXT_MUTED))
                     monitor_btn.setToolTip(f"Auto-trade {r.ticker}")
-                    monitor_btn.setStyleSheet(f"background: transparent; border: none; border-radius: 14px;")
+                    monitor_btn.setStyleSheet(
+                        f"background: transparent; border: 1px solid {BORDER}; border-radius: 14px;"
+                    )
                 monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
-                # Center the button in the cell
                 w = QWidget()
                 l = QHBoxLayout(w)
                 l.addWidget(monitor_btn)
@@ -1225,18 +1228,22 @@ class ScannerPanel(QWidget):
             if not ticker_item:
                 continue
             ticker = ticker_item.text()
-            btn = self.table.cellWidget(i, 8)
+            cell = self.table.cellWidget(i, 8)
+            if not cell:
+                continue
+            # Find the QPushButton inside the wrapper widget
+            btn = cell.findChild(QPushButton)
             if not btn:
                 continue
             is_mon = svc and svc.is_monitoring(ticker)
             if is_mon:
-                btn.setIcon(StockyIcons.get_icon("robot", 14, BRAND_ACCENT))
-                btn.setToolTip(f"Auto-trading {ticker} — click to stop")
-                btn.setStyleSheet(f"background-color: {BRAND_ACCENT}30; border: 1px solid {BRAND_ACCENT}; padding: 3px 6px; border-radius: 4px;")
+                btn.setIcon(StockyIcons.get_icon("robot", 16, "#ffffff"))
+                btn.setToolTip(f"Monitoring {ticker} — click to stop")
+                btn.setStyleSheet(f"background: {BRAND_ACCENT}; border: none; border-radius: 14px;")
             else:
-                btn.setIcon(StockyIcons.get_icon("play", 14, TEXT_MUTED))
-                btn.setToolTip(f"Start auto-trading {ticker}")
-                btn.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; padding: 3px 6px; border-radius: 4px;")
+                btn.setIcon(StockyIcons.get_icon("play", 16, TEXT_MUTED))
+                btn.setToolTip(f"Auto-trade {ticker}")
+                btn.setStyleSheet(f"background: transparent; border: 1px solid {BORDER}; border-radius: 14px;")
 
     def _on_auto_update(self, ticker, action, confidence, price, next_secs):
         """Called by auto-trader service when a stock is checked."""
