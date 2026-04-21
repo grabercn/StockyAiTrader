@@ -796,7 +796,7 @@ class AIDashboardPanel(QWidget):
                             # Capital rotation: sell weakest position to fund this buy
                             # Default: only if this BUY is >80% confident
                             # Aggressive/YOLO: if >60% confident
-                            rotate_threshold = 0.60 if profile_name in ("Aggressive", "YOLO") else 0.80
+                            rotate_threshold = 0.40 if profile_name == "YOLO" else 0.60 if profile_name == "Aggressive" else 0.80
                             if r.confidence >= rotate_threshold and trades_today < max_trades:
                                 self.bus.log_entry.emit(
                                     f"    BP ${bp:,.0f} too low — attempting capital rotation...", "system")
