@@ -546,20 +546,29 @@ class ScannerPanel(QWidget):
                         it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
                     self.table.setItem(i, j + 1, it)
 
-            # Auto-trade toggle button with icon
+            # Auto-trade toggle — minimal icon button
             from core.ui.icons import StockyIcons as _Icons
             is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
-            monitor_btn = QPushButton()
-            if is_monitored:
-                monitor_btn.setIcon(_Icons.get_icon("robot", 14, BRAND_ACCENT))
-                monitor_btn.setToolTip(f"Auto-trading {r.ticker} — click to stop")
-                monitor_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}30; border: 1px solid {BRAND_ACCENT}; padding: 3px 6px; border-radius: 4px;")
-            else:
-                monitor_btn.setIcon(_Icons.get_icon("play", 14, TEXT_MUTED))
-                monitor_btn.setToolTip(f"Start auto-trading {r.ticker}")
-                monitor_btn.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; padding: 3px 6px; border-radius: 4px;")
-            monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
-            self.table.setCellWidget(i, 8, monitor_btn)
+            if not is_insufficient:
+                monitor_btn = QPushButton()
+                monitor_btn.setFixedSize(28, 28)
+                monitor_btn.setCursor(Qt.PointingHandCursor)
+                if is_monitored:
+                    monitor_btn.setIcon(_Icons.get_icon("robot", 16, BRAND_ACCENT))
+                    monitor_btn.setToolTip(f"Monitoring {r.ticker} — click to stop")
+                    monitor_btn.setStyleSheet(f"background: {BRAND_ACCENT}25; border: none; border-radius: 14px;")
+                else:
+                    monitor_btn.setIcon(_Icons.get_icon("play", 16, TEXT_MUTED))
+                    monitor_btn.setToolTip(f"Auto-trade {r.ticker}")
+                    monitor_btn.setStyleSheet(f"background: transparent; border: none; border-radius: 14px;")
+                monitor_btn.clicked.connect(lambda _, t=r.ticker: self._toggle_auto_trade(t))
+                # Center the button in the cell
+                w = QWidget()
+                l = QHBoxLayout(w)
+                l.addWidget(monitor_btn)
+                l.setAlignment(Qt.AlignCenter)
+                l.setContentsMargins(0, 0, 0, 0)
+                self.table.setCellWidget(i, 8, w)
 
             # Reasoning (last column)
             if is_insufficient:
@@ -686,6 +695,8 @@ class ScannerPanel(QWidget):
                         "<br>".join(f"  {p}" for p in llm_text.split(" | "))
                     )
                     QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
+                    # Also update the reasoning column in the table
+                    QTimer.singleShot(0, lambda: self._update_reasoning_column(r.ticker, llm_text))
             except Exception:
                 if self._selected_result is r:
                     updated = html.replace(
@@ -916,6 +927,18 @@ class ScannerPanel(QWidget):
                 lines.append(f'  {part}')
 
         return "<br>".join(lines)
+
+    def _update_reasoning_column(self, ticker, llm_text):
+        """Update the reasoning column in the results table when LLM finishes."""
+        for i in range(self.table.rowCount()):
+            item = self.table.item(i, 1)  # Ticker column
+            if item and item.text() == ticker:
+                short = llm_text.split(" | ")[0][:80] if llm_text else ""
+                reason_item = self.table.item(i, 9)  # Reasoning column
+                if reason_item:
+                    reason_item.setText(short)
+                    reason_item.setToolTip(llm_text)
+                break
 
     def _draw_detail_chart(self, ticker):
         """Draw price chart using the scan's period/interval for the selected stock."""
