@@ -22,6 +22,8 @@ def save_settings(s):
 class AIDashboardPanel(QWidget):
     """Mission control + autonomous agent for the AI auto-trader."""
 
+    _auto_svc = None  # Shared auto-trade service reference
+
     def __init__(self, broker, event_bus):
         super().__init__()
         self.broker = broker
@@ -261,14 +263,7 @@ class AIDashboardPanel(QWidget):
             sb.setValue(sb.maximum())
 
     def refresh(self):
-        main = self.window()
-        if not main:
-            return
-
-        svc = None
-        if hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
-            svc = main.scanner._auto_service
-
+        svc = self._get_svc()
         if not svc:
             self.card_monitored.set_value("0")
             self.card_mode.set_value("No agent")
@@ -332,20 +327,14 @@ class AIDashboardPanel(QWidget):
             self.table.setCellWidget(i, 9, btn)
 
     def _unmonitor(self, ticker):
-        main = self.window()
-        if not main or not hasattr(main, 'scanner'):
-            return
-        svc = getattr(main.scanner, '_auto_service', None)
+        svc = self._get_svc()
         if svc and svc.is_monitoring(ticker):
             svc.remove_stock(ticker)
             self.bus.log_entry.emit(f"Removed {ticker} from AI monitoring (position kept)", "system")
             self.refresh()
 
     def _stop_all(self):
-        main = self.window()
-        if not main or not hasattr(main, 'scanner'):
-            return
-        svc = getattr(main.scanner, '_auto_service', None)
+        svc = self._get_svc()
         if not svc:
             return
         count = len(svc.get_monitored())
@@ -362,6 +351,24 @@ class AIDashboardPanel(QWidget):
             svc.remove_stock(t)
         self.bus.log_entry.emit("All AI monitoring stopped", "system")
         self.refresh()
+
+    def _get_svc(self):
+        """Get the auto-trade service — check scanner first, then own reference."""
+        main = self.window()
+        if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
+            self._auto_svc = main.scanner._auto_service
+            return self._auto_svc
+        if self._auto_svc:
+            return self._auto_svc
+        # Create our own if scanner not loaded
+        if self.broker:
+            from core.auto_trader import AutoTraderService
+            from core.risk import RiskManager
+            self._auto_svc = AutoTraderService(broker=self.broker, risk_manager=RiskManager())
+            self._auto_svc.log.connect(self.bus.log_entry.emit)
+            self._auto_svc.start()
+            return self._auto_svc
+        return None
 
     def _tick_countdown(self):
         if self._countdown_secs > 0:
@@ -648,14 +655,12 @@ class AIDashboardPanel(QWidget):
                                         f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} "
                                         f"(${cost:,.0f}, {r.confidence:.0%})", "trade")
                                     # Add to auto-trader monitoring so it shows in table
-                                    main = self.window()
-                                    if main and hasattr(main, 'scanner'):
-                                        try:
-                                            svc = main.scanner._get_auto_service()
-                                            if not svc.is_monitoring(r.ticker):
-                                                svc.add_stock(r.ticker, period="5d", interval="5m",
+                                    try:
+                                        mon_svc = self._get_svc()
+                                        if mon_svc and not mon_svc.is_monitoring(r.ticker):
+                                            mon_svc.add_stock(r.ticker, period="5d", interval="5m",
                                                              auto_execute=True, min_confidence=0.5)
-                                        except: pass
+                                    except: pass
                                 else:
                                     self.bus.log_entry.emit(
                                         f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")

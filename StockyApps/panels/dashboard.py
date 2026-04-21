@@ -249,13 +249,17 @@ class DashboardPanel(QWidget):
                 sym = p.get("symbol", "")
                 qty = float(p.get("qty", 0))
 
-                # Check if AI-managed
+                # Check if AI-managed (check both scanner and ai_agent services)
                 is_ai = False
                 main = self.window() if hasattr(self, 'window') else None
-                if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
-                    svc = main.scanner._auto_service
-                    if svc and svc.is_monitoring(sym):
-                        is_ai = True
+                if main:
+                    for attr in ('scanner', 'ai_agent'):
+                        panel = getattr(main, attr, None)
+                        if panel:
+                            svc = getattr(panel, '_auto_service', None) or getattr(panel, '_auto_svc', None)
+                            if svc and svc.is_monitoring(sym):
+                                is_ai = True
+                                break
                 dot = "● " if is_ai else "○ "
 
                 vals = [
