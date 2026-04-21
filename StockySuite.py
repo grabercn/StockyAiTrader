@@ -780,6 +780,13 @@ def boot_app():
 
     def _check_agent_resume():
         """Show a polished resume dialog with table of monitored stocks."""
+        try:
+            _do_agent_resume()
+        except Exception as e:
+            print(f"[RESUME ERROR] {e}", flush=True)
+            import traceback; traceback.print_exc()
+
+    def _do_agent_resume():
         settings = load_settings()
         monitored = settings.get("monitored_stocks", {})
         managed_positions = settings.get("agent_managed_positions", [])
@@ -787,7 +794,6 @@ def boot_app():
         if not monitored and not managed_positions:
             return
 
-        # Build custom dialog
         from core.ui.theme import theme as _theme
         dlg = QDialog(suite)
         dlg.setWindowTitle("Resume AI Trading")
