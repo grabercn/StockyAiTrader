@@ -420,7 +420,8 @@ class SettingsPanel(QWidget):
             "FinBERT": "All profiles",
             "FinBERT-Tone": "Max only",
             "Twitter-RoBERTa": "Max only",
-            "DistilGPT2": "Default+",
+            "DistilGPT2": "Fallback",
+            "TinyLlama-Chat": "All profiles",
         }
 
         # Models
@@ -446,7 +447,7 @@ class SettingsPanel(QWidget):
             prof_item = QTableWidgetItem(prof_text)
             prof_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             # Dim if current profile doesn't use this model
-            is_used = prof_text == "All profiles" or active_profile == "Max" or \
+            is_used = prof_text in ("All profiles", "Fallback") or active_profile == "Max" or \
                       (prof_text == "Default+" and active_profile in ("Balanced", "Max"))
             prof_item.setForeground(QColor(STATUS_ACTIVE if is_used else TEXT_MUTED))
             if not is_used:

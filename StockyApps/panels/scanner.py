@@ -993,17 +993,26 @@ class ScannerPanel(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        # Use close_position for market sells (avoids 403)
-        # Use place_order for buys and limit sells
-        if side == "sell" and not is_limit:
-            result = self.broker.close_position(r.ticker, qty=qty)
-        else:
-            result = self.broker.place_order(
-                r.ticker, qty, side, order_type=order_type,
-                stop_loss=r.stop_loss if not is_limit else None,
-                take_profit=r.take_profit if not is_limit else None,
-                limit_price=limit_price,
-            )
+        # Execute trade in background thread to not freeze UI
+        import threading
+        self.bus.log_entry.emit(f"Submitting {side.upper()} {r.ticker} x{qty}...", "info")
+
+        def _execute():
+            if side == "sell" and not is_limit:
+                result = self.broker.close_position(r.ticker, qty=qty)
+            else:
+                result = self.broker.place_order(
+                    r.ticker, qty, side, order_type=order_type,
+                    stop_loss=r.stop_loss if not is_limit else None,
+                    take_profit=r.take_profit if not is_limit else None,
+                    limit_price=limit_price,
+                )
+            # Update UI on main thread
+            QTimer.singleShot(0, lambda: self._on_trade_result(result, side, r, qty))
+
+        threading.Thread(target=_execute, daemon=True).start()
+
+    def _on_trade_result(self, result, side, r, qty):
         if "error" in result:
             self.bus.log_entry.emit(f"{side.upper()} {r.ticker} x{qty} failed: {result['error']}", "error")
         else:
@@ -1012,26 +1021,30 @@ class ScannerPanel(QWidget):
             QTimer.singleShot(2000, lambda: self._show_detail(r))
 
     def _deep_analyze(self):
-        """Run deep analysis in background thread — doesn't freeze UI."""
+        """Run deep analysis in background thread with ETA."""
         if not self._selected_result:
             self.bus.log_entry.emit("Select a stock first", "warn")
             return
 
         r = self._selected_result
-        self.bus.log_entry.emit(f"Deep analyzing {r.ticker}...", "info")
+        settings = load_settings()
+        est = int(settings.get("deep_analyze_avg_seconds", 60))
+
+        self.bus.log_entry.emit(f"Deep analyzing {r.ticker} (est. ~{est}s)...", "info")
         self.progress.setVisible(True)
         self.progress.reset()
-        self.progress.set_progress(5, f"Deep analyzing {r.ticker}...", "Fetching extended data")
+        self.progress.set_progress(5, f"Deep analyzing {r.ticker}...",
+                                    f"Estimated time: ~{est}s")
         self.progress.add_log(f"Starting deep analysis for {r.ticker}")
         self.detail_analyze_btn.setEnabled(False)
+        self._deep_t0 = time.time()
+        self._deep_est = est
 
-        # Run in background with polling (cross-thread signals unreliable)
         from panels.workers import _DeepAnalyzeWorker as _DAW
         self._deep_worker = _DAW(r)
         self._deep_worker.finished_signal.connect(self._on_deep_done)
         self._deep_worker.start()
 
-        # Poll for progress updates
         self._deep_poll = QTimer(self)
         self._deep_poll.timeout.connect(self._poll_deep_progress)
         self._deep_poll.start(200)
@@ -1039,8 +1052,16 @@ class ScannerPanel(QWidget):
     def _poll_deep_progress(self):
         if not hasattr(self, '_deep_worker') or not self._deep_worker:
             return
+        elapsed = int(time.time() - getattr(self, '_deep_t0', time.time()))
+        est = getattr(self, '_deep_est', 60)
+
         for pct, msg, detail in self._deep_worker.poll_progress():
-            self.progress.set_progress(pct, msg, detail)
+            if elapsed > est:
+                eta_str = f"{elapsed}s (over est. {est}s)"
+            else:
+                remaining = max(0, est - elapsed)
+                eta_str = f"{elapsed}s / est. {est}s | {remaining}s left"
+            self.progress.set_progress(pct, msg, eta_str)
             self.progress.add_log(msg)
             QApplication.processEvents()
 
@@ -1048,10 +1069,21 @@ class ScannerPanel(QWidget):
         """Open the report popup when deep analysis completes."""
         if hasattr(self, '_deep_poll'):
             self._deep_poll.stop()
-            self._poll_deep_progress()  # Drain remaining
+            self._poll_deep_progress()
         self.detail_analyze_btn.setEnabled(True)
-        self.progress.set_progress(100, f"Deep analysis complete", ticker)
-        self.bus.log_entry.emit(f"Deep analysis complete for {ticker}", "trade")
+
+        elapsed = time.time() - getattr(self, '_deep_t0', time.time())
+        est = getattr(self, '_deep_est', 60)
+        speed = "faster" if elapsed < est else "slower"
+        self.progress.set_progress(100, f"Deep analysis complete — {elapsed:.0f}s",
+                                    f"Est. was {est}s ({speed} than expected)")
+        self.bus.log_entry.emit(f"Deep analysis complete for {ticker} in {elapsed:.0f}s", "trade")
+
+        # Save timing for better future estimates (rolling average)
+        settings = load_settings()
+        old_avg = settings.get("deep_analyze_avg_seconds", 60)
+        settings["deep_analyze_avg_seconds"] = round(elapsed * 0.7 + old_avg * 0.3, 1)
+        save_settings(settings)
 
         from core.ui.theme import theme as _theme
         dlg = QDialog(self)

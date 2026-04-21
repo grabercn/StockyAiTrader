@@ -306,44 +306,45 @@ class DashboardPanel(QWidget):
                 self.canvas.draw()
                 return
 
-            # Plot equity line
-            ax.plot(ts, eq, color=BRAND_PRIMARY, linewidth=2)
-            ax.fill_between(ts, eq, alpha=0.1, color=BRAND_PRIMARY)
+            # Color based on P/L
+            color = COLOR_PROFIT if eq[-1] >= eq[0] else COLOR_LOSS
+            ax.plot(ts, eq, color=color, linewidth=2)
 
-            # Color the line based on P/L (green if up, red if down)
-            if eq[-1] >= eq[0]:
-                ax.plot(ts, eq, color=COLOR_PROFIT, linewidth=2)
-                ax.fill_between(ts, eq, alpha=0.08, color=COLOR_PROFIT)
-            else:
-                ax.plot(ts, eq, color=COLOR_LOSS, linewidth=2)
-                ax.fill_between(ts, eq, alpha=0.08, color=COLOR_LOSS)
+            # Fill between min value and line (not from 0!)
+            eq_min = min(eq)
+            ax.fill_between(ts, eq, eq_min, alpha=0.08, color=color)
 
-            # Show current value as annotation
+            # Y-axis: zoom to data range with padding (NOT from 0)
+            eq_range = max(eq) - eq_min if max(eq) != eq_min else 1
+            padding = eq_range * 0.15
+            ax.set_ylim(eq_min - padding, max(eq) + padding)
+
+            # Current value annotation
             ax.annotate(f"${eq[-1]:,.2f}", xy=(ts[-1], eq[-1]),
-                        fontsize=9, fontweight="bold",
-                        color=COLOR_PROFIT if eq[-1] >= eq[0] else COLOR_LOSS,
-                        xytext=(-60, 10), textcoords="offset points")
+                        fontsize=9, fontweight="bold", color=color,
+                        xytext=(-70, 10), textcoords="offset points")
 
             ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
             ax.tick_params(colors=cc["muted"], labelsize=7)
             ax.grid(True, alpha=0.15, color=cc["grid"])
 
-            # X-axis: use simple string labels instead of matplotlib date handling
-            # (matplotlib date formatting breaks with timezone-naive datetime objects)
+            # X-axis: 5 evenly spaced labels, short date format
             n = len(ts)
-            if n > 8:
-                step = max(1, n // 6)
-                tick_idx = list(range(0, n, step))
-            else:
-                tick_idx = list(range(n))
+            n_ticks = min(5, n)
+            step = max(1, n // n_ticks)
+            tick_idx = list(range(0, n, step))
+            if tick_idx[-1] != n - 1:
+                tick_idx.append(n - 1)
             ax.set_xticks([ts[i] for i in tick_idx])
-            ax.set_xticklabels([ts[i].strftime("%m/%d %H:%M") for i in tick_idx],
-                               rotation=30, ha="right", fontsize=7)
+            ax.set_xticklabels([ts[i].strftime("%m/%d") for i in tick_idx],
+                               fontsize=7, color=cc["muted"])
 
-            # Format y-axis as dollars
-            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+            # Y-axis: compact dollar format
+            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(
+                lambda x, _: f"${x:,.0f}"
+            ))
 
-            self.figure.subplots_adjust(left=0.12, right=0.96, top=0.90, bottom=0.22)
+            self.figure.subplots_adjust(left=0.10, right=0.92, top=0.90, bottom=0.12)
             self.canvas.draw()
 
             from core.ui.chart_tooltip import ChartTooltip
