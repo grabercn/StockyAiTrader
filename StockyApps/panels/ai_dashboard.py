@@ -621,6 +621,22 @@ class AIDashboardPanel(QWidget):
                     f"Cycle {cycle}: {len(buys)}B {len(sells)}S {len(holds)}H "
                     f"({len(skipped)} below {min_conf:.0%} threshold)", "trade")
 
+                # Update _agent_stocks with latest scan data for ALL results
+                for r in results:
+                    if not r.error:
+                        existing = self._agent_stocks.get(r.ticker, {})
+                        self._agent_stocks[r.ticker] = {
+                            "signal": r.action,
+                            "confidence": r.confidence,
+                            "price": r.price,
+                            "last_check": datetime.now().strftime("%H:%M:%S"),
+                            "checks": existing.get("checks", 0) + 1,
+                            "qty": existing.get("qty", 0),
+                            "mode": existing.get("mode", "Scanned"),
+                            "interval": "5m",
+                            "next_secs": 300,
+                        }
+
                 # Log top picks with reasoning
                 for r in sorted(buys, key=lambda x: -x.score)[:3]:
                     self.bus.log_entry.emit(
