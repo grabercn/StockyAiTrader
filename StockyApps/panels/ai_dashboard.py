@@ -51,6 +51,10 @@ class AIDashboardPanel(QWidget):
         self.card_trades = StatCard("Trades Today", "0", BRAND_PRIMARY)
         self.card_signals = StatCard("Signals", "0 B / 0 S", BRAND_SECONDARY)
         self.card_mode = StatCard("Mode", "Idle", TEXT_MUTED)
+        self.card_monitored.on_clicked = lambda: self._show_card_detail("monitored")
+        self.card_trades.on_clicked = lambda: self._show_card_detail("trades")
+        self.card_signals.on_clicked = lambda: self._show_card_detail("signals")
+        self.card_mode.on_clicked = lambda: self._show_card_detail("mode")
         for c in [self.card_monitored, self.card_trades, self.card_signals, self.card_mode]:
             cards.addWidget(c)
         layout.addLayout(cards)
@@ -130,6 +134,47 @@ class AIDashboardPanel(QWidget):
 
         self.setLayout(layout)
         self.bus.log_entry.connect(self._on_log)
+
+    def _show_card_detail(self, card_type):
+        """Show detail popup when stat card is clicked."""
+        main = self.window()
+        svc = None
+        if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
+            svc = main.scanner._auto_service
+
+        monitored = svc.get_monitored() if svc else {}
+        settings = load_settings()
+
+        if card_type == "monitored":
+            tickers = list(monitored.keys())
+            text = f"Monitoring {len(tickers)} stocks:\n\n" + "\n".join(
+                f"  {t}: {s.last_signal} ({s.last_confidence:.0%})" for t, s in monitored.items()
+            ) if tickers else "No stocks monitored."
+        elif card_type == "trades":
+            total = sum(getattr(s, 'check_count', 0) for s in monitored.values())
+            text = f"Total checks today: {total}\n\n" + "\n".join(
+                f"  {t}: {getattr(s, 'check_count', 0)} checks" for t, s in monitored.items()
+            )
+        elif card_type == "signals":
+            buys = [(t, s) for t, s in monitored.items() if s.last_signal == "BUY"]
+            sells = [(t, s) for t, s in monitored.items() if s.last_signal == "SELL"]
+            holds = [(t, s) for t, s in monitored.items() if s.last_signal == "HOLD"]
+            text = (f"BUY ({len(buys)}): {', '.join(t for t,_ in buys) or 'none'}\n"
+                    f"SELL ({len(sells)}): {', '.join(t for t,_ in sells) or 'none'}\n"
+                    f"HOLD ({len(holds)}): {', '.join(t for t,_ in holds) or 'none'}")
+        elif card_type == "mode":
+            aggr = settings.get("aggressivity", "Default")
+            from core.intelligent_trader import get_aggressivity
+            p = get_aggressivity(aggr)
+            text = (f"Aggressivity: {aggr}\n"
+                    f"Min Confidence: {p['min_confidence']:.0%}\n"
+                    f"Position Size: {p['size_multiplier']:.1f}x\n"
+                    f"Max Trades/Day: {p['max_trades_per_day']}\n"
+                    f"LLM: {'Yes' if p.get('use_llm') else 'No'}")
+        else:
+            text = "No data"
+
+        QMessageBox.information(self, card_type.title(), text)
 
     def _on_log(self, msg, level):
         """Capture all trade/system/auto-related logs."""

@@ -216,7 +216,7 @@ class AutoTraderService(QThread):
             self.log.emit(f"{stock.ticker} check failed: {e}", "error")
 
     def _execute_trade(self, stock, action, price, atr):
-        """Execute buy or sell based on signal. Sells can be partial based on confidence."""
+        """Execute buy or sell. Checks BP before buying, dynamic qty for sells."""
         size = self.rm.position_size(price, atr)
         if size <= 0:
             self.log.emit(f"{stock.ticker}: position size 0 — skipping", "warn")
@@ -224,8 +224,28 @@ class AutoTraderService(QThread):
 
         side = "buy" if action == "BUY" else "sell"
 
+        # For buys: check buying power first
+        if side == "buy" and self.broker:
+            try:
+                acct = self.broker.get_account()
+                bp = float(acct.get("buying_power", 0))
+                cost = size * price
+                if cost > bp:
+                    # Reduce to what we can afford (max 20% of BP per trade)
+                    affordable = int(min(bp * 0.20, bp) / price)
+                    if affordable <= 0:
+                        self.log.emit(
+                            f"{stock.ticker}: insufficient BP (${bp:,.0f}) for {size} shares (${cost:,.0f}) — skipping",
+                            "warn")
+                        return
+                    self.log.emit(
+                        f"{stock.ticker}: reduced from {size} to {affordable} shares (BP=${bp:,.0f})",
+                        "info")
+                    size = affordable
+            except Exception:
+                pass
+
         # For sells: determine qty based on confidence
-        # High confidence = sell all, lower = sell partial
         if side == "sell" and self.broker:
             try:
                 positions = self.broker.get_positions()

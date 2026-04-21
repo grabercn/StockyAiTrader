@@ -104,7 +104,12 @@ class TrayAgent:
             "price": price, "next_secs": next_secs,
             "interval": interval, "mode": mode,
         }
-        self._rebuild_menu()
+        # Don't rebuild menu on every update — only rebuild every 10 seconds
+        import time as _t
+        now = _t.time()
+        if not hasattr(self, '_last_rebuild') or now - self._last_rebuild > 10:
+            self._last_rebuild = now
+            self._rebuild_menu()
 
     def remove_stock(self, ticker):
         self._monitored.pop(ticker, None)

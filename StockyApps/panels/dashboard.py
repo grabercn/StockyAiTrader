@@ -354,6 +354,16 @@ class DashboardPanel(QWidget):
                         fontsize=9, fontweight="bold", color=color,
                         xytext=(-70, 10), textcoords="offset points")
 
+            # Reference lines
+            # Starting equity (beginning of period)
+            ax.axhline(y=eq[0], color=cc["muted"], linewidth=0.8, linestyle="--", alpha=0.5)
+            ax.annotate(f"Start ${eq[0]:,.0f}", xy=(0, eq[0]),
+                       fontsize=7, color=cc["muted"], va="bottom")
+
+            # Average equity
+            avg_eq = sum(eq) / len(eq)
+            ax.axhline(y=avg_eq, color=BRAND_PRIMARY, linewidth=0.6, linestyle=":", alpha=0.3)
+
             ax.set_title("Portfolio Equity (1W)", color=cc["text"], fontsize=10)
             ax.tick_params(colors=cc["muted"], labelsize=7)
             ax.grid(True, alpha=0.15, color=cc["grid"])
