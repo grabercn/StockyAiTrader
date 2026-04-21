@@ -7,7 +7,7 @@ Import from here instead of hardcoding values.
 
 # ─── App Identity ─────────────────────────────────────────────────────────────
 APP_NAME = "Stocky Suite"
-APP_VERSION = "5.0.0"
+APP_VERSION = "7.0.0"
 APP_TAGLINE = "AI-Powered Trading Suite"
 APP_AUTHOR = "grabercn"
 APP_URL = "https://github.com/grabercn/StockyAiTrader"
