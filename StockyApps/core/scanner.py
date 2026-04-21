@@ -139,15 +139,31 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
         else:
             settings_reason = ""
 
-        # Fetch data with all features + addons
+        # Fetch data — in auto mode, try fallbacks if not enough data
         data = fetch_intraday(ticker, period=period, interval=interval)
 
+        if (data.empty or len(data) < 30) and auto_settings:
+            # Try progressively wider settings before giving up
+            fallbacks = [("5d", "5m"), ("5d", "15m"), ("5d", "30m")]
+            for fb_period, fb_interval in fallbacks:
+                if fb_period == period and fb_interval == interval:
+                    continue
+                data = fetch_intraday(ticker, period=fb_period, interval=fb_interval)
+                if not data.empty and len(data) >= 30:
+                    period, interval = fb_period, fb_interval
+                    settings_reason = f"fallback {fb_period}/{fb_interval}"
+                    break
+
         if data.empty or len(data) < 30:
+            # Still not enough — return a greyed-out result (not an error, just insufficient)
+            price = float(data["Close"].iloc[-1]) if not data.empty and len(data) > 0 else 0
             return ScanResult(
-                ticker=ticker, action="HOLD", confidence=0, price=0,
+                ticker=ticker, action="--", confidence=0, price=price,
                 position_size=0, stop_loss=0, take_profit=0, atr=0,
-                probs=[0, 1, 0], feature_importances={}, reasoning="Insufficient data",
-                score=0, error="Not enough data",
+                probs=[0, 0, 0], feature_importances={},
+                reasoning=f"Not enough data ({len(data)} bars, need 30+)",
+                score=-1, error=f"Not enough data ({len(data)} bars)",
+                period_used=period, interval_used=interval,
             )
 
         # Train model on this ticker's data

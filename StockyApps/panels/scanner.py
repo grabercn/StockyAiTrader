@@ -511,21 +511,32 @@ class ScannerPanel(QWidget):
             i_used = getattr(r, 'interval_used', '5m')
             settings_str = f"{p_used}/{i_used}" if (p_used != "5d" or i_used != "5m") else ""
 
+            is_insufficient = r.error and "Not enough data" in r.error
+            grey = TEXT_MUTED
+
             items = [
-                (r.ticker, None), (r.action, {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(r.action)),
-                (f"{r.confidence:.0%}", None), (f"${r.price:.2f}" if r.price else "--", None),
-                (str(r.position_size) if r.position_size else "--", None),
-                (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss else "--", None),
-                (f"{r.score:.2f}" + (f" [{settings_str}]" if settings_str else ""), None),
+                (r.ticker, None),
+                (r.action if not is_insufficient else "--",
+                 {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(r.action) if not is_insufficient else grey),
+                (f"{r.confidence:.0%}" if not is_insufficient else "--", grey if is_insufficient else None),
+                (f"${r.price:.2f}" if r.price else "--", grey if is_insufficient else None),
+                (str(r.position_size) if r.position_size and not is_insufficient else "--", grey if is_insufficient else None),
+                (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss and not is_insufficient else "--", grey if is_insufficient else None),
+                ((f"{r.score:.2f}" + (f" [{settings_str}]" if settings_str else "")) if not is_insufficient else "no data",
+                 grey if is_insufficient else None),
             ]
             for j, (val, color) in enumerate(items):
                 it = QTableWidgetItem(val)
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                if color:
+                if is_insufficient:
+                    it.setForeground(QColor(grey))
+                elif color:
                     it.setForeground(QColor(color))
                     it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
                 if j == 0:
                     it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
+                    if is_insufficient:
+                        it.setForeground(QColor(grey))
                 self.table.setItem(i, j+1, it)
 
             # Auto-trade toggle button with icon
