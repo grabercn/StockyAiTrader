@@ -114,57 +114,57 @@
             "symbol": "DDOG",
             "qty": "1",
             "side": "long",
-            "avg_entry": "129.36",
             "current_price": "128.9788",
-            "unrealized_pl": "-0.3812"
+            "unrealized_pl": "-0.3812",
+            "avg_entry": "129.36"
         },
         {
             "symbol": "HIMS",
             "qty": "2942",
             "side": "long",
-            "avg_entry": "29.865969",
-            "current_price": "30.35",
-            "unrealized_pl": "1424.019202"
+            "current_price": "30.2001",
+            "unrealized_pl": "983.013402",
+            "avg_entry": "29.865969"
         },
         {
             "symbol": "NOK",
             "qty": "4309",
             "side": "long",
-            "avg_entry": "10.428019",
-            "current_price": "10.45",
-            "unrealized_pl": "94.716129"
+            "current_price": "10.4799",
+            "unrealized_pl": "223.555229",
+            "avg_entry": "10.428019"
         },
         {
             "symbol": "NVTS",
             "qty": "57",
             "side": "long",
-            "avg_entry": "15.369649",
-            "current_price": "15.48",
-            "unrealized_pl": "6.290007"
+            "current_price": "15.5",
+            "unrealized_pl": "7.430007",
+            "avg_entry": "15.369649"
         },
         {
             "symbol": "OPEN",
             "qty": "10207",
             "side": "long",
-            "avg_entry": "5.486977",
-            "current_price": "5.5099",
-            "unrealized_pl": "233.975061"
+            "current_price": "5.51",
+            "unrealized_pl": "234.995761",
+            "avg_entry": "5.486977"
         },
         {
             "symbol": "SNAP",
             "qty": "9",
             "side": "long",
-            "avg_entry": "5.644379",
-            "current_price": "5.72",
-            "unrealized_pl": "0.680589"
+            "current_price": "5.7392",
+            "unrealized_pl": "0.853389",
+            "avg_entry": "5.644379"
         },
         {
             "symbol": "SOFI",
             "qty": "3733",
             "side": "long",
-            "avg_entry": "18.800986",
-            "current_price": "19.18",
-            "unrealized_pl": "1414.859262"
+            "current_price": "19.16",
+            "unrealized_pl": "1340.199262",
+            "avg_entry": "18.800986"
         }
     ],
     "manage_manual_stocks": true,

@@ -122,7 +122,7 @@ class DashboardPanel(QWidget):
         rl.setSpacing(4)
 
         # Active orders
-        orders_label = QLabel("Active Orders")
+        orders_label = QLabel("Pending Orders")
         orders_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
         orders_label.setStyleSheet(f"color: {BRAND_PRIMARY};")
         rl.addWidget(orders_label)
@@ -298,20 +298,18 @@ class DashboardPanel(QWidget):
                 sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_position(s, q))
                 self.pos_table.setCellWidget(i, 7, sell_btn)
 
-        # Active orders (pending/new/accepted only — filled orders go to history)
+        # Pending orders only — NOT filled, cancelled, or expired
         open_orders = orders
         if isinstance(open_orders, list):
-            # Filter to only truly pending orders
+            # Only show orders that haven't executed yet
             pending = [o for o in open_orders if o.get("status") in
-                       ("new", "accepted", "pending_new", "partially_filled", "held")]
-            self.orders_table.setRowCount(len(pending))
+                       ("new", "pending_new", "partially_filled", "held")
+                       and o.get("filled_qty", "0") != o.get("qty", "0")]
             open_orders = pending
-        if isinstance(open_orders, list) and open_orders:
-            pass  # Continue to populate
-        elif isinstance(open_orders, list):
+        if not isinstance(open_orders, list) or not open_orders:
             self.orders_table.setRowCount(0)
-        if isinstance(open_orders, list):
-            self.orders_table.setRowCount(len(open_orders))
+            open_orders = []
+        self.orders_table.setRowCount(len(open_orders))
             for i, o in enumerate(open_orders):
                 # Show limit price if limit order, else "market"
                 price_str = "market"
