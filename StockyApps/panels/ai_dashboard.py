@@ -634,10 +634,26 @@ class AIDashboardPanel(QWidget):
                     # 1. Gemini advisory (immediate per stock)
                     if use_gemini and r.action in ("BUY", "SELL"):
                         try:
+                            # Build rich position context for Gemini
                             pos_info = None
                             if r.ticker in self._agent_stocks:
                                 s = self._agent_stocks[r.ticker]
-                                pos_info = f"qty={s.get('qty',0)}, last={s.get('signal','?')}"
+                                pos_info = (f"holding {s.get('qty',0)} shares, "
+                                           f"last_signal={s.get('signal','?')}, "
+                                           f"checked {s.get('checks',0)}x")
+                            # Get exact broker position details
+                            try:
+                                bpos = self.broker.get_positions()
+                                if isinstance(bpos, list):
+                                    for p in bpos:
+                                        if p.get("symbol","").upper() == r.ticker.upper():
+                                            pos_info = (
+                                                f"holding {float(p.get('qty',0)):.0f} shares "
+                                                f"@ ${float(p.get('avg_entry_price',0)):.2f} entry, "
+                                                f"now ${float(p.get('current_price',0)):.2f}, "
+                                                f"P&L ${float(p.get('unrealized_pl',0)):+,.2f}")
+                                            break
+                            except: pass
 
                             advisory = get_advisory(
                                 r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
@@ -648,11 +664,17 @@ class AIDashboardPanel(QWidget):
                             if advisory:
                                 old_conf = r.confidence
                                 _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
-                                conv = advisory.get("conviction", "?")
+                                conv = int(advisory.get("conviction", 3))
+                                gem_rec = advisory.get("recommendation", "?")
+                                gem_weight = conv / 5.0
+                                agree = "AGREE" if gem_rec == r.action else "DISAGREE"
+
                                 self.bus.log_entry.emit(
-                                    f"  Gemini: {r.ticker} {advisory.get('recommendation','?')} "
-                                    f"[{conv}/5] {old_conf:.0%}→{r.confidence:.0%} — "
-                                    f"{advisory.get('reasoning','')}", "info")
+                                    f"  {r.ticker}: Local={r.action}({old_conf:.0%}) "
+                                    f"Gemini={gem_rec}[{conv}/5,w={gem_weight:.1f}] "
+                                    f"→ {r.confidence:.0%} ({agree})", "info")
+                                self.bus.log_entry.emit(
+                                    f"    Reasoning: {advisory.get('reasoning','')}", "system")
                         except: pass
 
                     # 2. Update table immediately with latest signal

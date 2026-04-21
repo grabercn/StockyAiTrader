@@ -128,9 +128,16 @@ class AutoTraderService(QThread):
                 stock.next_check_seconds -= 1
 
                 if stock.next_check_seconds <= 0:
-                    # Time to check this stock
                     self._check_stock(stock)
-                    stock.next_check_seconds = stock.interval_seconds
+                    # Dynamic interval: volatile stocks check more often
+                    base = stock.interval_seconds
+                    if stock.last_price > 0 and hasattr(stock, '_last_atr'):
+                        vol_pct = stock._last_atr / stock.last_price
+                        if vol_pct > 0.02:
+                            base = max(60, int(base * 0.5))   # Volatile: check 2x faster
+                        elif vol_pct < 0.005:
+                            base = min(900, int(base * 1.5))  # Calm: check slower
+                    stock.next_check_seconds = base
                     stock.check_count += 1
 
                 # Emit countdown for UI
@@ -196,6 +203,7 @@ class AutoTraderService(QThread):
             stock.last_signal = action
             stock.last_confidence = confidence
             stock.last_price = price
+            stock._last_atr = atr
 
             # Log every decision
             log_decision(stock.ticker, action, confidence, price,
