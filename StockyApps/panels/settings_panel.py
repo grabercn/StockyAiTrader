@@ -156,6 +156,22 @@ class SettingsPanel(QWidget):
         zoom_row.addWidget(self.zoom_slider)
         al2.addLayout(zoom_row)
 
+        # Close behavior
+        close_row = QHBoxLayout()
+        close_row.addWidget(QLabel("On close:"))
+        self.close_combo = QComboBox()
+        self.close_combo.addItems(["Minimize to tray (recommended)", "Quit application"])
+        self.close_combo.setCurrentIndex(0 if not settings.get("quit_on_close", False) else 1)
+        self.close_combo.currentIndexChanged.connect(self._change_close_behavior)
+        close_row.addWidget(self.close_combo, 1)
+        al2.addLayout(close_row)
+
+        self.close_note = QLabel("")
+        self.close_note.setWordWrap(True)
+        self.close_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        self._update_close_note()
+        al2.addWidget(self.close_note)
+
         appear_box.setLayout(al2)
         inner_layout.addWidget(appear_box)
 
@@ -288,6 +304,45 @@ class SettingsPanel(QWidget):
         self._auto_refresh = QTimer(self)
         self._auto_refresh.timeout.connect(self._refresh)
         self._auto_refresh.start(30000)
+
+    def _change_close_behavior(self, index):
+        quit_on_close = index == 1
+        if quit_on_close:
+            confirm = QMessageBox.warning(
+                self, "Quit on Close",
+                "Are you sure? This means:\n\n"
+                "- Auto-trading will STOP when you close the window\n"
+                "- Background stock monitoring will end\n"
+                "- No tray icon — app fully exits\n\n"
+                "Note: Stocky Suite does not run any unnecessary background\n"
+                "processes. Only active auto-trade monitoring runs in the tray.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                self.close_combo.setCurrentIndex(0)
+                return
+
+        settings = load_settings()
+        settings["quit_on_close"] = quit_on_close
+        save_settings(settings)
+        self._update_close_note()
+        self.bus.log_entry.emit(
+            f"Close behavior: {'quit' if quit_on_close else 'minimize to tray'}",
+            "system",
+        )
+
+    def _update_close_note(self):
+        if self.close_combo.currentIndex() == 0:
+            self.close_note.setText(
+                "App minimizes to system tray when you click X. Auto-trading and "
+                "monitoring continue in the background. No unnecessary processes run."
+            )
+        else:
+            self.close_note.setText(
+                "App will fully quit when you click X. All background tasks including "
+                "auto-trading and stock monitoring will stop."
+            )
+            self.close_note.setStyleSheet(f"color: {COLOR_HOLD}; font-size: 9px;")
 
     def _change_zoom(self, value):
         scale = value / 100.0
