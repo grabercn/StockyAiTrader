@@ -619,7 +619,10 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(
                                         f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
                                         f"adj {old_conf:.0%}→{r.confidence:.0%} — {reasoning}", "info")
-                                # No response = no effect, stock proceeds normally
+                                # No response — log why
+                                else:
+                                    err = getattr(get_advisory, '_last_error', 'unknown')
+                                    self.bus.log_entry.emit(f"  Gemini: {r.ticker} failed — {err}", "warn")
                 except Exception as e:
                     self.bus.log_entry.emit(f"Gemini error: {e}", "error")
 

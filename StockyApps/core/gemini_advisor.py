@@ -23,8 +23,8 @@ import json
 import os
 
 # ─── Model Configuration (change these to switch models) ──────────────────
-PRIMARY_MODEL = "gemini-3.1-flash-preview"
-FALLBACK_MODEL = "gemini-2.5-flash"
+PRIMARY_MODEL = "gemini-2.5-flash-preview-05-20"
+FALLBACK_MODEL = "gemini-2.0-flash"
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "settings.json")
 
@@ -96,7 +96,7 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
         f'"reasoning": "2-3 sentence explanation"}}'
     )
 
-    # Try primary model, fallback to secondary
+    _last_error = None
     for model_id in [PRIMARY_MODEL, FALLBACK_MODEL]:
         try:
             response = client.models.generate_content(
@@ -115,9 +115,12 @@ def get_advisory(ticker, price, signal, confidence, probs, atr,
             result = json.loads(text)
             result["model_used"] = model_id
             return result
-        except Exception:
+        except Exception as e:
+            _last_error = str(e)
             continue
 
+    # Store last error for logging
+    get_advisory._last_error = _last_error
     return None
 
 
