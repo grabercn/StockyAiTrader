@@ -739,8 +739,12 @@ class AIDashboardPanel(QWidget):
                                     self.bus.log_entry.emit(f"    Decision: EXECUTE SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
                                     self._agent_stocks[r.ticker]["qty"] = held - qty
                                     self._agent_stocks[r.ticker]["mode"] = "Auto"
+                                else:
+                                    self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} FAILED — {result.get('error','')[:40]}", "error")
+                            else:
+                                self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} — no position held, skipping", "system")
                         except Exception as _e:
-                            self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                            self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} ERROR — {_e}", "error")
 
                     elif r.action == "BUY" and trades_today < max_trades and self.broker:
                         buys += 1
@@ -768,9 +772,13 @@ class AIDashboardPanel(QWidget):
                                                 mon_svc.add_stock(r.ticker, period="5d", interval="5m", auto_execute=True, min_confidence=0.5)
                                         except: pass
                                     else:
-                                        self.bus.log_entry.emit(f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
+                                        self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} FAILED — {result.get('error','')[:40]}", "error")
+                                else:
+                                    self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} — cost ${cost:,.0f} > BP ${bp:,.0f}, skipping", "warn")
                             except Exception as _e:
-                                self.bus.log_entry.emit(f"Agent error: {_e}", "error")
+                                self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} ERROR — {_e}", "error")
+                        else:
+                            self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} — BP ${bp:,.0f} too low, skipping", "warn")
 
                 self.bus.log_entry.emit(
                     f"Cycle {cycle}: {buys}B {sells}S {holds}H ({skipped} skipped)", "trade")
