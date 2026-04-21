@@ -240,7 +240,7 @@ def _get_penny_stocks(limit=25):
     wsb_pennies = [
         "SNDL", "CLOV", "BB", "NOK", "PLTR", "SOFI",
         "GSAT", "ASTS", "DNA", "IONQ", "OPEN", "SKLZ",
-        "MNMD", "SIRI", "PLUG", "SNAP", "VALE", "NU",
+        "SIRI", "PLUG", "SNAP", "VALE", "NU",
         "GRAB", "RKLB", "JOBY", "AFRM", "HOOD",
     ]
     for t in wsb_pennies:

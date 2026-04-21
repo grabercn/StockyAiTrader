@@ -505,20 +505,39 @@ class PortfolioPanel(QWidget):
         cc = chart_colors(); self.perf_figure.set_facecolor(cc["fig_bg"])
         ax = self.perf_figure.add_subplot(111)
         ax.set_facecolor(cc["ax_bg"])
-        eq = hist["equity"]
-        ts = [datetime.fromtimestamp(t) for t in hist["timestamp"]]
-        trending_up = eq[-1] >= eq[0] if eq else True
+        # Filter Nones and use integer indices (no weekend gaps)
+        raw_eq = hist["equity"]
+        raw_ts = hist["timestamp"]
+        eq = [e for e in raw_eq if e is not None]
+        ts = [datetime.fromtimestamp(t) for t, e in zip(raw_ts, raw_eq) if e is not None]
+        if not eq:
+            self.perf_canvas.draw()
+            return
+        x = list(range(len(eq)))
+        trending_up = eq[-1] >= eq[0]
         color = COLOR_BUY if trending_up else COLOR_SELL
-        ax.plot(ts, eq, color=color, linewidth=1.5)
-        ax.fill_between(ts, eq, alpha=0.08, color=color)
+        ax.plot(x, eq, color=color, linewidth=1.5)
+        eq_min = min(eq)
+        ax.fill_between(x, eq, eq_min, alpha=0.08, color=color)
+        eq_range = max(eq) - eq_min if max(eq) != eq_min else 1
+        ax.set_ylim(eq_min - eq_range * 0.1, max(eq) + eq_range * 0.1)
         ax.set_title(f"Portfolio — {self.perf_period.currentText()}", color=cc["text"], fontsize=10)
         ax.tick_params(colors=cc["muted"], labelsize=7)
         ax.grid(True, alpha=0.15, color=cc["grid"])
-        self.perf_figure.tight_layout()
+        # X-axis labels
+        n = len(x)
+        step = max(1, n // 5)
+        ticks = list(range(0, n, step))
+        if ticks[-1] != n - 1:
+            ticks.append(n - 1)
+        ax.set_xticks([x[i] for i in ticks])
+        ax.set_xticklabels([ts[i].strftime("%m/%d") for i in ticks], fontsize=7, color=cc["muted"])
+        ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda v, _: f"${v:,.0f}"))
+        self.perf_figure.subplots_adjust(left=0.12, right=0.95, top=0.90, bottom=0.14)
         self.perf_canvas.draw()
 
         from core.ui.chart_tooltip import ChartTooltip
-        self._perf_tooltip = ChartTooltip(self.perf_canvas, ax, ts, eq)
+        self._perf_tooltip = ChartTooltip(self.perf_canvas, ax, x, eq, x_labels=ts)
 
     def _refresh_wl_combo(self):
         from core.discovery import get_watchlists

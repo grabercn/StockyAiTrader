@@ -37,13 +37,14 @@ class ScanWorker(QThread):
     progress = pyqtSignal(int, int, str, str)  # done, total, ticker, detail_str
     finished = pyqtSignal(list)
 
-    def __init__(self, tickers, period, interval, risk_manager, auto_settings=False):
+    def __init__(self, tickers, period, interval, risk_manager, auto_settings=False, buying_power=None):
         super().__init__()
         self.tickers = tickers
         self.period = period
         self.interval = interval
         self.risk_manager = risk_manager
         self.auto_settings = auto_settings
+        self.buying_power = buying_power
 
     def run(self):
         # Use a thread-safe list for progress updates instead of cross-thread signals
@@ -68,7 +69,8 @@ class ScanWorker(QThread):
 
         results = scan_multiple(self.tickers, self.period, self.interval,
                                 self.risk_manager, max_workers=get_optimal_workers(),
-                                progress_callback=cb, auto_settings=self.auto_settings)
+                                progress_callback=cb, auto_settings=self.auto_settings,
+                                buying_power=self.buying_power)
         self.finished.emit(results)
 
     def poll_progress(self):

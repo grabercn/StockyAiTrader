@@ -270,8 +270,18 @@ class DashboardPanel(QWidget):
                 sell_btn.clicked.connect(lambda _, s=sym, q=int(qty): self._sell_position(s, q))
                 self.pos_table.setCellWidget(i, 7, sell_btn)
 
-        # Active orders with cancel buttons
+        # Active orders (pending/new/accepted only — filled orders go to history)
         open_orders = orders
+        if isinstance(open_orders, list):
+            # Filter to only truly pending orders
+            pending = [o for o in open_orders if o.get("status") in
+                       ("new", "accepted", "pending_new", "partially_filled", "held")]
+            self.orders_table.setRowCount(len(pending))
+            open_orders = pending
+        if isinstance(open_orders, list) and open_orders:
+            pass  # Continue to populate
+        elif isinstance(open_orders, list):
+            self.orders_table.setRowCount(0)
         if isinstance(open_orders, list):
             self.orders_table.setRowCount(len(open_orders))
             for i, o in enumerate(open_orders):
@@ -367,7 +377,7 @@ class DashboardPanel(QWidget):
             self.canvas.draw()
 
             from core.ui.chart_tooltip import ChartTooltip
-            self._tooltip = ChartTooltip(self.canvas, ax, ts, eq)
+            self._tooltip = ChartTooltip(self.canvas, ax, x, eq, x_labels=ts)
         except Exception as e:
             self.bus.log_entry.emit(f"Chart error: {e}", "error")
 

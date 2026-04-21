@@ -122,7 +122,8 @@ def auto_determine_settings(ticker):
 _auto_cache = {}  # {ticker: ((period, interval, reason), timestamp)}
 
 
-def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_settings=False):
+def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_settings=False,
+                buying_power=None):
     """
     Run the full analysis pipeline on a single ticker.
 
@@ -190,7 +191,8 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
         if risk_manager is None:
             risk_manager = RiskManager()
 
-        size = risk_manager.position_size(last_price, atr)
+        size = risk_manager.position_size(last_price, atr, buying_power=buying_power,
+                                          confidence=last_conf)
         side = "buy" if last_action == "BUY" else "sell"
         sl = risk_manager.stop_loss(last_price, atr, side)
         tp = risk_manager.take_profit(last_price, atr, side)
@@ -233,7 +235,8 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
 
 
 def scan_multiple(tickers, period="5d", interval="5m", risk_manager=None,
-                  max_workers=3, progress_callback=None, auto_settings=False):
+                  max_workers=3, progress_callback=None, auto_settings=False,
+                  buying_power=None):
     """
     Scan multiple tickers concurrently and return ranked results.
 
@@ -257,7 +260,7 @@ def scan_multiple(tickers, period="5d", interval="5m", risk_manager=None,
     # Keep workers low (3) since LightGBM training is CPU-intensive on a laptop
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_ticker = {
-            executor.submit(scan_ticker, t, period, interval, risk_manager, auto_settings): t
+            executor.submit(scan_ticker, t, period, interval, risk_manager, auto_settings, buying_power): t
             for t in tickers
         }
 
