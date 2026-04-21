@@ -613,37 +613,101 @@ class ScannerPanel(QWidget):
         self._show_detail(r)
 
     def _show_detail(self, r):
-        """Show detailed breakdown for a scanned stock."""
+        """Show detailed breakdown — heavy data loads in background thread."""
         self.detail_title.setText(f"{r.action}  {r.ticker}")
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
-        lines = []
+        # Show quick data immediately, load rest async
+        self.detail_stats.setHtml(f"<b>Loading {r.ticker} details...</b>")
 
-        # ── Stock Description ──
+        # Set qty and buttons immediately (no network needed)
+        qty = r.position_size if r.position_size > 0 else 1
+        self.detail_qty.setValue(qty)
+        self.detail_qty_label.setText(f"AI recommends {r.position_size} shares")
+        cost = qty * r.price if r.price > 0 else 0
+        self.detail_buy_btn.setText(f"  BUY {qty} shares (${cost:,.0f})")
+        self.detail_sell_btn.setVisible(False)
+        self.detail_owned_label.setText("")
+
+        # Load heavy data in background
+        import threading
+        if not hasattr(self, '_stock_info_cache'):
+            self._stock_info_cache = {}
+
+        def _load():
+            try:
+                # Fetch stock info (cached)
+                if r.ticker not in self._stock_info_cache:
+                    try:
+                        info = yf.Ticker(r.ticker).info
+                        self._stock_info_cache[r.ticker] = {
+                            "name": info.get("shortName", r.ticker),
+                            "desc": info.get("longBusinessSummary", ""),
+                            "sector": info.get("sector", ""),
+                            "industry": info.get("industry", ""),
+                            "cap": f"${info.get('marketCap',0)/1e9:.1f}B" if info.get('marketCap',0) > 1e9 else f"${info.get('marketCap',0)/1e6:.0f}M" if info.get('marketCap',0) > 1e6 else "",
+                        }
+                    except Exception:
+                        self._stock_info_cache[r.ticker] = {}
+
+                # Build full detail HTML on the thread
+                html = self._build_detail_html(r)
+                # Update UI on main thread
+                QTimer.singleShot(0, lambda: self._apply_detail(r, html))
+            except Exception:
+                pass
+
+        threading.Thread(target=_load, daemon=True).start()
+
+        # Draw chart in background too
+        threading.Thread(target=lambda: QTimer.singleShot(0, lambda: self._draw_detail_chart(r.ticker)), daemon=True).start()
+
+    def _apply_detail(self, r, html):
+        """Apply the loaded detail HTML and update buttons (main thread)."""
+        if self._selected_result is not r:
+            return  # User clicked a different stock
+        self.detail_stats.setHtml(html)
+
+        # Check ownership
+        owned_qty = 0
+        if self.broker:
+            try:
+                positions = self.broker.get_positions()
+                if isinstance(positions, list):
+                    for p in positions:
+                        if p.get("symbol", "").upper() == r.ticker.upper():
+                            owned_qty = int(float(p.get("qty", 0)))
+                            break
+            except Exception:
+                pass
+
+        qty = self.detail_qty.value()
+        if owned_qty > 0:
+            self.detail_sell_btn.setVisible(True)
+            self.detail_sell_btn.setText(f"  SELL {min(qty, owned_qty)} shares")
+            self.detail_owned_label.setText(f"You own {owned_qty} shares")
+            if r.action == "SELL":
+                self.detail_qty.setValue(min(r.position_size, owned_qty))
+        else:
+            self.detail_sell_btn.setVisible(False)
+            self.detail_owned_label.setText("You don't own this stock")
+
         try:
-            import threading
-            def _fetch_desc():
-                try:
-                    info = yf.Ticker(r.ticker).info
-                    desc = info.get("longBusinessSummary", "")
-                    name = info.get("shortName", r.ticker)
-                    sector = info.get("sector", "")
-                    industry = info.get("industry", "")
-                    mkt_cap = info.get("marketCap", 0)
-                    cap_str = f"${mkt_cap/1e9:.1f}B" if mkt_cap > 1e9 else f"${mkt_cap/1e6:.0f}M" if mkt_cap > 1e6 else ""
-                    self._stock_info = {"name": name, "desc": desc, "sector": sector, "industry": industry, "cap": cap_str}
-                except Exception:
-                    self._stock_info = {}
-            if not hasattr(self, '_stock_info') or True:
-                self._stock_info = {}
-                t = threading.Thread(target=_fetch_desc, daemon=True)
-                t.start()
-                t.join(timeout=3)  # Wait up to 3s
+            self.detail_qty.valueChanged.disconnect()
         except Exception:
             pass
+        self.detail_qty.valueChanged.connect(
+            lambda v: (
+                self.detail_buy_btn.setText(f"  BUY {v} shares (${v * r.price:,.0f})"),
+                self.detail_sell_btn.setText(f"  SELL {min(v, owned_qty)} shares") if owned_qty > 0 else None,
+            )
+        )
 
-        info = getattr(self, '_stock_info', {})
+    def _build_detail_html(self, r):
+        """Build the detail HTML string — can run on any thread."""
+        lines = []
+        info = self._stock_info_cache.get(r.ticker, {})
         if info.get("name"):
             lines.append(f'<b style="color:{BRAND_PRIMARY};font-size:13px">{info["name"]}</b>')
             meta = []
@@ -827,55 +891,7 @@ class ScannerPanel(QWidget):
             for part in r.reasoning.split(" | "):
                 lines.append(f'  {part}')
 
-        self.detail_stats.setHtml("<br>".join(lines))
-
-        # Set quantity to AI recommendation
-        qty = r.position_size if r.position_size > 0 else 1
-        self.detail_qty.setValue(qty)
-        self.detail_qty_label.setText(f"AI recommends {r.position_size} shares")
-
-        # Update buy button text with quantity and cost
-        cost = qty * r.price if r.price > 0 else 0
-        self.detail_buy_btn.setText(f"  BUY {qty} shares (${cost:,.0f})")
-
-        # Check if user owns this stock — show/hide sell button
-        owned_qty = 0
-        if self.broker:
-            try:
-                positions = self.broker.get_positions()
-                if isinstance(positions, list):
-                    for p in positions:
-                        if p.get("symbol", "").upper() == r.ticker.upper():
-                            owned_qty = int(float(p.get("qty", 0)))
-                            break
-            except Exception:
-                pass
-
-        if owned_qty > 0:
-            self.detail_sell_btn.setVisible(True)
-            self.detail_sell_btn.setText(f"  SELL {min(qty, owned_qty)} shares")
-            self.detail_owned_label.setText(f"You own {owned_qty} shares")
-            # Default sell qty to what AI recommends or what user owns, whichever is less
-            if r.action == "SELL":
-                self.detail_qty.setValue(min(r.position_size, owned_qty))
-        else:
-            self.detail_sell_btn.setVisible(False)
-            self.detail_owned_label.setText("You don't own this stock")
-
-        # Update buttons when user changes quantity
-        try:
-            self.detail_qty.valueChanged.disconnect()
-        except Exception:
-            pass
-        self.detail_qty.valueChanged.connect(
-            lambda v: (
-                self.detail_buy_btn.setText(f"  BUY {v} shares (${v * r.price:,.0f})"),
-                self.detail_sell_btn.setText(f"  SELL {min(v, owned_qty)} shares") if owned_qty > 0 else None,
-            )
-        )
-
-        # Chart
-        self._draw_detail_chart(r.ticker)
+        return "<br>".join(lines)
 
     def _draw_detail_chart(self, ticker):
         """Draw price chart using the scan's period/interval for the selected stock."""
