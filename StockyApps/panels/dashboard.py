@@ -202,9 +202,26 @@ class DashboardPanel(QWidget):
     def refresh(self):
         if not self.broker:
             return
-        acct = self.broker.get_account()
-        if "error" in acct:
-            return
+        # Run API calls in background thread
+        import threading
+        threading.Thread(target=self._refresh_data, daemon=True).start()
+
+    def _refresh_data(self):
+        """Fetch all data from Alpaca in background thread."""
+        try:
+            acct = self.broker.get_account()
+            if "error" in acct:
+                return
+            positions = self.broker.get_positions()
+            orders = self.broker.get_orders("open")
+            hist = self.broker.get_portfolio_history(period="1W", timeframe="1H")
+            # Update UI on main thread
+            QTimer.singleShot(0, lambda: self._apply_refresh(acct, positions, orders, hist))
+        except Exception:
+            pass
+
+    def _apply_refresh(self, acct, positions, orders, hist):
+        """Apply fetched data to UI (main thread)."""
 
         pv = float(acct.get("portfolio_value", 0))
         bp = float(acct.get("buying_power", 0))
@@ -221,7 +238,6 @@ class DashboardPanel(QWidget):
         self.card_pnl.set_value(f"${pnl:+,.2f} ({pct:+.2f}%)", pnl_color)
 
         # Positions with per-stock sell buttons
-        positions = self.broker.get_positions()
         if isinstance(positions, list):
             self.pos_table.setRowCount(len(positions))
             for i, p in enumerate(positions):
@@ -251,7 +267,7 @@ class DashboardPanel(QWidget):
                 self.pos_table.setCellWidget(i, 7, sell_btn)
 
         # Active orders with cancel buttons
-        open_orders = self.broker.get_orders("open")
+        open_orders = orders
         if isinstance(open_orders, list):
             self.orders_table.setRowCount(len(open_orders))
             for i, o in enumerate(open_orders):
@@ -284,8 +300,7 @@ class DashboardPanel(QWidget):
         else:
             self.orders_table.setRowCount(0)
 
-        # Chart
-        hist = self.broker.get_portfolio_history(period="1W", timeframe="1H")
+        # Chart (already fetched)
         if "error" not in hist and hist.get("equity"):
             self._plot(hist)
 
@@ -297,6 +312,7 @@ class DashboardPanel(QWidget):
             ax = self.figure.add_subplot(111)
             ax.set_facecolor(cc["ax_bg"])
 
+            # Filter out None values (weekends/closed hours)
             eq = [e for e in hist["equity"] if e is not None]
             ts = [datetime.fromtimestamp(t) for t, e in zip(hist["timestamp"], hist["equity"]) if e is not None]
 
@@ -306,21 +322,21 @@ class DashboardPanel(QWidget):
                 self.canvas.draw()
                 return
 
-            # Color based on P/L
+            # Use integer indices for even spacing (no time gaps from weekends)
+            x = list(range(len(eq)))
             color = COLOR_PROFIT if eq[-1] >= eq[0] else COLOR_LOSS
-            ax.plot(ts, eq, color=color, linewidth=2)
 
-            # Fill between min value and line (not from 0!)
+            ax.plot(x, eq, color=color, linewidth=2)
             eq_min = min(eq)
-            ax.fill_between(ts, eq, eq_min, alpha=0.08, color=color)
+            ax.fill_between(x, eq, eq_min, alpha=0.08, color=color)
 
-            # Y-axis: zoom to data range with padding (NOT from 0)
+            # Y-axis: zoom to data range with padding
             eq_range = max(eq) - eq_min if max(eq) != eq_min else 1
             padding = eq_range * 0.15
             ax.set_ylim(eq_min - padding, max(eq) + padding)
 
             # Current value annotation
-            ax.annotate(f"${eq[-1]:,.2f}", xy=(ts[-1], eq[-1]),
+            ax.annotate(f"${eq[-1]:,.2f}", xy=(x[-1], eq[-1]),
                         fontsize=9, fontweight="bold", color=color,
                         xytext=(-70, 10), textcoords="offset points")
 
@@ -328,23 +344,22 @@ class DashboardPanel(QWidget):
             ax.tick_params(colors=cc["muted"], labelsize=7)
             ax.grid(True, alpha=0.15, color=cc["grid"])
 
-            # X-axis: 5 evenly spaced labels, short date format
-            n = len(ts)
+            # X-axis: evenly spaced date labels
+            n = len(x)
             n_ticks = min(5, n)
             step = max(1, n // n_ticks)
             tick_idx = list(range(0, n, step))
             if tick_idx[-1] != n - 1:
                 tick_idx.append(n - 1)
-            ax.set_xticks([ts[i] for i in tick_idx])
-            ax.set_xticklabels([ts[i].strftime("%m/%d") for i in tick_idx],
-                               fontsize=7, color=cc["muted"])
+            ax.set_xticks([x[i] for i in tick_idx])
+            ax.set_xticklabels([ts[i].strftime("%m/%d %H:%M") for i in tick_idx],
+                               fontsize=6, color=cc["muted"])
 
-            # Y-axis: compact dollar format
             ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(
-                lambda x, _: f"${x:,.0f}"
+                lambda v, _: f"${v:,.0f}"
             ))
 
-            self.figure.subplots_adjust(left=0.10, right=0.92, top=0.90, bottom=0.12)
+            self.figure.subplots_adjust(left=0.10, right=0.92, top=0.90, bottom=0.14)
             self.canvas.draw()
 
             from core.ui.chart_tooltip import ChartTooltip

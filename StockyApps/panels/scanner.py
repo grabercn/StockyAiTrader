@@ -623,7 +623,7 @@ class ScannerPanel(QWidget):
 
     def _show_detail(self, r):
         """Show detailed breakdown — heavy data loads in background thread."""
-        self.detail_title.setText(f"{r.action}  {r.ticker}")
+        self.detail_title.setText(f"{r.action}  {r.ticker}  —  ${r.price:.2f}")
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.detail_title.setStyleSheet(f"color: {colors.get(r.action, BRAND_PRIMARY)};")
 
@@ -655,58 +655,70 @@ class ScannerPanel(QWidget):
             self._stock_info_cache = {}
 
         def _load_progressive():
-            if self._selected_result is not r:
-                return
-
-            # Phase 1: Stock info (1-3s)
-            if r.ticker not in self._stock_info_cache:
-                try:
-                    info = yf.Ticker(r.ticker).info
-                    self._stock_info_cache[r.ticker] = {
-                        "name": info.get("shortName", r.ticker),
-                        "desc": info.get("longBusinessSummary", ""),
-                        "sector": info.get("sector", ""),
-                        "industry": info.get("industry", ""),
-                        "cap": f"${info.get('marketCap',0)/1e9:.1f}B" if info.get('marketCap',0) > 1e9 else f"${info.get('marketCap',0)/1e6:.0f}M" if info.get('marketCap',0) > 1e6 else "",
-                    }
-                except Exception:
-                    self._stock_info_cache[r.ticker] = {}
-
-            if self._selected_result is not r:
-                return
-
-            # Phase 2: Build main detail HTML (instant, uses cached info)
-            html = self._build_detail_html(r)
-            QTimer.singleShot(0, lambda: self._apply_detail(r, html))
-
-            if self._selected_result is not r:
-                return
-
-            # Phase 3: LLM reasoning (5-30s on first load)
             try:
-                from core.llm_reasoner import generate_reasoning
-                llm_text = generate_reasoning(
-                    r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
-                    feature_importances=r.feature_importances,
-                )
-                if llm_text and self._selected_result is r:
-                    updated = html.replace(
-                        '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
-                        "<br>".join(f"  {p}" for p in llm_text.split(" | "))
+                if self._selected_result is not r:
+                    return
+
+                # Phase 1: Stock info
+                if r.ticker not in self._stock_info_cache:
+                    try:
+                        info = yf.Ticker(r.ticker).info
+                        self._stock_info_cache[r.ticker] = {
+                            "name": info.get("shortName", r.ticker),
+                            "desc": info.get("longBusinessSummary", ""),
+                            "sector": info.get("sector", ""),
+                            "industry": info.get("industry", ""),
+                            "cap": f"${info.get('marketCap',0)/1e9:.1f}B" if info.get('marketCap',0) > 1e9 else f"${info.get('marketCap',0)/1e6:.0f}M" if info.get('marketCap',0) > 1e6 else "",
+                        }
+                    except Exception:
+                        self._stock_info_cache[r.ticker] = {}
+
+                if self._selected_result is not r:
+                    return
+
+                # Phase 2: Full detail (no LLM)
+                html = self._build_detail_html(r)
+                QTimer.singleShot(0, lambda: self._apply_detail(r, html))
+
+                if self._selected_result is not r:
+                    return
+
+                # Phase 3: LLM
+                try:
+                    from core.llm_reasoner import generate_reasoning
+                    llm_text = generate_reasoning(
+                        r.ticker, r.action, r.confidence, r.price, r.atr, r.probs,
+                        feature_importances=r.feature_importances,
                     )
-                    QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
-                    # Also update the reasoning column in the table
-                    QTimer.singleShot(0, lambda: self._update_reasoning_column(r.ticker, llm_text))
-            except Exception:
+                    if llm_text and self._selected_result is r:
+                        updated = html.replace(
+                            '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
+                            "<br>".join(f"  {p}" for p in llm_text.split(" | "))
+                        )
+                        QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
+                        QTimer.singleShot(0, lambda: self._update_reasoning_column(r.ticker, llm_text))
+                except Exception:
+                    pass
+
+                # Mark LLM section done even if it failed
                 if self._selected_result is r:
-                    updated = html.replace(
-                        '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
-                        f'<span style="color:{TEXT_MUTED}">AI model unavailable</span>'
-                    )
-                    QTimer.singleShot(0, lambda: self._apply_detail(r, updated))
+                    current = self.detail_stats.toHtml() if hasattr(self.detail_stats, 'toHtml') else ""
+                    if "Loading AI reasoning" in str(current):
+                        final = html.replace(
+                            '<i style="color:' + TEXT_MUTED + '">Loading AI reasoning...</i>',
+                            f'<span style="color:{TEXT_MUTED}">AI analysis complete</span>'
+                        )
+                        QTimer.singleShot(0, lambda: self._apply_detail(r, final))
+            except Exception as e:
+                # If anything fails, show what we have
+                QTimer.singleShot(0, lambda: self.detail_stats.setHtml(
+                    f'<b style="color:{BRAND_PRIMARY}">Signal: {r.action}</b> ({r.confidence:.1%})<br>'
+                    f'<b>Price:</b> ${r.price:.2f}<br>'
+                    f'<span style="color:{TEXT_MUTED}">Detail loading failed: {e}</span>'
+                ))
 
         threading.Thread(target=_load_progressive, daemon=True).start()
-        QTimer.singleShot(0, lambda: self._draw_detail_chart(r.ticker))
+        QTimer.singleShot(100, lambda: self._draw_detail_chart(r.ticker))
 
     def _apply_detail(self, r, html):
         """Apply the loaded detail HTML and update buttons (main thread)."""
@@ -961,40 +973,37 @@ class ScannerPanel(QWidget):
             closes = data["Close"].values
             timestamps = data.index
 
+            # Use integer indices for even spacing (no weekend gaps)
+            x = list(range(len(closes)))
             trending_up = closes[-1] >= closes[0]
             color = COLOR_BUY if trending_up else COLOR_SELL
 
-            ax.plot(timestamps, closes, color=color, linewidth=1.5)
-            ax.fill_between(timestamps, closes, alpha=0.08, color=color)
+            ax.plot(x, closes, color=color, linewidth=1.5)
+            c_min = min(closes)
+            ax.fill_between(x, closes, c_min, alpha=0.08, color=color)
 
-            ax.annotate(f"${closes[-1]:.2f}", xy=(timestamps[-1], closes[-1]),
-                       fontsize=8, fontweight="bold", color=color,
-                       xytext=(-50, 8), textcoords="offset points")
+            # Y-axis zoom to data range
+            c_range = max(closes) - c_min if max(closes) != c_min else 1
+            ax.set_ylim(c_min - c_range * 0.1, max(closes) + c_range * 0.1)
 
-            ax.set_title(f"{ticker} — {period} @ {interval}", color=cc["text"], fontsize=10)
+            ax.set_title(f"{ticker} — {period} @ {interval}", color=cc["text"], fontsize=9)
             ax.tick_params(colors=cc["muted"], labelsize=6)
             ax.grid(True, alpha=0.15, color=cc["grid"])
 
-            # Format x-axis based on interval
-            n = len(timestamps)
-            if n > 8:
-                step = max(1, n // 6)
-                tick_idx = list(range(0, n, step))
-            else:
-                tick_idx = list(range(n))
+            # X-axis: 4 evenly spaced labels
+            n = len(x)
+            n_ticks = min(4, n)
+            step = max(1, n // n_ticks)
+            tick_idx = list(range(0, n, step))
+            if tick_idx[-1] != n - 1:
+                tick_idx.append(n - 1)
 
-            # Pick format based on data range
-            if interval in ("1m", "5m", "15m", "30m"):
-                fmt = "%m/%d %H:%M"
-            else:
-                fmt = "%m/%d"
+            fmt = "%m/%d %H:%M" if interval in ("1m", "5m", "15m", "30m") else "%m/%d"
+            ax.set_xticks([x[i] for i in tick_idx])
+            ax.set_xticklabels([timestamps[i].strftime(fmt) for i in tick_idx], fontsize=5)
 
-            ax.set_xticks([timestamps[i] for i in tick_idx])
-            ax.set_xticklabels([timestamps[i].strftime(fmt) for i in tick_idx],
-                               rotation=30, ha="right", fontsize=6)
-
-            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda x, _: f"${x:,.2f}"))
-            self.detail_figure.subplots_adjust(left=0.15, right=0.95, top=0.88, bottom=0.22)
+            ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda v, _: f"${v:,.2f}"))
+            self.detail_figure.subplots_adjust(left=0.18, right=0.95, top=0.88, bottom=0.14)
         except Exception:
             pass
         self.detail_canvas.draw()
