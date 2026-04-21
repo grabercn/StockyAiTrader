@@ -820,18 +820,29 @@ def boot_app():
             suite.event_bus.log_entry.emit(
                 f"Resuming AI — {len(monitored)} monitored stocks, "
                 f"{len(managed_positions)} positions loaded", "trade")
-            if was_running:
-                suite.event_bus.log_entry.emit("Starting autonomous agent...", "system")
-                suite.tabs.setCurrentIndex(1)
-                ai = getattr(suite, 'ai_agent', None)
-                if ai:
-                    QTimer.singleShot(500, ai._toggle_agent)
+
             for ticker, info in monitored.items():
-                sig = info.get("last_signal", "?")
-                suite.event_bus.log_entry.emit(
-                    f"Restored {ticker}: {sig} ({info.get('last_confidence', 0):.0%})", "system")
+                sig = info.get("last_signal", "")
+                conf = info.get("last_confidence", 0)
+                if sig and conf > 0:
+                    suite.event_bus.log_entry.emit(
+                        f"Restored {ticker}: {sig} ({conf:.0%})", "system")
+                else:
+                    suite.event_bus.log_entry.emit(
+                        f"Restored {ticker}: will check shortly", "system")
+
+            # Always start autonomous agent on resume
+            suite.event_bus.log_entry.emit("Starting autonomous agent...", "system")
+            suite.tabs.setCurrentIndex(1)
+
+            def _start_agent_delayed():
+                ai = getattr(suite, 'ai_agent', None)
+                if ai and hasattr(ai, '_toggle_agent'):
+                    ai._toggle_agent()
+                else:
+                    suite.event_bus.log_entry.emit("Click AI Agent tab to start", "warn")
+            QTimer.singleShot(1500, _start_agent_delayed)
         else:
-            # User chose manual — clear saved state
             settings["agent_was_running"] = False
             settings["agent_managed_positions"] = []
             save_settings(settings)
