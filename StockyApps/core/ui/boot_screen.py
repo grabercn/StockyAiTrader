@@ -287,88 +287,101 @@ class BootScreen(QWidget):
         QApplication.processEvents()
 
     def finish(self):
-        """Dissolve into particles, then clean up."""
+        """Dissolve into particles then clean up."""
+        self._bg.stop()
         self._bar.stop()
 
-        # Switch to particle dissolve mode
-        self._dissolving = True
-        self._dissolve_phase = 0.0
-        self._particles = []
+        # Capture a screenshot of the boot screen before hiding widgets
+        self._snapshot = self.grab()
 
-        # Generate particles from the content area
+        # Hide all child widgets so we paint from scratch
+        for child in self.findChildren(QWidget):
+            child.setVisible(False)
+
+        # Generate particles
         import random
         w, h = self.width(), self.height()
-        colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#ffffff"]
-        for _ in range(80):
+        self._particles = []
+        colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#e2e8f0"]
+        for _ in range(90):
             self._particles.append({
-                "x": random.uniform(50, w - 50),
-                "y": random.uniform(30, h - 30),
-                "vx": random.uniform(-3, 3),
-                "vy": random.uniform(-5, -1),
-                "size": random.uniform(2, 6),
+                "x": random.uniform(40, w - 40),
+                "y": random.uniform(20, h - 20),
+                "vx": random.uniform(-4, 4),
+                "vy": random.uniform(-6, -1),
+                "size": random.uniform(2, 7),
                 "color": random.choice(colors),
                 "alpha": 1.0,
-                "decay": random.uniform(0.015, 0.035),
+                "decay": random.uniform(0.02, 0.04),
             })
 
-        # Hide content, keep bg + particles
-        self._content.setVisible(False)
+        self._dissolve_phase = 0.0
+        self._snapshot_alpha = 1.0
 
-        # Dissolve timer
         self._dissolve_timer = QTimer(self)
         self._dissolve_timer.timeout.connect(self._tick_dissolve)
         self._dissolve_timer.start(25)
 
     def _tick_dissolve(self):
-        """Animate particles flying away and fading."""
-        self._dissolve_phase += 0.03
+        self._dissolve_phase += 0.04
+        self._snapshot_alpha = max(0, 1.0 - self._dissolve_phase * 2)
+
         all_dead = True
         for p in self._particles:
             p["x"] += p["vx"]
             p["y"] += p["vy"]
-            p["vy"] += 0.05  # slight gravity curve
-            p["vx"] *= 1.01  # spread out
+            p["vy"] += 0.04
+            p["vx"] *= 1.02
             p["alpha"] -= p["decay"]
             if p["alpha"] > 0:
                 all_dead = False
 
         self.update()
 
-        if all_dead or self._dissolve_phase > 1.5:
+        if all_dead or self._dissolve_phase > 2.0:
             self._dissolve_timer.stop()
-            self._bg.stop()
             self.hide()
             self.deleteLater()
 
     def paintEvent(self, event):
-        if not getattr(self, '_dissolving', False):
+        if not hasattr(self, '_particles'):
             return super().paintEvent(event)
 
-        # Draw background (still animating)
-        self._bg.resize(self.size())
-
-        # Draw particles on top
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
 
+        # Dark background
+        painter.fillRect(0, 0, w, h, QColor(8, 10, 18))
+
+        # Fading snapshot of the boot screen
+        if self._snapshot_alpha > 0:
+            painter.setOpacity(self._snapshot_alpha)
+            painter.drawPixmap(0, 0, self._snapshot)
+            painter.setOpacity(1.0)
+
+        # Particles
         for p in self._particles:
             if p["alpha"] <= 0:
                 continue
             c = QColor(p["color"])
-            c.setAlphaF(max(0, p["alpha"]))
+            a = max(0.0, min(1.0, p["alpha"]))
+            c.setAlphaF(a)
             painter.setBrush(c)
             painter.setPen(Qt.NoPen)
-            s = p["size"] * (0.5 + p["alpha"] * 0.5)  # shrink as they fade
+            s = p["size"] * (0.3 + a * 0.7)
             painter.drawEllipse(QPointF(p["x"], p["y"]), s, s)
 
-            # Small glow around each particle
-            gc = QColor(p["color"])
-            gc.setAlphaF(max(0, p["alpha"] * 0.15))
-            glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 3)
-            glow.setColorAt(0, gc)
-            gc.setAlphaF(0)
-            glow.setColorAt(1, gc)
-            painter.setBrush(glow)
-            painter.drawEllipse(QPointF(p["x"], p["y"]), s * 3, s * 3)
+            # Glow
+            if a > 0.1:
+                gc = QColor(p["color"])
+                gc.setAlphaF(a * 0.12)
+                glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 3)
+                glow.setColorAt(0, gc)
+                gc2 = QColor(p["color"])
+                gc2.setAlphaF(0)
+                glow.setColorAt(1, gc2)
+                painter.setBrush(glow)
+                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 3, s * 3)
 
         painter.end()
