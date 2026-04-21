@@ -1,5 +1,5 @@
-"""Panel module — combined Trade panel (Intraday + Long-Term)"""
-import sys, os, json, time
+"""Combined Trade panel — Intraday + Long-Term with Quick Trade sidebar."""
+import sys, os, json, time, threading
 import numpy as np
 from datetime import datetime, timedelta
 from PyQt5.QtWidgets import *
@@ -9,28 +9,27 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import pytz, yfinance as yf
 from core.branding import *
-from core.branding import get_stylesheet, detect_system_theme, chart_colors
+from core.branding import chart_colors
 from core.event_bus import EventBus
 from core.risk import RiskManager
+from core.broker import AlpacaBroker
 from core.data import fetch_intraday, fetch_longterm, get_all_features
 from core.model import train_lgbm, predict_lgbm
 from core.labeling import LABEL_NAMES
-from core.logger import log_decision, log_event
-import threading
+from core.logger import log_decision
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "settings.json")
 def load_settings():
     try:
         with open(SETTINGS_FILE, "r") as f: return json.load(f)
     except: return {}
-def save_settings(s):
-    with open(SETTINGS_FILE, "w") as f: json.dump(s, f, indent=4)
 
 
 class TradePanel(QWidget):
-    """Combined Intraday + Long-Term trade analysis."""
+    """Combined Intraday + Long-Term analysis with Quick Trade sidebar."""
 
-    _analysis_done = pyqtSignal(str, object, object, list, str)  # ticker, model, data, features, mode
+    _analysis_done = pyqtSignal(str, object, object, list, str)
+    _trade_done = pyqtSignal(object, str, int)  # result, side, qty
 
     def __init__(self, broker, risk_manager, event_bus):
         super().__init__()
@@ -39,85 +38,164 @@ class TradePanel(QWidget):
         self.bus = event_bus
         self.model = None
         self.features = []
+        self._current_ticker = ""
+        self._current_price = 0
         self._analysis_done.connect(self._on_done)
+        self._trade_done.connect(self._on_trade_result)
         self._build()
 
     def _build(self):
         from core.ui.backgrounds import GradientHeader
         from core.widgets import DetailedProgressBar
+        from core.ui.icons import StockyIcons
 
-        layout = QVBoxLayout()
-        layout.setSpacing(6)
-        layout.setContentsMargins(8, 4, 8, 4)
+        outer = QVBoxLayout()
+        outer.setSpacing(6)
+        outer.setContentsMargins(8, 4, 8, 4)
 
-        header = GradientHeader("Trade", "Single-stock analysis — intraday or long-term")
-        layout.addWidget(header)
+        header = GradientHeader("Trade", "Single-stock analysis + execution")
+        outer.addWidget(header)
 
         # Controls row
         row = QHBoxLayout()
         self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText("Ticker (e.g. AAPL)")
-        self.ticker_input.setFixedWidth(140)
+        self.ticker_input.setPlaceholderText("Ticker")
+        self.ticker_input.setFixedWidth(100)
         row.addWidget(self.ticker_input)
 
-        # Mode selector
         row.addWidget(QLabel("Mode:"))
         self.mode_cb = QComboBox()
         self.mode_cb.addItems(["Intraday", "Long-Term"])
-        self.mode_cb.setFixedWidth(100)
+        self.mode_cb.setFixedWidth(90)
         self.mode_cb.currentTextChanged.connect(self._on_mode_change)
         row.addWidget(self.mode_cb)
 
-        # Period
-        row.addWidget(QLabel("Period:"))
         self.period_cb = QComboBox()
         self.period_cb.addItems(["5d", "3d", "2d", "1d"])
-        self.period_cb.setFixedWidth(70)
+        self.period_cb.setFixedWidth(55)
         row.addWidget(self.period_cb)
 
-        # Interval (intraday only)
-        self.interval_label = QLabel("Interval:")
+        self.interval_label = QLabel("@")
         row.addWidget(self.interval_label)
         self.interval_cb = QComboBox()
         self.interval_cb.addItems(["5m", "1m", "15m", "30m"])
-        self.interval_cb.setFixedWidth(70)
+        self.interval_cb.setFixedWidth(55)
         row.addWidget(self.interval_cb)
 
         self.run_btn = QPushButton("Analyze")
-        self.run_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; padding: 6px 16px;")
+        self.run_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; padding: 5px 14px;")
         self.run_btn.clicked.connect(self._analyze)
         row.addWidget(self.run_btn)
         row.addStretch()
-        layout.addLayout(row)
+        outer.addLayout(row)
 
-        # Progress
         self.progress = DetailedProgressBar()
         self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+        outer.addWidget(self.progress)
 
-        # Chart
+        # Splitter: chart (left) + trade sidebar (right)
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left: chart + signal
+        left = QWidget()
+        ll = QVBoxLayout()
+        ll.setContentsMargins(0, 0, 0, 0)
         cc = chart_colors()
         self.figure = plt.Figure(dpi=100, facecolor=cc["fig_bg"])
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumHeight(250)
-        layout.addWidget(self.canvas)
+        self.canvas.setMinimumHeight(200)
+        ll.addWidget(self.canvas)
 
-        # Signal display
         self.signal_label = QLabel("")
-        self.signal_label.setFont(QFont(FONT_FAMILY, 16, QFont.Bold))
+        self.signal_label.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         self.signal_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.signal_label)
+        ll.addWidget(self.signal_label)
 
-        # Stats
         self.stats_label = QLabel("")
         self.stats_label.setWordWrap(True)
-        self.stats_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-        layout.addWidget(self.stats_label)
+        self.stats_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        ll.addWidget(self.stats_label)
+        left.setLayout(ll)
+        splitter.addWidget(left)
 
-        layout.addStretch()
-        self.setLayout(layout)
+        # Right: Quick Trade sidebar
+        right = QWidget()
+        rl = QVBoxLayout()
+        rl.setSpacing(4)
+        rl.setContentsMargins(6, 4, 6, 4)
 
-        # Wire ticker from event bus
+        trade_label = QLabel("Quick Trade")
+        trade_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        trade_label.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        rl.addWidget(trade_label)
+
+        self.trade_price_label = QLabel("Price: --")
+        self.trade_price_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        rl.addWidget(self.trade_price_label)
+
+        # Qty + Order Type
+        q_row = QHBoxLayout()
+        q_row.addWidget(QLabel("Qty"))
+        self.trade_qty = QSpinBox()
+        self.trade_qty.setRange(1, 100000)
+        self.trade_qty.setValue(1)
+        self.trade_qty.setFixedWidth(70)
+        q_row.addWidget(self.trade_qty)
+        self.trade_order_type = QComboBox()
+        self.trade_order_type.addItems(["Market", "Limit", "Stop"])
+        self.trade_order_type.setFixedWidth(75)
+        q_row.addWidget(self.trade_order_type)
+        rl.addLayout(q_row)
+
+        # Limit price + TIF
+        p_row = QHBoxLayout()
+        self.trade_limit_price = QLineEdit()
+        self.trade_limit_price.setPlaceholderText("Price")
+        self.trade_limit_price.setEnabled(False)
+        p_row.addWidget(self.trade_limit_price, 1)
+        self.trade_tif = QComboBox()
+        self.trade_tif.addItems(["DAY", "GTC"])
+        self.trade_tif.setFixedWidth(55)
+        p_row.addWidget(self.trade_tif)
+        rl.addLayout(p_row)
+        self.trade_order_type.currentTextChanged.connect(
+            lambda t: self.trade_limit_price.setEnabled(t != "Market"))
+
+        # Estimates
+        self.trade_est = QLabel("Cost: --")
+        self.trade_est.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        rl.addWidget(self.trade_est)
+        self.trade_bp = QLabel("BP: --")
+        self.trade_bp.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        rl.addWidget(self.trade_bp)
+
+        self.trade_qty.valueChanged.connect(self._update_estimate)
+
+        # Buttons
+        self.buy_btn = QPushButton("BUY")
+        self.buy_btn.setStyleSheet(f"background-color: {COLOR_BUY}; font-size: 11px; padding: 6px;")
+        self.buy_btn.clicked.connect(lambda: self._execute_trade("buy"))
+        rl.addWidget(self.buy_btn)
+
+        self.sell_btn = QPushButton("SELL")
+        self.sell_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 11px; padding: 6px;")
+        self.sell_btn.clicked.connect(lambda: self._execute_trade("sell"))
+        rl.addWidget(self.sell_btn)
+
+        self.trade_status = QLabel("")
+        self.trade_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8px;")
+        self.trade_status.setWordWrap(True)
+        rl.addWidget(self.trade_status)
+
+        rl.addStretch()
+        right.setLayout(rl)
+        right.setMaximumWidth(220)
+        splitter.addWidget(right)
+        splitter.setSizes([600, 200])
+
+        outer.addWidget(splitter)
+        self.setLayout(outer)
+
         self.bus.ticker_selected.connect(lambda t: (self.ticker_input.setText(t), self._analyze()))
 
     def _on_mode_change(self, mode):
@@ -132,10 +210,17 @@ class TradePanel(QWidget):
             self.interval_cb.setVisible(False)
             self.interval_label.setVisible(False)
 
+    def _update_estimate(self):
+        qty = self.trade_qty.value()
+        cost = qty * self._current_price
+        self.trade_est.setText(f"Cost: ${cost:,.2f}")
+        self.buy_btn.setText(f"BUY {qty} (${cost:,.0f})")
+        self.sell_btn.setText(f"SELL {qty}")
+
     def _analyze(self):
         ticker = self.ticker_input.text().strip().upper()
         if not ticker:
-            self.bus.log_entry.emit("Enter a ticker symbol", "warn")
+            self.bus.log_entry.emit("Enter a ticker", "warn")
             return
 
         mode = self.mode_cb.currentText()
@@ -145,46 +230,34 @@ class TradePanel(QWidget):
         self.run_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.reset()
-        self.progress.set_progress(10, f"Fetching {ticker} ({mode})...", f"{period} @ {interval}")
-        self.progress.add_log(f"Analyzing {ticker} — {mode} mode")
+        self.progress.set_progress(10, f"Analyzing {ticker} ({mode})...", f"{period} @ {interval}")
         self.bus.log_entry.emit(f"Analyzing {ticker} ({mode})...", "info")
 
-        def _fetch_and_train():
-            if mode == "Intraday":
-                data = fetch_intraday(ticker, period, interval)
-                feat_mode = "intraday"
-            else:
-                data = fetch_longterm(ticker, period)
-                feat_mode = "longterm"
-
+        def _work():
+            data = fetch_intraday(ticker, period, interval) if mode == "Intraday" else fetch_longterm(ticker, period)
             if data.empty or len(data) < 30:
                 self._analysis_done.emit(ticker, None, None, [], mode)
                 return
-
-            feats = get_all_features(feat_mode)
+            feats = get_all_features("intraday" if mode == "Intraday" else "longterm")
             model, used = train_lgbm(data, feats, ticker)
-            self._analysis_done.emit(ticker, model, data, used if used else [], mode)
+            self._analysis_done.emit(ticker, model, data, used or [], mode)
 
-        threading.Thread(target=_fetch_and_train, daemon=True).start()
+        threading.Thread(target=_work, daemon=True).start()
 
     def _on_done(self, ticker, model, data, features, mode):
         self.run_btn.setEnabled(True)
-
         if model is None or data is None:
-            self.progress.set_progress(100, "Failed", "Not enough data — try a longer period")
-            self.bus.log_entry.emit(f"{ticker}: not enough data", "error")
+            self.progress.set_progress(100, "Failed", "Not enough data")
             return
 
-        self.progress.set_progress(80, "Running predictions...", f"{len(features)} features")
-        self.progress.add_log(f"Model trained — {len(features)} features")
-
-        self.model = model
-        self.features = features
+        self.model, self.features = model, features
         actions, confs, probs = predict_lgbm(model, data, features)
         act = LABEL_NAMES[actions[-1]]
         conf = confs[-1]
-        price = data["Close"].iloc[-1]
+        price = float(data["Close"].iloc[-1])
         p = probs[-1]
+        self._current_ticker = ticker
+        self._current_price = price
 
         colors = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}
         self.signal_label.setText(f"{act}  {ticker}  —  ${price:.2f}  ({conf:.0%})")
@@ -196,20 +269,69 @@ class TradePanel(QWidget):
         size = self.rm.position_size(price, atr, confidence=conf)
 
         self.stats_label.setText(
-            f"SELL {p[0]:.0%}  |  HOLD {p[1]:.0%}  |  BUY {p[2]:.0%}\n"
-            f"ATR: ${atr:.2f} ({atr/price*100:.1f}%)  |  "
-            f"Position: {size} shares  |  SL: ${sl:.2f}  |  TP: ${tp:.2f}\n"
-            f"Mode: {mode}  |  {len(data)} bars analyzed"
+            f"SELL {p[0]:.0%} | HOLD {p[1]:.0%} | BUY {p[2]:.0%}\n"
+            f"ATR: ${atr:.2f} | Position: {size} | SL: ${sl:.2f} | TP: ${tp:.2f}"
         )
 
-        # Chart
-        self._plot(ticker, data, mode)
+        # Update sidebar
+        self.trade_price_label.setText(f"Price: ${price:.2f}")
+        self.trade_qty.setValue(size if size > 0 else 1)
+        self._update_estimate()
 
-        self.progress.set_progress(100, f"Done — {act} {ticker}", f"{conf:.0%} confidence")
-        self.progress.add_log(f"Signal: {act} @ ${price:.2f} ({conf:.0%})")
+        # Fetch buying power async
+        if self.broker:
+            def _bp():
+                try:
+                    acct = self.broker.get_account()
+                    bp = float(acct.get("buying_power", 0))
+                    QTimer.singleShot(0, lambda: self.trade_bp.setText(f"BP: ${bp:,.2f}"))
+                except: pass
+            threading.Thread(target=_bp, daemon=True).start()
+
+        self._plot(ticker, data, mode)
+        self.progress.set_progress(100, f"{act} {ticker}", f"{conf:.0%}")
 
         log_decision(ticker, act, conf, price, size, sl, tp, atr, [float(x) for x in p],
-                     reasoning=f"Trade panel {mode} analysis")
+                     reasoning=f"Trade panel {mode}")
+
+    def _execute_trade(self, side):
+        ticker = self._current_ticker or self.ticker_input.text().strip().upper()
+        if not ticker or not self.broker:
+            self.bus.log_entry.emit("Enter ticker and connect broker", "warn")
+            return
+        qty = self.trade_qty.value()
+        otype = self.trade_order_type.currentText().lower().replace(" ", "_")
+        tif = self.trade_tif.currentText().lower()
+        limit_price = None
+        if otype != "market":
+            try: limit_price = float(self.trade_limit_price.text())
+            except:
+                self.bus.log_entry.emit("Enter a valid price", "warn")
+                return
+
+        self.trade_status.setText(f"Submitting {side.upper()} {ticker} x{qty}...")
+        self.bus.log_entry.emit(f"Submitting {side.upper()} {ticker} x{qty}...", "info")
+
+        def _exec():
+            if side == "sell" and otype == "market":
+                result = self.broker.close_position(ticker, qty=qty)
+            else:
+                result = self.broker.place_order(ticker, qty, side, order_type=otype,
+                    time_in_force=tif, limit_price=limit_price)
+            self._trade_done.emit(result, side, qty)
+
+        threading.Thread(target=_exec, daemon=True).start()
+
+    def _on_trade_result(self, result, side, qty):
+        ticker = self._current_ticker
+        if "error" in result:
+            self.trade_status.setText(f"Failed: {result['error'][:60]}")
+            self.bus.log_entry.emit(f"{side.upper()} {ticker} failed: {result['error'][:80]}", "error")
+        else:
+            oid = result.get("id", "?")
+            self.trade_status.setText(f"Order {oid[:12]}")
+            self.bus.log_entry.emit(f"{side.upper()} {ticker} x{qty} — {oid}", "trade")
+            self.bus.positions_changed.emit()
 
     def _plot(self, ticker, data, mode):
         self.figure.clear()
@@ -217,46 +339,32 @@ class TradePanel(QWidget):
         self.figure.set_facecolor(cc["fig_bg"])
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(cc["ax_bg"])
-
         closes = data["Close"].values
         x = list(range(len(closes)))
-        timestamps = data.index
-
-        trending_up = closes[-1] >= closes[0]
-        color = COLOR_BUY if trending_up else COLOR_SELL
-
+        ts = data.index
+        color = COLOR_BUY if closes[-1] >= closes[0] else COLOR_SELL
         ax.plot(x, closes, color=color, linewidth=1.5)
         c_min = min(closes)
         ax.fill_between(x, closes, c_min, alpha=0.08, color=color)
         c_range = max(closes) - c_min if max(closes) != c_min else 1
         ax.set_ylim(c_min - c_range * 0.1, max(closes) + c_range * 0.1)
-
-        # EMAs if available
         if "EMA_9" in data.columns:
             ax.plot(x, data["EMA_9"].values, color=BRAND_ACCENT, linewidth=1, alpha=0.6, label="EMA9")
         if "EMA_21" in data.columns:
             ax.plot(x, data["EMA_21"].values, color=BRAND_SECONDARY, linewidth=1, alpha=0.6, label="EMA21")
-        if "SMA_50" in data.columns and mode == "Long-Term":
-            ax.plot(x, data["SMA_50"].values, color=CHART_VWAP, linewidth=1, alpha=0.6, label="SMA50")
-
         ax.set_title(f"{ticker} — {mode}", color=cc["text"], fontsize=10)
-        ax.tick_params(colors=cc["muted"], labelsize=7)
+        ax.tick_params(colors=cc["muted"], labelsize=6)
         ax.grid(True, alpha=0.15, color=cc["grid"])
         ax.legend(fontsize=7, facecolor=cc["ax_bg"], edgecolor=cc["grid"], labelcolor=cc["text"])
-
-        # X-axis labels
         n = len(x)
         step = max(1, n // 5)
         ticks = list(range(0, n, step))
-        if ticks[-1] != n - 1:
-            ticks.append(n - 1)
+        if ticks[-1] != n - 1: ticks.append(n - 1)
         fmt = "%m/%d %H:%M" if mode == "Intraday" else "%Y/%m/%d"
         ax.set_xticks([x[i] for i in ticks])
-        ax.set_xticklabels([timestamps[i].strftime(fmt) for i in ticks], fontsize=6)
+        ax.set_xticklabels([ts[i].strftime(fmt) for i in ticks], fontsize=6)
         ax.yaxis.set_major_formatter(plt.matplotlib.ticker.FuncFormatter(lambda v, _: f"${v:,.2f}"))
         self.figure.subplots_adjust(left=0.10, right=0.95, top=0.90, bottom=0.14)
         self.canvas.draw()
-
         from core.ui.chart_tooltip import ChartTooltip
-        self._tooltip = ChartTooltip(self.canvas, ax, x, list(closes),
-                                      x_labels=list(timestamps))
+        self._tooltip = ChartTooltip(self.canvas, ax, x, list(closes), x_labels=list(ts))

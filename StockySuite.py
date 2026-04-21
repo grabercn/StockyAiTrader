@@ -311,10 +311,10 @@ class StockySuite(QMainWindow):
 
         self._panel_factories = [
             ("Dashboard",    "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
+            ("AI Agent",     "robot",     lambda: AIDashboardPanel(self.broker, self.event_bus)),
             ("Scanner",      "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
             ("Portfolio",    "wallet",    lambda: PortfolioPanel(self.broker, self.event_bus)),
             ("Trade",        "bolt",      lambda: TradePanel(self.broker, self.risk_manager, self.event_bus)),
-            ("AI Agent",     "robot",     lambda: AIDashboardPanel(self.broker, self.event_bus)),
             ("Logs",         "log",       lambda: LogsPanel(self.event_bus)),
             ("Tax Reports",  "tax",       lambda: TaxPanel(self.broker, self.event_bus)),
             ("Testing",      "test",      lambda: TestingPanel(self.broker, self.event_bus)),
@@ -645,8 +645,8 @@ def boot_app():
 
     view_menu = suite.menuBar().addMenu("View")
     for i, (name, icon_key) in enumerate([
-        ("Dashboard", "dashboard"), ("Scanner", "scan"), ("Portfolio", "wallet"),
-        ("Trade", "bolt"), ("AI Agent", "robot"), ("Logs", "log"),
+        ("Dashboard", "dashboard"), ("AI Agent", "robot"), ("Scanner", "scan"),
+        ("Portfolio", "wallet"), ("Trade", "bolt"), ("Logs", "log"),
         ("Tax Reports", "tax"), ("Testing", "test"), ("Settings", "settings"),
     ]):
         action = QAction(StockyIcons.get_icon(icon_key, 16, BRAND_PRIMARY), name, suite)

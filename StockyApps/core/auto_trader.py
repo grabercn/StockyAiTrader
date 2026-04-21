@@ -147,8 +147,12 @@ class AutoTraderService(QThread):
             self.log.emit(f"Checking {stock.ticker}...", "info")
             stock.last_check = datetime.now().strftime("%H:%M:%S")
 
-            # Fetch data
-            # Every 10 checks, do a full re-fetch to prevent data drift
+            # Invalidate price cache for fresh data on each check
+            from .data import _price_cache
+            keys_to_clear = [k for k in _price_cache if k[0] == stock.ticker]
+            for k in keys_to_clear:
+                del _price_cache[k]
+
             data = fetch_intraday(stock.ticker, period=stock.period, interval=stock.interval)
 
             if data.empty or len(data) < 30:
@@ -178,7 +182,7 @@ class AutoTraderService(QThread):
             stock.last_confidence = confidence
             stock.last_price = price
 
-            # Log the decision
+            # Log every decision
             log_decision(stock.ticker, action, confidence, price,
                         self.rm.position_size(price, atr),
                         self.rm.stop_loss(price, atr, "buy" if action == "BUY" else "sell"),
@@ -186,19 +190,22 @@ class AutoTraderService(QThread):
                         atr, [float(p) for p in probs[-1]],
                         reasoning=f"AutoTrader check #{stock.check_count}")
 
-            # Signal change?
-            if action != prev_signal and action != "HOLD":
+            # Handle signal
+            if action == "HOLD":
+                self.log.emit(
+                    f"{stock.ticker}: HOLD ({confidence:.0%}) @ ${price:.2f} — waiting",
+                    "system",
+                )
+            elif action != prev_signal:
                 self.log.emit(
                     f"Signal change: {stock.ticker} {prev_signal} → {action} ({confidence:.0%})",
                     "trade",
                 )
-
-                # Auto-execute if enabled and confident enough
                 if stock.auto_execute and confidence >= stock.min_confidence and self.broker:
                     self._execute_trade(stock, action, price, atr)
             else:
                 self.log.emit(
-                    f"{stock.ticker}: {action} ({confidence:.0%}) @ ${price:.2f} — no change",
+                    f"{stock.ticker}: {action} ({confidence:.0%}) @ ${price:.2f} — holding signal",
                     "info",
                 )
 
@@ -206,13 +213,39 @@ class AutoTraderService(QThread):
             self.log.emit(f"{stock.ticker} check failed: {e}", "error")
 
     def _execute_trade(self, stock, action, price, atr):
-        """Execute a trade based on signal."""
+        """Execute buy or sell based on signal. Sells can be partial based on confidence."""
         size = self.rm.position_size(price, atr)
         if size <= 0:
             self.log.emit(f"{stock.ticker}: position size 0 — skipping", "warn")
             return
 
         side = "buy" if action == "BUY" else "sell"
+
+        # For sells: determine qty based on confidence
+        # High confidence = sell all, lower = sell partial
+        if side == "sell" and self.broker:
+            try:
+                positions = self.broker.get_positions()
+                held = 0
+                if isinstance(positions, list):
+                    for p in positions:
+                        if p.get("symbol", "").upper() == stock.ticker.upper():
+                            held = int(float(p.get("qty", 0)))
+                            break
+                if held > 0:
+                    conf = stock.last_confidence
+                    if conf > 0.7:
+                        size = held  # Strong sell = sell all
+                    elif conf > 0.5:
+                        size = max(1, int(held * 0.5))  # Moderate = sell half
+                    else:
+                        size = max(1, int(held * 0.25))  # Weak = sell quarter
+                else:
+                    self.log.emit(f"{stock.ticker}: no position to sell", "info")
+                    return
+            except Exception:
+                pass
+
         sl = self.rm.stop_loss(price, atr, side)
         tp = self.rm.take_profit(price, atr, side)
 
