@@ -1449,34 +1449,77 @@ class ScannerPanel(QWidget):
 
     def _auto_invest(self):
         if not self.selected:
-            self.bus.log_entry.emit("Select tickers first — check the boxes next to stocks you want to invest in", "warn")
+            self.bus.log_entry.emit("Select tickers first — check the boxes", "warn")
             return
         if not self.broker:
-            self.bus.log_entry.emit("Alpaca API not connected — go to Settings tab and enter your API keys from alpaca.markets", "error")
+            self.bus.log_entry.emit("Alpaca API not connected — Settings > API Keys", "error")
             return
 
         actionable = [r for r in self.results if r.ticker in self.selected and r.action in ("BUY", "SELL") and r.position_size > 0]
         if not actionable:
-            self.bus.log_entry.emit("No actionable signals in selection — all HOLD or 0 shares", "warn")
+            self.bus.log_entry.emit("No actionable signals in selection", "warn")
             return
 
-        for r in actionable:
-            side = "buy" if r.action == "BUY" else "sell"
-            if side == "sell":
-                result = self.broker.close_position(r.ticker, qty=r.position_size)
-            else:
-                result = self.broker.place_order(r.ticker, r.position_size, side,
-                                                 stop_loss=r.stop_loss, take_profit=r.take_profit)
-            oid = result.get("id", "failed")
-            if "error" in result:
-                self.bus.log_entry.emit(f"{r.action} {r.ticker} FAILED: {result['error']}", "error")
-                log_trade_execution(r.ticker, side, r.position_size, "market", "failed", error=result["error"])
-            else:
-                self.bus.log_entry.emit(f"{r.action} {r.ticker} x{r.position_size} — order {oid}", "trade")
-                self.bus.trade_executed.emit(r.ticker, side, r.position_size, oid)
-                log_trade_execution(r.ticker, side, r.position_size, "market", oid)
+        buys = [r for r in actionable if r.action == "BUY"]
+        sells = [r for r in actionable if r.action == "SELL"]
 
-        self.bus.positions_changed.emit()
+        confirm = QMessageBox.question(
+            self, "Auto-Invest",
+            f"Execute {len(actionable)} trades?\n"
+            f"  {len(buys)} BUY orders\n"
+            f"  {len(sells)} SELL orders\n\n"
+            f"Buying power will be split across BUY orders.\n"
+            f"This runs in the background — some may fail.\n\nProceed?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.bus.log_entry.emit(f"Auto-investing {len(actionable)} stocks in background...", "trade")
+        self.invest_btn.setEnabled(False)
+
+        import threading
+        def _execute_all():
+            # Get buying power and split across buys
+            try:
+                acct = self.broker.get_account()
+                bp = float(acct.get("buying_power", 0))
+            except Exception:
+                bp = 0
+
+            bp_per_stock = bp / max(1, len(buys)) if buys else 0
+            succeeded, failed = 0, 0
+
+            for r in actionable:
+                try:
+                    side = "buy" if r.action == "BUY" else "sell"
+                    if side == "sell":
+                        result = self.broker.close_position(r.ticker, qty=r.position_size)
+                    else:
+                        # Cap shares to buying power allocation
+                        max_shares = int(bp_per_stock / r.price) if r.price > 0 else r.position_size
+                        qty = min(r.position_size, max_shares) if max_shares > 0 else r.position_size
+                        qty = max(1, qty)
+                        result = self.broker.place_order(r.ticker, qty, side,
+                                                         stop_loss=r.stop_loss, take_profit=r.take_profit)
+
+                    if "error" in result:
+                        failed += 1
+                        self.bus.log_entry.emit(f"{r.action} {r.ticker} FAILED: {result['error'][:60]}", "error")
+                    else:
+                        succeeded += 1
+                        oid = result.get("id", "?")
+                        self.bus.log_entry.emit(f"{r.action} {r.ticker} x{r.position_size} — {oid}", "trade")
+                        log_trade_execution(r.ticker, side, r.position_size, "market", oid)
+                except Exception as e:
+                    failed += 1
+                    self.bus.log_entry.emit(f"{r.ticker} error: {e}", "error")
+
+            self.bus.log_entry.emit(f"Auto-invest done: {succeeded} succeeded, {failed} failed", "trade")
+            self.bus.positions_changed.emit()
+            QTimer.singleShot(0, lambda: self.invest_btn.setEnabled(True))
+
+        threading.Thread(target=_execute_all, daemon=True).start()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

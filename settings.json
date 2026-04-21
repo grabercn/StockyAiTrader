@@ -48,10 +48,62 @@
     "ui_zoom": 1.0,
     "aggressivity": "Default",
     "quit_on_close": false,
-    "scan_avg_seconds": 50.02,
+    "scan_avg_seconds": 9.74,
     "sim_trade_delay": true,
     "monitored_stocks": {
         "AAPL": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "NVDA": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "MDB": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "ZS": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "GOOGL": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "DDOG": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "CRM": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "AI": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "SNOW": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "PATH": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "PLTR": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "MSFT": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "CRWD": {
+            "period": "5d",
+            "interval": "5m"
+        },
+        "NET": {
             "period": "5d",
             "interval": "5m"
         }

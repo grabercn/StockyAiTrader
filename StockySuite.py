@@ -306,12 +306,10 @@ class StockySuite(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.North)
 
-        # Create panels — each wrapped in try/except so one bad panel
-        # doesn't kill the entire app
+        # Lazy-load panels — only Dashboard builds on boot, others on first click
         from core.ui.icons import StockyIcons
 
-        # Tab definitions: (name, icon_key, factory)
-        panels = [
+        self._panel_factories = [
             ("Dashboard",    "dashboard", lambda: DashboardPanel(self.broker, self.event_bus)),
             ("Scanner",      "scan",      lambda: ScannerPanel(self.broker, self.risk_manager, self.event_bus)),
             ("Portfolio",    "wallet",    lambda: PortfolioPanel(self.broker, self.event_bus)),
@@ -322,29 +320,72 @@ class StockySuite(QMainWindow):
             ("Testing",      "test",      lambda: TestingPanel(self.broker, self.event_bus)),
             ("Settings",     "settings",  lambda: SettingsPanel(self.event_bus)),
         ]
+        self._loaded_tabs = {}
 
-        for tab_name, icon_key, factory in panels:
-            try:
-                panel = factory()
-                icon = StockyIcons.get_icon(icon_key, 22, BRAND_PRIMARY)
-                self.tabs.addTab(panel, icon, tab_name)
-                # Store reference for cross-panel access
-                attr = tab_name.lower().replace(" ", "_")
-                setattr(self, attr, panel)
-            except Exception as e:
-                # Create a fallback error panel instead of crashing
-                error_panel = QWidget()
-                error_layout = QVBoxLayout()
-                error_lbl = QLabel(f"Failed to load {tab_name}:\n{e}")
-                error_lbl.setStyleSheet(f"color: {COLOR_SELL}; padding: 20px;")
-                error_lbl.setWordWrap(True)
-                error_layout.addWidget(error_lbl)
-                error_panel.setLayout(error_layout)
-                self.tabs.addTab(error_panel, f"{tab_name} (!)")
-                log_event("panel_error", f"{tab_name} failed to load: {e}")
-                print(f"[ERROR] Panel '{tab_name}' failed: {e}", flush=True)
+        for i, (tab_name, icon_key, factory) in enumerate(self._panel_factories):
+            icon = StockyIcons.get_icon(icon_key, 22, BRAND_PRIMARY)
+            if i == 0:
+                # Build Dashboard immediately
+                try:
+                    panel = factory()
+                    self.tabs.addTab(panel, icon, tab_name)
+                    attr = tab_name.lower().replace(" ", "_")
+                    setattr(self, attr, panel)
+                    self._loaded_tabs[i] = True
+                except Exception as e:
+                    self._add_error_tab(tab_name, e)
+                    self._loaded_tabs[i] = True
+            else:
+                # Placeholder — builds on first click
+                placeholder = QWidget()
+                pl = QVBoxLayout()
+                loading_lbl = QLabel(f"Loading {tab_name}...")
+                loading_lbl.setAlignment(Qt.AlignCenter)
+                loading_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 14px;")
+                pl.addWidget(loading_lbl)
+                placeholder.setLayout(pl)
+                self.tabs.addTab(placeholder, icon, tab_name)
 
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
+
+    def _on_tab_changed(self, index):
+        """Lazy-load panel on first tab click."""
+        if index in self._loaded_tabs:
+            return
+        self._loaded_tabs[index] = True
+
+        if index >= len(self._panel_factories):
+            return
+
+        tab_name, icon_key, factory = self._panel_factories[index]
+        try:
+            panel = factory()
+            self.tabs.removeTab(index)
+            from core.ui.icons import StockyIcons
+            icon = StockyIcons.get_icon(icon_key, 22, BRAND_PRIMARY)
+            self.tabs.insertTab(index, panel, icon, tab_name)
+            self.tabs.setCurrentIndex(index)
+            attr = tab_name.lower().replace(" ", "_")
+            setattr(self, attr, panel)
+        except Exception as e:
+            self._add_error_tab(tab_name, e, index)
+
+    def _add_error_tab(self, tab_name, error, index=None):
+        error_panel = QWidget()
+        error_layout = QVBoxLayout()
+        error_lbl = QLabel(f"Failed to load {tab_name}:\n{error}")
+        error_lbl.setStyleSheet(f"color: {COLOR_SELL}; padding: 20px;")
+        error_lbl.setWordWrap(True)
+        error_layout.addWidget(error_lbl)
+        error_panel.setLayout(error_layout)
+        if index is not None:
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, error_panel, f"{tab_name} (!)")
+        else:
+            self.tabs.addTab(error_panel, f"{tab_name} (!)")
+        log_event("panel_error", f"{tab_name} failed to load: {error}")
+        print(f"[ERROR] Panel '{tab_name}' failed: {error}", flush=True)
 
         # Reconnect broker on settings change
         self.event_bus.settings_changed.connect(self._on_settings_changed)
