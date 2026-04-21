@@ -310,35 +310,31 @@ class DashboardPanel(QWidget):
             self.orders_table.setRowCount(0)
             open_orders = []
         self.orders_table.setRowCount(len(open_orders))
-            for i, o in enumerate(open_orders):
-                # Show limit price if limit order, else "market"
-                price_str = "market"
-                if o.get("type") == "limit" and o.get("limit_price"):
-                    price_str = f"${float(o['limit_price']):.2f}"
-                elif o.get("type") == "stop" and o.get("stop_price"):
-                    price_str = f"${float(o['stop_price']):.2f}"
+        for i, o in enumerate(open_orders):
+            price_str = "market"
+            if o.get("type") == "limit" and o.get("limit_price"):
+                price_str = f"${float(o['limit_price']):.2f}"
+            elif o.get("type") == "stop" and o.get("stop_price"):
+                price_str = f"${float(o['stop_price']):.2f}"
 
-                vals = [
-                    o.get("symbol", ""), o.get("side", ""),
-                    o.get("qty", "0"), o.get("type", ""),
-                    price_str, o.get("status", ""),
-                ]
-                for j, v in enumerate(vals):
-                    item = QTableWidgetItem(str(v))
-                    item.setTextAlignment(Qt.AlignCenter)
-                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                    if j == 1:
-                        item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
-                    self.orders_table.setItem(i, j, item)
+            vals = [
+                o.get("symbol", ""), o.get("side", ""),
+                o.get("qty", "0"), o.get("type", ""),
+                price_str, o.get("status", ""),
+            ]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(str(v))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if j == 1:
+                    item.setForeground(QColor(COLOR_BUY if v == "buy" else COLOR_SELL))
+                self.orders_table.setItem(i, j, item)
 
-                # Cancel button
-                oid = o.get("id", "")
-                cancel_btn = QPushButton("Cancel")
-                cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
-                cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
-                self.orders_table.setCellWidget(i, 6, cancel_btn)
-        else:
-            self.orders_table.setRowCount(0)
+            oid = o.get("id", "")
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 9px; padding: 2px 6px;")
+            cancel_btn.clicked.connect(lambda _, _id=oid: self._cancel_order(_id))
+            self.orders_table.setCellWidget(i, 6, cancel_btn)
 
         # Chart (already fetched)
         if "error" not in hist and hist.get("equity"):
