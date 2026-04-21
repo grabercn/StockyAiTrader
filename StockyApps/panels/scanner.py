@@ -517,30 +517,34 @@ class ScannerPanel(QWidget):
             is_insufficient = bool(r.error)
             grey = "#8899aa"  # Lighter grey that's visible on both dark and light backgrounds
 
-            items = [
-                (r.ticker, None),
-                (r.action if not is_insufficient else "--",
-                 {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(r.action) if not is_insufficient else grey),
-                (f"{r.confidence:.0%}" if not is_insufficient else "--", grey if is_insufficient else None),
-                (f"${r.price:.2f}" if r.price else "--", grey if is_insufficient else None),
-                (str(r.position_size) if r.position_size and not is_insufficient else "--", grey if is_insufficient else None),
-                (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss and not is_insufficient else "--", grey if is_insufficient else None),
-                ((f"{r.score:.2f}" + (f" [{settings_str}]" if settings_str else "")) if not is_insufficient else "no data",
-                 grey if is_insufficient else None),
-            ]
-            for j, (val, color) in enumerate(items):
-                it = QTableWidgetItem(val)
-                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-                if is_insufficient:
+            if is_insufficient:
+                vals = [r.ticker, "--", "--", f"${r.price:.2f}" if r.price else "--",
+                        "--", "--", r.error[:30] if r.error else "no data"]
+                for j, val in enumerate(vals):
+                    it = QTableWidgetItem(str(val))
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     it.setForeground(QColor(grey))
-                elif color:
+                    if j == 0:
+                        it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
+                    self.table.setItem(i, j + 1, it)
+            else:
+                signal_color = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(r.action, TEXT_SECONDARY)
+                vals = [
+                    (r.ticker, TEXT_SECONDARY, True),
+                    (r.action, signal_color, True),
+                    (f"{r.confidence:.0%}", TEXT_SECONDARY, False),
+                    (f"${r.price:.2f}" if r.price else "--", TEXT_SECONDARY, False),
+                    (str(r.position_size) if r.position_size else "--", TEXT_SECONDARY, False),
+                    (f"${r.stop_loss:.0f}/${r.take_profit:.0f}" if r.stop_loss else "--", TEXT_SECONDARY, False),
+                    (f"{r.score:.2f}" + (f" [{settings_str}]" if settings_str else ""), TEXT_SECONDARY, False),
+                ]
+                for j, (val, color, bold) in enumerate(vals):
+                    it = QTableWidgetItem(str(val))
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     it.setForeground(QColor(color))
-                    it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
-                if j == 0:
-                    it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
-                    if is_insufficient:
-                        it.setForeground(QColor(grey))
-                self.table.setItem(i, j+1, it)
+                    if bold:
+                        it.setFont(QFont(FONT_MONO, 11, QFont.Bold))
+                    self.table.setItem(i, j + 1, it)
 
             # Auto-trade toggle button with icon
             is_monitored = hasattr(self, '_auto_service') and self._auto_service and self._auto_service.is_monitoring(r.ticker)
