@@ -692,8 +692,11 @@ class AIDashboardPanel(QWidget):
                     if r.action == "HOLD" or r.confidence < min_conf:
                         if r.action == "HOLD":
                             holds += 1
+                            self.bus.log_entry.emit(f"    Decision: HOLD {r.ticker} — no action", "system")
                         else:
                             skipped += 1
+                            self.bus.log_entry.emit(
+                                f"    Decision: SKIP {r.ticker} — {r.confidence:.0%} below {min_conf:.0%} threshold", "system")
                         continue
 
                     if r.action == "SELL" and trades_today < max_trades and self.broker:
@@ -711,7 +714,7 @@ class AIDashboardPanel(QWidget):
                                 result = self.broker.close_position(r.ticker, qty=qty)
                                 if "error" not in result:
                                     trades_today += 1
-                                    self.bus.log_entry.emit(f"Agent SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
+                                    self.bus.log_entry.emit(f"    Decision: EXECUTE SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
                                     self._agent_stocks[r.ticker]["qty"] = held - qty
                                     self._agent_stocks[r.ticker]["mode"] = "Auto"
                         except Exception as _e:
@@ -734,7 +737,7 @@ class AIDashboardPanel(QWidget):
                                     if "error" not in result:
                                         trades_today += 1
                                         bp -= cost
-                                        self.bus.log_entry.emit(f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} (${cost:,.0f}, {r.confidence:.0%})", "trade")
+                                        self.bus.log_entry.emit(f"    Decision: EXECUTE BUY {r.ticker} x{qty} @ ${r.price:.2f} (${cost:,.0f}, {r.confidence:.0%})", "trade")
                                         self._agent_stocks[r.ticker]["qty"] = qty
                                         self._agent_stocks[r.ticker]["mode"] = "Auto"
                                         try:
