@@ -989,6 +989,7 @@ class ScannerPanel(QWidget):
         from core.ui.theme import theme as _theme
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Deep Analysis - {ticker}")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
         dlg.setMinimumSize(650, 550)
         dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
 

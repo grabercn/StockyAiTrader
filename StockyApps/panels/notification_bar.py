@@ -297,6 +297,7 @@ class _NotificationBar(QWidget):
 
         dlg = QDialog(parent)
         dlg.setWindowTitle("Notifications")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
         dlg.setMinimumSize(500, 400)
         dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
 

@@ -528,6 +528,7 @@ class SettingsPanel(QWidget):
         from core.ui.theme import theme as _theme
         dlg = QDialog(self)
         dlg.setWindowTitle(f"How to get: {label}")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
         dlg.setMinimumSize(450, 300)
         dlg.setStyleSheet(f"QDialog {{ background-color: {_theme.color('bg_base')}; }}")
 
