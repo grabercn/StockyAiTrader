@@ -793,7 +793,87 @@ class AIDashboardPanel(QWidget):
                             except Exception as _e:
                                 self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} ERROR — {_e}", "error")
                         else:
-                            self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} — BP ${bp:,.0f} too low, skipping", "warn")
+                            # Capital rotation: sell weakest position to fund this buy
+                            # Default: only if this BUY is >80% confident
+                            # Aggressive/YOLO: if >60% confident
+                            rotate_threshold = 0.60 if profile_name in ("Aggressive", "YOLO") else 0.80
+                            if r.confidence >= rotate_threshold and trades_today < max_trades:
+                                self.bus.log_entry.emit(
+                                    f"    BP ${bp:,.0f} too low — attempting capital rotation...", "system")
+                                try:
+                                    positions = self.broker.get_positions()
+                                    if isinstance(positions, list) and len(positions) > 1:
+                                        # Find weakest position (worst P&L %)
+                                        worst = None
+                                        worst_pct = 999
+                                        for p in positions:
+                                            sym = p.get("symbol", "")
+                                            if sym == r.ticker:
+                                                continue  # Don't sell what we're trying to buy
+                                            pct = float(p.get("unrealized_plpc", 0))
+                                            if pct < worst_pct:
+                                                worst_pct = pct
+                                                worst = p
+
+                                        if worst:
+                                            w_sym = worst.get("symbol", "")
+                                            w_qty = int(float(worst.get("qty", 0)))
+                                            w_pl = float(worst.get("unrealized_pl", 0))
+
+                                            # Default: only sell if position is losing
+                                            # Aggressive: sell even flat positions
+                                            # YOLO: sell anything for better opportunity
+                                            sell_ok = False
+                                            if profile_name == "YOLO":
+                                                sell_ok = True
+                                            elif profile_name == "Aggressive":
+                                                sell_ok = worst_pct < 0.01  # Sell if <1% gain
+                                            else:
+                                                sell_ok = worst_pct < -0.005  # Default: only sell losers
+
+                                            if sell_ok and w_qty > 0:
+                                                # Sell the worst position
+                                                sell_result = self.broker.close_position(w_sym, qty=w_qty)
+                                                if "error" not in sell_result:
+                                                    trades_today += 1
+                                                    freed = w_qty * float(worst.get("current_price", 0))
+                                                    self.bus.log_entry.emit(
+                                                        f"    ROTATE: Sold {w_sym} x{w_qty} (P&L ${w_pl:+,.0f}) "
+                                                        f"to fund {r.ticker} — freed ${freed:,.0f}", "trade")
+
+                                                    # Now buy the target
+                                                    import time as _t; _t.sleep(1)
+                                                    try:
+                                                        acct2 = self.broker.get_account()
+                                                        bp = float(acct2.get("buying_power", 0))
+                                                    except: pass
+                                                    if bp >= 100:
+                                                        buy_qty = max(1, int(min(bp * 0.20, freed * 0.9) / r.price))
+                                                        if buy_qty > 0:
+                                                            buy_result = self.broker.place_order(r.ticker, buy_qty, "buy",
+                                                                stop_loss=r.stop_loss, take_profit=r.take_profit)
+                                                            if "error" not in buy_result:
+                                                                trades_today += 1
+                                                                self.bus.log_entry.emit(
+                                                                    f"    Decision: ROTATE BUY {r.ticker} x{buy_qty} "
+                                                                    f"@ ${r.price:.2f} ({r.confidence:.0%})", "trade")
+                                                                self._agent_stocks[r.ticker]["qty"] = buy_qty
+                                                                self._agent_stocks[r.ticker]["mode"] = "Auto"
+                                                            else:
+                                                                self.bus.log_entry.emit(
+                                                                    f"    ROTATE BUY failed: {buy_result.get('error','')[:40]}", "error")
+                                                else:
+                                                    self.bus.log_entry.emit(
+                                                        f"    ROTATE: {w_sym} sell failed: {sell_result.get('error','')[:40]}", "error")
+                                            else:
+                                                self.bus.log_entry.emit(
+                                                    f"    Decision: BUY {r.ticker} — no weak positions to rotate ({profile_name})", "warn")
+                                except Exception as _e:
+                                    self.bus.log_entry.emit(f"    Rotation error: {_e}", "error")
+                            else:
+                                self.bus.log_entry.emit(
+                                    f"    Decision: BUY {r.ticker} — BP ${bp:,.0f} too low, "
+                                    f"need >{rotate_threshold:.0%} conf for rotation ({r.confidence:.0%})", "warn")
 
                 self.bus.log_entry.emit(
                     f"Cycle {cycle}: {buys}B {sells}S {holds}H ({skipped} skipped)", "trade")
