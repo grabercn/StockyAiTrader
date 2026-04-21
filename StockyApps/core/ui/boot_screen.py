@@ -245,7 +245,12 @@ class BootScreen(QWidget):
         inner.addStretch()
 
         # Feature tagline at bottom
-        features_lbl = QLabel("LightGBM  ·  FinBERT  ·  10 Addons  ·  Risk Management")
+        # Dynamic stats
+        try:
+            from addons import get_all_addons
+            n_addons = len(get_all_addons())
+        except: n_addons = 10
+        features_lbl = QLabel(f"LightGBM  ·  FinBERT  ·  TinyLlama  ·  {n_addons} Addons  ·  RL Feedback")
         features_lbl.setAlignment(Qt.AlignCenter)
         features_lbl.setStyleSheet(f"color: #334155; font-size: 9px; background: transparent;")
         inner.addWidget(features_lbl)

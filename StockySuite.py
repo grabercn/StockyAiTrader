@@ -265,8 +265,28 @@ class StockySuite(QMainWindow):
         except Exception:
             pass
 
+    def _save_agent_state(self):
+        """Save autonomous agent state for resume on next boot."""
+        settings = load_settings()
+        # Save agent running state
+        ai_agent = getattr(self, 'ai_agent', None)
+        agent_was_running = ai_agent and getattr(ai_agent, '_agent_running', False)
+        settings["agent_was_running"] = agent_was_running
+
+        # Save monitored stocks
+        scanner = getattr(self, 'scanner', None)
+        if scanner and hasattr(scanner, '_auto_service') and scanner._auto_service:
+            monitored = {}
+            for ticker, stock in scanner._auto_service.get_monitored().items():
+                monitored[ticker] = {
+                    "period": stock.period, "interval": stock.interval,
+                }
+            settings["monitored_stocks"] = monitored
+        save_settings(settings)
+
     def closeEvent(self, event):
-        """Minimize to tray or quit based on user setting."""
+        """Save state, then minimize to tray or quit."""
+        self._save_agent_state()
         settings = load_settings()
         quit_on_close = settings.get("quit_on_close", False)
 
@@ -509,7 +529,7 @@ class AboutDialog(QDialog):
             "LightGBM machine learning, FinBERT sentiment analysis,\n"
             "10 pluggable signal addons, multi-stock scanning,\n"
             "risk management, and automated portfolio investing.\n\n"
-            "68 unit tests  |  38 ML features  |  4 hardware profiles"
+            f"186+ tests  |  38 ML features  |  {len(get_all_addons())} addons  |  RL feedback"
         )
         desc.setAlignment(Qt.AlignCenter)
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
@@ -723,8 +743,34 @@ def boot_app():
         fade_in.setEndValue(1.0)
         fade_in.setEasingCurve(QEasingCurve.OutCubic)
         fade_in.finished.connect(lambda: suite.setGraphicsEffect(None))
+        fade_in.finished.connect(lambda: QTimer.singleShot(1000, _check_agent_resume))
         fade_in.start()
         suite._entrance_anim = fade_in
+
+    def _check_agent_resume():
+        """Ask user if they want to resume the autonomous agent."""
+        settings = load_settings()
+        was_running = settings.get("agent_was_running", False)
+        monitored = settings.get("monitored_stocks", {})
+
+        if was_running and monitored:
+            reply = QMessageBox.question(
+                suite, "Resume AI Agent",
+                f"The AI Agent was managing {len(monitored)} stocks when you last closed.\n\n"
+                f"Stocks: {', '.join(list(monitored.keys())[:8])}"
+                + (f" +{len(monitored)-8} more" if len(monitored) > 8 else "") +
+                f"\n\nResume autonomous trading?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                # Navigate to AI Agent tab and start
+                suite.tabs.setCurrentIndex(1)  # AI Agent tab
+                ai = getattr(suite, 'ai_agent', None)
+                if ai:
+                    QTimer.singleShot(500, ai._toggle_agent)
+        elif monitored and not was_running:
+            # Just monitored stocks, no agent — already restored by scanner
+            pass
 
     reveal = WindowReveal(suite, on_done=_on_reveal_done)
     reveal.start()

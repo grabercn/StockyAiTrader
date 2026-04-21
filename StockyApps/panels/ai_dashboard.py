@@ -77,8 +77,17 @@ class AIDashboardPanel(QWidget):
 
         self.agent_status = QLabel("Agent: Stopped")
         self.agent_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
-        agent_row.addWidget(self.agent_status, 1)
+        agent_row.addWidget(self.agent_status)
+
+        self.agent_countdown = QLabel("")
+        self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
+        agent_row.addWidget(self.agent_countdown)
         al.addLayout(agent_row)
+
+        # Countdown timer
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.timeout.connect(self._tick_countdown)
+        self._countdown_secs = 0
 
         agent_box.setLayout(al)
         layout.addWidget(agent_box)
@@ -237,6 +246,15 @@ class AIDashboardPanel(QWidget):
         self.bus.log_entry.emit("All AI monitoring stopped", "system")
         self.refresh()
 
+    def _tick_countdown(self):
+        if self._countdown_secs > 0:
+            self._countdown_secs -= 1
+            mins = self._countdown_secs // 60
+            secs = self._countdown_secs % 60
+            self.agent_countdown.setText(f"Next cycle: {mins}m {secs}s")
+        else:
+            self.agent_countdown.setText("")
+
     def _toggle_agent(self):
         """Start/stop the fully autonomous agent."""
         if hasattr(self, '_agent_running') and self._agent_running:
@@ -264,26 +282,53 @@ class AIDashboardPanel(QWidget):
         self._agent_running = True
         self.agent_start_btn.setText("Stop Agent")
         self.agent_start_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 12px; padding: 8px 16px;")
-        self.agent_status.setText("Agent: Running — scanning...")
+        self.agent_status.setText("Agent: Running")
+        self._countdown_timer.start(1000)
         self.bus.log_entry.emit("Autonomous agent started", "trade")
         log_event("agent", "Autonomous agent started")
 
         threading.Thread(target=self._run_agent, daemon=True).start()
 
     def _run_agent(self):
-        """Run the autonomous agent loop."""
+        """Run the autonomous agent — uses aggressivity profile + RL feedback."""
         from core.scanner import scan_multiple
         from core.risk import RiskManager
         from core.profiles import get_optimal_workers
-        from core.discovery import get_most_active
+        from core.discovery import get_most_active, get_day_gainers, get_trending_social
+        from core.intelligent_trader import get_aggressivity
+        from core.logger import log_event
 
         rm = RiskManager()
         cycle = 0
 
+        # Load aggressivity profile
+        settings = load_settings()
+        profile_name = settings.get("aggressivity", "Default")
+        profile = get_aggressivity(profile_name)
+        min_conf = profile["min_confidence"]
+        size_mult = profile["size_multiplier"]
+        max_trades = profile["max_trades_per_day"]
+
+        # Try loading RL feedback model
+        rl_model = None
+        try:
+            from core.reinforcement import train_feedback_model, get_quality_score
+            rl_model, rl_acc, rl_count = train_feedback_model()
+            if rl_model:
+                self.bus.log_entry.emit(
+                    f"Agent: RL model loaded ({rl_count} trades, {rl_acc:.0%} accuracy)", "system")
+        except Exception:
+            pass
+
+        trades_today = 0
+        log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {min_conf:.0%}")
+
         while getattr(self, '_agent_running', False):
             cycle += 1
             try:
-                self.bus.log_entry.emit(f"Agent cycle {cycle}: scanning market...", "system")
+                self.bus.log_entry.emit(f"Agent cycle {cycle}: scanning...", "system")
+                QTimer.singleShot(0, lambda: self.agent_status.setText(
+                    f"Agent: Running — cycle {cycle}"))
 
                 # Get buying power
                 bp = 0
@@ -293,61 +338,134 @@ class AIDashboardPanel(QWidget):
                         bp = float(acct.get("buying_power", 0))
                     except: pass
 
-                # Scan most active stocks
-                tickers = get_most_active(15)
+                if trades_today >= max_trades:
+                    self.bus.log_entry.emit(
+                        f"Agent: max trades/day ({max_trades}) reached. Waiting.", "warn")
+                    for _ in range(300):
+                        if not getattr(self, '_agent_running', False): break
+                        time.sleep(1)
+                    continue
+
+                # Scan multiple sources for diverse opportunities
+                tickers = set()
+                try: tickers.update(get_most_active(10))
+                except: pass
+                try: tickers.update(get_day_gainers(5))
+                except: pass
+                try: tickers.update(get_trending_social(5))
+                except: pass
+                tickers = list(tickers)[:20]
+
                 if not tickers:
-                    self.bus.log_entry.emit("Agent: no tickers found, waiting...", "warn")
-                    time.sleep(60)
+                    self.bus.log_entry.emit("Agent: no tickers, waiting 2 min...", "warn")
+                    for _ in range(120):
+                        if not getattr(self, '_agent_running', False): break
+                        time.sleep(1)
                     continue
 
                 results = scan_multiple(tickers, "5d", "5m", rm,
                     max_workers=get_optimal_workers(), buying_power=bp)
 
-                # Filter by signal
-                buys = [r for r in results if r.action == "BUY" and r.confidence > 0.5 and not r.error]
-                sells = [r for r in results if r.action == "SELL" and r.confidence > 0.5 and not r.error]
+                # Apply RL quality scores
+                if rl_model:
+                    for r in results:
+                        if not r.error:
+                            try:
+                                atr_pct = r.atr / r.price if r.price > 0 else 0
+                                q = get_quality_score(rl_model, r.confidence, r.probs, atr_pct, r.action)
+                                r.confidence = min(1.0, r.confidence * q)
+                            except: pass
+
+                # Classify signals using profile thresholds
+                buys = [r for r in results if r.action == "BUY" and r.confidence >= min_conf and not r.error]
+                sells = [r for r in results if r.action == "SELL" and r.confidence >= min_conf and not r.error]
                 holds = [r for r in results if r.action == "HOLD" and not r.error]
 
                 self.bus.log_entry.emit(
-                    f"Agent cycle {cycle}: {len(buys)} BUY, {len(sells)} SELL, {len(holds)} HOLD",
-                    "trade",
-                )
+                    f"Cycle {cycle}: {len(buys)}B {len(sells)}S {len(holds)}H "
+                    f"(min_conf={min_conf:.0%}, BP=${bp:,.0f})", "trade")
 
-                # Execute sells first (free up capital)
+                # Execute sells first (dynamic — partial or full based on confidence)
                 if sells and self.broker:
-                    for r in sells[:3]:
+                    for r in sorted(sells, key=lambda x: -x.confidence)[:3]:
+                        if trades_today >= max_trades: break
                         try:
-                            result = self.broker.close_position(r.ticker)
-                            if "error" not in result:
-                                self.bus.log_entry.emit(f"Agent SELL {r.ticker} ({r.confidence:.0%})", "trade")
+                            positions = self.broker.get_positions()
+                            held = 0
+                            if isinstance(positions, list):
+                                for p in positions:
+                                    if p.get("symbol", "").upper() == r.ticker.upper():
+                                        held = int(float(p.get("qty", 0)))
+                                        break
+                            if held > 0:
+                                # Dynamic sell qty based on confidence
+                                if r.confidence > 0.7:
+                                    qty = held
+                                elif r.confidence > 0.5:
+                                    qty = max(1, int(held * 0.5))
+                                else:
+                                    qty = max(1, int(held * 0.25))
+
+                                result = self.broker.close_position(r.ticker, qty=qty)
+                                if "error" not in result:
+                                    trades_today += 1
+                                    self.bus.log_entry.emit(
+                                        f"Agent SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
                         except: pass
 
-                # Execute buys (split remaining BP)
-                if buys and self.broker and bp > 100:
-                    bp_per = bp / min(len(buys), 5)  # Max 5 buys per cycle
-                    for r in sorted(buys, key=lambda x: -x.confidence)[:5]:
-                        if not getattr(self, '_agent_running', False):
-                            break
+                # Execute buys — re-check BP before each, respect limits
+                if buys and self.broker and bp > 50:
+                    # Re-fetch actual BP (may have changed from sells)
+                    try:
+                        acct = self.broker.get_account()
+                        bp = float(acct.get("buying_power", 0))
+                    except: pass
+
+                    max_buys = min(len(buys), max(1, int(5 * size_mult)))
+                    bp_per = bp / max(1, max_buys)
+                    # Cap per-stock allocation to 20% of total BP
+                    bp_per = min(bp_per, bp * 0.20)
+
+                    for r in sorted(buys, key=lambda x: -x.score)[:max_buys]:
+                        if not getattr(self, '_agent_running', False): break
+                        if trades_today >= max_trades: break
+                        if bp < 50: break  # Stop if BP too low
                         try:
-                            qty = max(1, int(bp_per / r.price)) if r.price > 0 else 0
-                            if qty > 0:
+                            base_qty = max(1, int(bp_per / r.price)) if r.price > 0 else 0
+                            qty = max(1, int(base_qty * size_mult))
+                            cost = qty * r.price
+                            if qty > 0 and cost <= bp:
                                 result = self.broker.place_order(r.ticker, qty, "buy",
                                     stop_loss=r.stop_loss, take_profit=r.take_profit)
                                 if "error" not in result:
+                                    trades_today += 1
+                                    bp -= cost
                                     self.bus.log_entry.emit(
-                                        f"Agent BUY {r.ticker} x{qty} ({r.confidence:.0%})", "trade")
-                                    bp -= qty * r.price
+                                        f"Agent BUY {r.ticker} x{qty} @ ${r.price:.2f} "
+                                        f"(${cost:,.0f}, {r.confidence:.0%})", "trade")
+                                else:
+                                    self.bus.log_entry.emit(
+                                        f"Agent BUY {r.ticker} failed: {result.get('error','')[:50]}", "error")
+                            else:
+                                self.bus.log_entry.emit(
+                                    f"Agent: skip {r.ticker} — cost ${cost:,.0f} > BP ${bp:,.0f}", "info")
                         except: pass
 
-                self.bus.log_entry.emit(f"Agent cycle {cycle} complete. Next in 5 min.", "system")
+                self.bus.log_entry.emit(
+                    f"Cycle {cycle} done. {trades_today}/{max_trades} trades today. Next in 5 min.", "system")
 
             except Exception as e:
                 self.bus.log_entry.emit(f"Agent error: {e}", "error")
 
-            # Wait 5 minutes between cycles
+            # Wait 5 minutes with countdown
+            self._countdown_secs = 300
             for _ in range(300):
-                if not getattr(self, '_agent_running', False):
-                    break
+                if not getattr(self, '_agent_running', False): break
                 time.sleep(1)
+                self._countdown_secs = max(0, self._countdown_secs - 1)
 
+        self._countdown_secs = 0
+        self._countdown_timer.stop()
+        QTimer.singleShot(0, lambda: self.agent_countdown.setText(""))
         self.bus.log_entry.emit("Autonomous agent stopped", "system")
+        log_event("agent", f"Agent stopped after {cycle} cycles, {trades_today} trades")

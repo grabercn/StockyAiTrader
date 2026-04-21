@@ -147,11 +147,14 @@ class AutoTraderService(QThread):
             self.log.emit(f"Checking {stock.ticker}...", "info")
             stock.last_check = datetime.now().strftime("%H:%M:%S")
 
-            # Invalidate price cache for fresh data on each check
+            # Expire cache entries older than the check interval (keeps historical, refreshes recent)
+            import time as _t
             from .data import _price_cache
-            keys_to_clear = [k for k in _price_cache if k[0] == stock.ticker]
-            for k in keys_to_clear:
-                del _price_cache[k]
+            for k in list(_price_cache.keys()):
+                if k[0] == stock.ticker:
+                    _, cached_ts = _price_cache[k]
+                    if _t.time() - cached_ts > stock.interval_seconds:
+                        del _price_cache[k]
 
             data = fetch_intraday(stock.ticker, period=stock.period, interval=stock.interval)
 
