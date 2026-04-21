@@ -454,30 +454,94 @@ class AIDashboardPanel(QWidget):
             save_settings(settings)
             return
 
-        # Starting — check if there's a previous session to resume
+        # Starting — check for previous session
         settings = load_settings()
         monitored = settings.get("monitored_stocks", {})
+        tracked = settings.get("agent_tracked_stocks", {})
+        positions = settings.get("agent_managed_positions", [])
+        has_session = (monitored or tracked) and settings.get("agent_was_running", False)
 
-        if monitored and settings.get("agent_was_running", False):
-            reply = QMessageBox.question(
-                self, "Resume Previous Session?",
-                f"The agent was previously managing {len(monitored)} stocks.\n"
-                f"({', '.join(list(monitored.keys())[:6])})\n\n"
-                f"Resume previous session?\n"
-                f"Yes = Resume with same stocks\n"
-                f"No = Start fresh scan",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-            )
-            if reply == QMessageBox.No:
+        if has_session:
+            # Rich resume dialog with position table
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Resume AI Agent")
+            dlg.setWindowIcon(QApplication.instance().windowIcon())
+            dlg.setMinimumSize(500, 350)
+
+            lay = QVBoxLayout()
+            title = QLabel("Resume Previous Session?")
+            title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            all_stocks = {**tracked}
+            for t in monitored:
+                if t not in all_stocks:
+                    all_stocks[t] = monitored[t]
+
+            info = QLabel(f"{len(all_stocks)} stocks tracked, {len(positions)} positions held")
+            info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+            lay.addWidget(info)
+
+            if positions:
+                total_pl = sum(float(p.get("unrealized_pl", 0)) for p in positions)
+                total_val = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0)) for p in positions)
+                summary = QLabel(f"Value: ${total_val:,.0f}  |  P&L: ${total_pl:+,.2f}")
+                summary.setStyleSheet(f"color: {COLOR_PROFIT if total_pl >= 0 else COLOR_LOSS}; font-weight: bold;")
+                lay.addWidget(summary)
+
+                tbl = QTableWidget()
+                tbl.setColumnCount(4)
+                tbl.setHorizontalHeaderLabels(["Stock", "Qty", "Price", "P&L"])
+                tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                tbl.verticalHeader().setVisible(False)
+                tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                tbl.setMaximumHeight(150)
+                tbl.setRowCount(len(positions))
+                for i, p in enumerate(positions):
+                    vals = [p.get("symbol",""), f"{float(p.get('qty',0)):.0f}",
+                            f"${float(p.get('current_price',0)):.2f}",
+                            f"${float(p.get('unrealized_pl',0)):+,.2f}"]
+                    for j, v in enumerate(vals):
+                        item = QTableWidgetItem(v)
+                        item.setTextAlignment(Qt.AlignCenter)
+                        if j == 3:
+                            item.setForeground(QColor(COLOR_PROFIT if float(p.get("unrealized_pl",0)) >= 0 else COLOR_LOSS))
+                        tbl.setItem(i, j, item)
+                lay.addWidget(tbl)
+
+            note = QLabel("Resume = Continue with saved stocks + signals\nNew Session = Clear saved data, start fresh")
+            note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+            lay.addWidget(note)
+
+            btn_row = QHBoxLayout()
+            resume_btn = QPushButton("Resume Session")
+            resume_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 11px; padding: 7px 16px;")
+            resume_btn.clicked.connect(dlg.accept)
+            btn_row.addWidget(resume_btn)
+            new_btn = QPushButton("New Session")
+            new_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px; padding: 7px 16px;")
+            new_btn.clicked.connect(dlg.reject)
+            btn_row.addWidget(new_btn)
+            lay.addLayout(btn_row)
+
+            dlg.setLayout(lay)
+            result = dlg.exec_()
+
+            if result == QDialog.Rejected:
+                # New session — clear saved state
                 settings["agent_was_running"] = False
+                settings["agent_tracked_stocks"] = {}
                 save_settings(settings)
+                self._agent_stocks = {}
+                self.bus.log_entry.emit("Starting fresh session — saved data cleared", "system")
         else:
             confirm = QMessageBox.question(
                 self, "Start Autonomous Agent",
                 "The agent will:\n"
                 "• Scan the market for opportunities\n"
-                "• Buy/sell based on AI signals\n"
-                "• Respect your aggressivity profile + buying power\n\n"
+                "• Buy/sell based on AI + Gemini signals\n"
+                "• Rotate capital based on your aggressivity\n\n"
                 "All decisions logged transparently.\nStart?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
@@ -527,7 +591,7 @@ class AIDashboardPanel(QWidget):
         size_mult = profile["size_multiplier"]
         max_trades = profile["max_trades_per_day"]
 
-        # Try loading RL feedback model
+        # Load RL feedback model — retrains every 5 cycles with latest data
         rl_model = None
         try:
             from core.reinforcement import train_feedback_model, get_quality_score
@@ -537,6 +601,7 @@ class AIDashboardPanel(QWidget):
                     f"Agent: RL model loaded ({rl_count} trades, {rl_acc:.0%} accuracy)", "system")
         except Exception:
             pass
+        rl_retrain_interval = 5
 
         trades_today = 0
         log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {min_conf:.0%}")
@@ -632,6 +697,15 @@ class AIDashboardPanel(QWidget):
                                         for k, v in list(feats.items())[:3]:
                                             addon_signals[f"{addon.name}_{k}"] = v
                                 except: pass
+                    except: pass
+
+                # Retrain RL every N cycles with latest trade data
+                if cycle % rl_retrain_interval == 0 and cycle > 0:
+                    try:
+                        rl_model, rl_acc, rl_count = train_feedback_model()
+                        if rl_model:
+                            self.bus.log_entry.emit(
+                                f"  RL retrained: {rl_count} trades, {rl_acc:.0%} accuracy", "system")
                     except: pass
 
                 # Apply RL quality scores
