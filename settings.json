@@ -183,7 +183,7 @@
             "unrealized_pl": "41.535"
         }
     ],
-    "manage_manual_stocks": false,
+    "manage_manual_stocks": true,
     "gemini_enabled": true,
-    "gemini_api_key": "AIzaSyAfjA1p4bqRIh8oUKixRri6OUfZrqi5Irg"
+    "gemini_api_key": "15:52:53 Autonomous agent started\n15:52:55 Gemini advisor enabled\n15:52:55 Agent: RL model loaded (40 trades, 88% accuracy)\n15:52:55 Agent cycle 1: scanning market...\n15:52:55 Agent: BP=$394,936, profile=Default\n15:52:56 Agent: scanning 17 tickers from Active(10), Gainers(5), Trending(5)\n15:53:45 Autonomous agent stopped\n15:53:51 Autonomous agent started\n15:53:51 Agent: RL model loaded (40 trades, 88% accuracy)\n15:53:51 Agent cycle 1: scanning market...\n15:53:54 Agent: BP=$394,936, profile=Default\n15:53:54 Agent: scanning 17 tickers from Active(10), Gainers(5), Trending(5)\n15:53:55 Gemini (gemini-2.5-flash): HIMS BUY adj 100%\u2192100% \u2014 The AI signal is a strong BUY at 100% confidence, heavily supported by a 79% buy\n15:54:01 Gemini (gemini-2.5-flash): NVDA SELL adj 100%\u2192100% \u2014 The AI signal indicates a strong SELL with 100% confidence, which is heavily rei\n15:54:08 Gemini (gemini-2.5-flash): INTC BUY adj 100%\u2192100% \u2014 The AI signal is a strong BUY with 100% confidence, strongly supported by the hi\n15:54:14 Gemini (gemini-2.5-flash): HIMS BUY adj 100%\u2192100% \u2014 The AI signal indicates a strong BUY with 100% confidence, supported by probabil\n15:54:15 Gemini (gemini-2.5-flash): SOFI BUY adj 100%\u2192100% \u2014 The AI signal strongly recommends BUY with 100% confidence, heavily supported by"
 }

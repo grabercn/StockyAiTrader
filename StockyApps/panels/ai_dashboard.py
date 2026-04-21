@@ -375,26 +375,47 @@ class AIDashboardPanel(QWidget):
     def _toggle_agent(self):
         """Start/stop the fully autonomous agent."""
         if hasattr(self, '_agent_running') and self._agent_running:
+            # Stopping — save state for potential resume
             self._agent_running = False
             self.agent_start_btn.setText("Start Agent")
             self.agent_start_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 12px; padding: 8px 16px;")
             self.agent_status.setText("Agent: Stopped")
             self.bus.log_entry.emit("Autonomous agent stopped", "system")
+            # Mark that we have a resumable session
+            settings = load_settings()
+            settings["agent_was_running"] = True
+            save_settings(settings)
             return
 
-        confirm = QMessageBox.question(
-            self, "Start Autonomous Agent",
-            "The agent will:\n"
-            "• Scan the market for opportunities\n"
-            "• Buy stocks with strong BUY signals\n"
-            "• Sell positions with strong SELL signals\n"
-            "• Hold when signals are uncertain\n"
-            "• Respect your buying power and aggressivity profile\n\n"
-            "All decisions are logged and transparent.\nStart?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if confirm != QMessageBox.Yes:
-            return
+        # Starting — check if there's a previous session to resume
+        settings = load_settings()
+        monitored = settings.get("monitored_stocks", {})
+
+        if monitored and settings.get("agent_was_running", False):
+            reply = QMessageBox.question(
+                self, "Resume Previous Session?",
+                f"The agent was previously managing {len(monitored)} stocks.\n"
+                f"({', '.join(list(monitored.keys())[:6])})\n\n"
+                f"Resume previous session?\n"
+                f"Yes = Resume with same stocks\n"
+                f"No = Start fresh scan",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            )
+            if reply == QMessageBox.No:
+                settings["agent_was_running"] = False
+                save_settings(settings)
+        else:
+            confirm = QMessageBox.question(
+                self, "Start Autonomous Agent",
+                "The agent will:\n"
+                "• Scan the market for opportunities\n"
+                "• Buy/sell based on AI signals\n"
+                "• Respect your aggressivity profile + buying power\n\n"
+                "All decisions logged transparently.\nStart?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
 
         self._agent_running = True
         self.agent_start_btn.setText("Stop Agent")
@@ -525,7 +546,7 @@ class AIDashboardPanel(QWidget):
                                 if advisory:
                                     old_conf = r.confidence
                                     _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
-                                    reasoning = advisory.get("reasoning", "")[:80]
+                                    reasoning = advisory.get("reasoning", "")
                                     model = advisory.get("model_used", "?")
                                     self.bus.log_entry.emit(
                                         f"  Gemini ({model}): {r.ticker} {advisory.get('recommendation','?')} "
