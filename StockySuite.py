@@ -292,6 +292,8 @@ class StockySuite(QMainWindow):
                     "last_check": stock.last_check,
                     "check_count": stock.check_count,
                     "auto_execute": stock.auto_execute,
+                    "next_check_seconds": stock.next_check_seconds,
+                    "last_atr": getattr(stock, "_last_atr", 0),
                 }
         # Also check AI dashboard's service
         if ai_agent and hasattr(ai_agent, '_auto_svc') and ai_agent._auto_svc:
@@ -305,6 +307,8 @@ class StockySuite(QMainWindow):
                         "last_check": stock.last_check,
                         "check_count": stock.check_count,
                         "auto_execute": stock.auto_execute,
+                        "next_check_seconds": stock.next_check_seconds,
+                        "last_atr": getattr(stock, "_last_atr", 0),
                     }
         settings["monitored_stocks"] = monitored
 

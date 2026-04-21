@@ -1373,6 +1373,9 @@ class ScannerPanel(QWidget):
                         stock.last_price = cfg.get("last_price", 0)
                         stock.last_check = cfg.get("last_check")
                         stock.check_count = cfg.get("check_count", 0)
+                        stock.next_check_seconds = cfg.get("next_check_seconds", stock.interval_seconds)
+                        if cfg.get("last_atr"):
+                            stock._last_atr = cfg["last_atr"]
             if monitored:
                 self.bus.log_entry.emit(
                     f"Restored {len(monitored)} monitored stocks from last session",
