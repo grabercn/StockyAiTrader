@@ -122,48 +122,48 @@
             "symbol": "HIMS",
             "qty": "2942",
             "side": "long",
-            "current_price": "30.2001",
-            "unrealized_pl": "983.013402",
+            "current_price": "30.29",
+            "unrealized_pl": "1247.499202",
             "avg_entry": "29.865969"
         },
         {
             "symbol": "NOK",
             "qty": "4309",
             "side": "long",
-            "current_price": "10.4799",
-            "unrealized_pl": "223.555229",
+            "current_price": "10.43",
+            "unrealized_pl": "8.536129",
             "avg_entry": "10.428019"
         },
         {
             "symbol": "NVTS",
             "qty": "57",
             "side": "long",
-            "current_price": "15.5",
-            "unrealized_pl": "7.430007",
+            "current_price": "15.37",
+            "unrealized_pl": "0.020007",
             "avg_entry": "15.369649"
         },
         {
             "symbol": "OPEN",
             "qty": "10207",
             "side": "long",
-            "current_price": "5.51",
-            "unrealized_pl": "234.995761",
+            "current_price": "5.5",
+            "unrealized_pl": "132.925761",
             "avg_entry": "5.486977"
         },
         {
             "symbol": "SNAP",
             "qty": "9",
             "side": "long",
-            "current_price": "5.7392",
-            "unrealized_pl": "0.853389",
+            "current_price": "5.74",
+            "unrealized_pl": "0.860589",
             "avg_entry": "5.644379"
         },
         {
             "symbol": "SOFI",
             "qty": "3733",
             "side": "long",
-            "current_price": "19.16",
-            "unrealized_pl": "1340.199262",
+            "current_price": "19.15",
+            "unrealized_pl": "1302.869262",
             "avg_entry": "18.800986"
         }
     ],
