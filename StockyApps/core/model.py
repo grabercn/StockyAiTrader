@@ -39,16 +39,16 @@ DEFAULT_PARAMS = {
     "objective": "multiclass",
     "num_class": 3,             # SELL=0, HOLD=1, BUY=2
     "metric": "multi_logloss",
-    "learning_rate": 0.03,      # Slower learning = better generalization
-    "num_leaves": 20,           # Reduced from 31 to prevent overfitting on small data
-    "max_depth": 5,             # Shallower trees = less overfitting
-    "min_child_samples": 20,    # Increased from 10 — more data per leaf = stabler predictions
+    "learning_rate": 0.025,     # Slightly slower learning for better probability calibration
+    "num_leaves": 24,           # Moderate complexity — enough to capture patterns, not overfit
+    "max_depth": 6,             # One deeper level for better signal differentiation
+    "min_child_samples": 15,    # Balanced — allows finer splits while preventing noise-fitting
     "feature_fraction": 0.7,    # Use 70% of features per tree (more regularization)
     "bagging_fraction": 0.7,    # Use 70% of data per tree
     "bagging_freq": 3,          # More frequent bagging
-    "lambda_l1": 0.1,           # L1 regularization (feature selection pressure)
-    "lambda_l2": 1.0,           # L2 regularization (smooth weights)
-    "min_gain_to_split": 0.01,  # Don't split unless meaningful gain
+    "lambda_l1": 0.15,          # Slightly more L1 to prune weak features
+    "lambda_l2": 0.8,           # Slightly less L2 for sharper splits
+    "min_gain_to_split": 0.005, # Lower threshold to capture subtle patterns
     "verbose": -1,              # Suppress training output
     "n_jobs": -1,               # Use all CPU cores
 }

@@ -30,6 +30,18 @@ def load_all_data():
                 decisions.append(e)
             elif t == "execution":
                 executions.append(e)
+    # Load synthetic backtest data if available
+    synthetic = os.path.join(os.path.dirname(__file__), "logs", "backtest_synthetic.jsonl")
+    if os.path.exists(synthetic):
+        with open(synthetic, "r") as f:
+            for line in f:
+                try:
+                    e = json.loads(line.strip())
+                    if e.get("type") == "decision":
+                        decisions.append(e)
+                except Exception:
+                    pass
+
     # Sort chronologically
     decisions.sort(key=lambda x: x.get("timestamp", ""))
     return decisions, executions
@@ -357,6 +369,24 @@ def main():
             "min_confidence": 0.70, "max_trades_per_day": 6,
             "require_confirmation": True, "position_pct": 0.20,
             "stop_mult": 0.9, "profit_mult": 4.0,
+            "confidence_scaling": True,
+        },
+        "GRID: 60% + 0.9x/5.5x + cs (grid opt)": {
+            "min_confidence": 0.60, "max_trades_per_day": 6,
+            "require_confirmation": False, "position_pct": 0.20,
+            "stop_mult": 0.9, "profit_mult": 5.5,
+            "confidence_scaling": True,
+        },
+        "GRID: 55% + 0.9x/5.5x + cs + cfm": {
+            "min_confidence": 0.55, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 0.9, "profit_mult": 5.5,
+            "confidence_scaling": True,
+        },
+        "GRID: 50% + 0.9x/5.5x + cfm + cs": {
+            "min_confidence": 0.50, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 0.9, "profit_mult": 5.5,
             "confidence_scaling": True,
         },
     }

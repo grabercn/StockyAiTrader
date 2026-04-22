@@ -32,8 +32,8 @@ class RiskManager:
         max_risk_per_trade=0.02,    # 2% of portfolio per trade
         max_daily_drawdown=0.05,    # 5% daily loss limit
         max_positions=5,            # Max simultaneous positions
-        atr_stop_mult=1.0,          # Stop-loss = 1.0x ATR from entry (backtest optimal)
-        atr_profit_mult=4.5,        # Take-profit = 4.5x ATR from entry (backtest: +9.4% return)
+        atr_stop_mult=0.9,          # Stop-loss = 0.9x ATR from entry (grid search on 5139 decisions)
+        atr_profit_mult=5.5,        # Take-profit = 5.5x ATR from entry (grid search: +19.9% return)
     ):
         self.portfolio_value = portfolio_value
         self.max_risk_per_trade = max_risk_per_trade
