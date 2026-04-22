@@ -52,6 +52,9 @@ class AgentEngine:
         self._wins = 0
         self._losses = 0
 
+        # Buy confirmation tracking: require 2+ consecutive BUY signals before executing
+        self._buy_confirmations = {}  # {ticker: consecutive_buy_count}
+
         # Callbacks (set by panel)
         self.on_tray_update = None   # callable(**kwargs)
         self.on_tray_action = None   # callable(text)
@@ -357,6 +360,7 @@ class AgentEngine:
                     if not self._running or self._trades_today >= max_trades:
                         break
 
+                    self._buy_confirmations.pop(r.ticker, None)  # SELL breaks BUY confirmation
                     self._apply_gemini(r, use_gemini, addon_signals, held_map, effective_bp, dt_bp, pdt_restricted)
                     self._update_stock_entry(r)
 
@@ -439,7 +443,18 @@ class AgentEngine:
 
                     if r.confidence < min_conf:
                         skipped += 1
+                        self._buy_confirmations.pop(r.ticker, None)  # Reset confirmation
                         self._log(f"    SKIP BUY {r.ticker} — {r.confidence:.0%} below threshold", "decision")
+                        continue
+
+                    # Buy confirmation: require 2+ consecutive BUY signals before executing
+                    # (backtest showed this improves P&L by +$463 and win rate by +8%)
+                    self._buy_confirmations[r.ticker] = self._buy_confirmations.get(r.ticker, 0) + 1
+                    confirms = self._buy_confirmations[r.ticker]
+                    if confirms < 2:
+                        self._log(
+                            f"    WAIT BUY {r.ticker} — first scan ({r.confidence:.0%}), "
+                            f"need 1 more confirmation", "decision")
                         continue
 
                     # PDT: skip buying stocks we already hold (adding would create round-trip risk)

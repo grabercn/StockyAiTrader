@@ -32,6 +32,9 @@ INTRADAY_FEATURES = [
     "RSI_14", "RSI_2",
     "ema_cross", "obv_slope", "range_atr_ratio",
     "time_sin", "time_cos",
+    "momentum_5", "momentum_10",
+    "trend_consistency_5", "trend_consistency_10",
+    "volume_direction", "range_position", "candle_body_ratio",
     "vader_sentiment", "finbert_sentiment",
 ]
 
@@ -149,6 +152,36 @@ def _add_time_features(data):
         data["time_cos"] = 0.0
 
 
+def _add_momentum_features(data):
+    """Momentum confirmation features — helps distinguish real moves from noise.
+    These directly address BUY signal quality by confirming trend strength."""
+    # Momentum slope: is the short-term trend accelerating?
+    data["momentum_5"] = data["Close"].pct_change(5)
+    data["momentum_10"] = data["Close"].pct_change(10)
+
+    # Trend consistency: what % of last N bars were positive?
+    data["trend_consistency_5"] = data["Close"].diff().rolling(5).apply(
+        lambda x: (x > 0).sum() / len(x), raw=True)
+    data["trend_consistency_10"] = data["Close"].diff().rolling(10).apply(
+        lambda x: (x > 0).sum() / len(x), raw=True)
+
+    # Volume confirmation: is volume higher on up-moves?
+    up_vol = (data["Volume"] * (data["Close"].diff() > 0).astype(float)).rolling(10).sum()
+    dn_vol = (data["Volume"] * (data["Close"].diff() <= 0).astype(float)).rolling(10).sum()
+    data["volume_direction"] = np.where(dn_vol > 0, up_vol / dn_vol, 1.0)
+
+    # Price position: where in the recent range is the price?
+    high_10 = data["High"].rolling(10).max()
+    low_10 = data["Low"].rolling(10).min()
+    rng = high_10 - low_10
+    data["range_position"] = np.where(rng > 0, (data["Close"] - low_10) / rng, 0.5)
+
+    # Candle body ratio: strong closes vs wicks
+    body = abs(data["Close"] - data["Open"])
+    full_range = data["High"] - data["Low"]
+    data["candle_body_ratio"] = np.where(full_range > 0, body / full_range, 0.5)
+
+
 def _add_sma_cross(data):
     """SMA 50/200 golden/death cross — the classic long-term trend signal.
     Golden cross (SMA50 > SMA200) is bullish."""
@@ -193,6 +226,9 @@ def engineer_features(data, mode="intraday"):
     _add_macd(data)
     _add_ema_cross(data)
     _add_obv(data)
+
+    # Momentum features for all modes (improves BUY signal quality)
+    _add_momentum_features(data)
 
     # Mode-specific indicators
     if mode == "intraday":
