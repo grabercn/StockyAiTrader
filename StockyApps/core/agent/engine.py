@@ -46,6 +46,12 @@ class AgentEngine:
         self._cycle_stats = {}       # Stats for current cycle
         self._tradeable_cache = {}   # {ticker: bool} persists across cycles
 
+        # P&L tracking (persists across cycles within session, resets daily)
+        self._session_pnl = 0.0      # Realized P&L this session
+        self._trade_log = []         # [{ticker, side, qty, price, pnl, timestamp}, ...]
+        self._wins = 0
+        self._losses = 0
+
         # Callbacks (set by panel)
         self.on_tray_update = None   # callable(**kwargs)
         self.on_tray_action = None   # callable(text)
@@ -93,6 +99,19 @@ class AgentEngine:
     def cycle_stats(self):
         return dict(self._cycle_stats)
 
+    @property
+    def session_pnl(self):
+        return self._session_pnl
+
+    @property
+    def win_rate(self):
+        total = self._wins + self._losses
+        return self._wins / total if total > 0 else 0.0
+
+    @property
+    def trade_log(self):
+        return list(self._trade_log)
+
     # ── State Persistence ─────────────────────────────────────────────
 
     def get_state(self):
@@ -111,6 +130,10 @@ class AgentEngine:
             "last_bp": getattr(self, '_last_bp', 0),
             "last_dt_bp": getattr(self, '_last_dt_bp', 0),
             "saved_date": datetime.now().strftime("%Y-%m-%d"),
+            "session_pnl": self._session_pnl,
+            "trade_log": self._trade_log[-20:],  # Keep last 20 trades
+            "wins": self._wins,
+            "losses": self._losses,
         }
 
     def restore_state(self, state):
@@ -128,15 +151,24 @@ class AgentEngine:
         self._cycle_decisions = state.get("cycle_decisions", [])
         self._cycle_stats = state.get("cycle_stats", {})
 
+        # Always restore cumulative P&L history (carries across days)
+        self._trade_log = state.get("trade_log", [])
+        self._wins = state.get("wins", 0)
+        self._losses = state.get("losses", 0)
+
         if is_new_day:
-            # New day: reset daily counters, keep stocks + cache
+            # New day: reset daily counters, keep stocks + cache + cumulative P&L
             self._cycle = 0
             self._trades_today = 0
-            self._log(f"  New trading day (saved {saved_date}) — daily counters reset", "agent")
+            self._session_pnl = 0.0  # Daily P&L resets
+            total = self._wins + self._losses
+            wr = f"{self._wins}/{total} ({self.win_rate:.0%})" if total > 0 else "no trades yet"
+            self._log(f"  New trading day (saved {saved_date}) — daily counters reset, lifetime: {wr}", "agent")
         else:
             # Same day: restore everything
             self._cycle = state.get("cycle", 0)
             self._trades_today = state.get("trades_today", 0)
+            self._session_pnl = state.get("session_pnl", 0.0)
 
     # ── Control ─────────────────────────────────────────────────────────
 
@@ -346,14 +378,33 @@ class AgentEngine:
                         result = self.broker.close_position(r.ticker, qty=qty)
                         if "error" not in result:
                             self._trades_today += 1
-                            freed = qty * float(pos.get("current_price", r.price))
+                            sell_price = float(pos.get("current_price", r.price))
+                            freed = qty * sell_price
                             effective_bp += freed
+
+                            # Track realized P&L
+                            entry = float(pos.get("avg_entry_price", r.price))
+                            trade_pnl = (sell_price - entry) * qty
+                            self._session_pnl += trade_pnl
+                            if trade_pnl >= 0:
+                                self._wins += 1
+                            else:
+                                self._losses += 1
+                            self._trade_log.append({
+                                "ticker": r.ticker, "side": "sell", "qty": qty,
+                                "entry": entry, "exit": sell_price,
+                                "pnl": round(trade_pnl, 2),
+                                "timestamp": datetime.now().isoformat(),
+                            })
+
+                            pnl_tag = f" P&L ${trade_pnl:+,.2f}" if entry > 0 else ""
+                            wr = f" | Session: ${self._session_pnl:+,.2f} ({self.win_rate:.0%} WR)"
                             self._log(
                                 f"    EXECUTE SELL {r.ticker} x{qty}/{held} "
-                                f"({r.confidence:.0%}) — freed ${freed:,.0f}", "trade")
+                                f"({r.confidence:.0%}) — freed ${freed:,.0f}{pnl_tag}{wr}", "trade")
                             self._tray(sells=self._trades_today)
-                            self._tray_act(f"SELL {r.ticker} x{qty}")
-                            self._cycle_decisions.append(f"SOLD {r.ticker} x{qty}")
+                            self._tray_act(f"SELL {r.ticker} x{qty} P&L ${trade_pnl:+,.2f}")
+                            self._cycle_decisions.append(f"SOLD {r.ticker} x{qty} (${trade_pnl:+,.0f})")
                             self._agent_stocks[r.ticker]["qty"] = held - qty
                             self._agent_stocks[r.ticker]["mode"] = "Auto"
                             if qty >= held:
@@ -466,6 +517,11 @@ class AgentEngine:
                             self._tray(buys=self._trades_today)
                             self._tray_act(f"BUY {r.ticker} x{qty} @ ${r.price:.2f}")
                             self._cycle_decisions.append(f"BOUGHT {r.ticker} x{qty}")
+                            self._trade_log.append({
+                                "ticker": r.ticker, "side": "buy", "qty": qty,
+                                "entry": r.price, "exit": None, "pnl": None,
+                                "timestamp": datetime.now().isoformat(),
+                            })
                             self._agent_stocks[r.ticker]["qty"] = qty
                             self._agent_stocks[r.ticker]["mode"] = "Auto"
                             self._agent_stocks[r.ticker]["entry_price"] = r.price
@@ -497,6 +553,9 @@ class AgentEngine:
                     "trades_today": self._trades_today, "bp": effective_bp,
                     "regime": regime.name, "regime_detail": regime.description,
                     "min_conf": min_conf,
+                    "session_pnl": self._session_pnl,
+                    "win_rate": self.win_rate,
+                    "wins": self._wins, "losses": self._losses,
                 }
                 self._set_phase("complete",
                     f"{buys}B {sells}S {holds}H ({skipped} skipped, {filtered_out} filtered)")
@@ -673,10 +732,14 @@ class AgentEngine:
 
             pdt_note = (" PDT RESTRICTED — cannot buy stocks already held (round-trip risk). "
                        "Only new positions allowed.") if pdt_restricted else ""
+            # Build rich portfolio context with P&L history
+            total_trades = self._wins + self._losses
+            wr_str = f", win rate {self.win_rate:.0%} ({self._wins}W/{self._losses}L)" if total_trades > 0 else ""
+            pnl_str = f", session P&L ${self._session_pnl:+,.2f}" if self._session_pnl != 0 else ""
             port_ctx = (
                 f"BP=${effective_bp:,.0f},{pdt_note} "
                 f"{self._trades_today} trades today, "
-                f"{len(held_map)} positions held")
+                f"{len(held_map)} positions held{pnl_str}{wr_str}")
             if self._cycle_decisions:
                 port_ctx += f"\nThis cycle so far: {'; '.join(self._cycle_decisions[-5:])}"
             # Add regime context
@@ -757,9 +820,20 @@ class AgentEngine:
                     self._trades_today += 1
                     freed = w_qty * float(worst_pos.get("current_price", 0))
                     w_pl = float(worst_pos.get("unrealized_pl", 0))
+                    # Track rotation P&L
+                    self._session_pnl += w_pl
+                    if w_pl >= 0: self._wins += 1
+                    else: self._losses += 1
+                    self._trade_log.append({
+                        "ticker": worst_sym, "side": "rotate_sell", "qty": w_qty,
+                        "entry": float(worst_pos.get("avg_entry_price", 0)),
+                        "exit": float(worst_pos.get("current_price", 0)),
+                        "pnl": round(w_pl, 2),
+                        "timestamp": datetime.now().isoformat(),
+                    })
                     self._log(
                         f"    ROTATE: Sold {worst_sym} x{w_qty} (P&L ${w_pl:+,.0f}) — freed ${freed:,.0f}", "trade")
-                    self._cycle_decisions.append(f"ROTATED {worst_sym} for {r.ticker}")
+                    self._cycle_decisions.append(f"ROTATED {worst_sym} (${w_pl:+,.0f})")
                     held_map.pop(worst_sym, None)
                     time.sleep(1)
                     try:

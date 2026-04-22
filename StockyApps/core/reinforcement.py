@@ -125,12 +125,15 @@ def build_training_data():
     # Build a price lookup: find the next known price for each ticker after each trade
     # by scanning all decisions chronologically
     ticker_prices = {}  # {ticker: [(timestamp, price), ...]}
-    for d in decisions:
+    for d in decisions.values():
         t = d.get("ticker", "")
         ts = d.get("timestamp", "")
         price = d.get("price", 0)
         if t and price > 0:
             ticker_prices.setdefault(t, []).append((ts, price))
+    # Sort each ticker's prices chronologically
+    for t in ticker_prices:
+        ticker_prices[t].sort()
 
     for m in matched:
         features = [
