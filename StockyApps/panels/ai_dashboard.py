@@ -9,6 +9,7 @@ from core.branding import *
 from core.branding import chart_colors
 from core.event_bus import EventBus
 from core.logger import log_event
+from core.agent import AgentEngine
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "settings.json")
 def load_settings():
@@ -30,11 +31,24 @@ class AIDashboardPanel(QWidget):
         self.broker = broker
         self.bus = event_bus
 
+        # Create the agent engine (decoupled from UI)
+        self._engine = AgentEngine(
+            broker=broker,
+            log_fn=lambda msg, level: self.bus.log_entry.emit(msg, level),
+            settings_fn=load_settings,
+        )
+        self._engine.on_tray_update = self._tray_update
+        self._engine.on_tray_action = self._tray_action
+        self._engine.on_add_monitor = self._add_to_monitor
+
         # Restore agent tracked stocks from last session
         settings = load_settings()
         saved_tracked = settings.get("agent_tracked_stocks", {})
         if saved_tracked:
-            self._agent_stocks = dict(saved_tracked)
+            self._engine.agent_stocks = dict(saved_tracked)
+
+        # Keep _agent_stocks as a property alias for backward compat
+        self._agent_stocks = self._engine.agent_stocks
 
         self._build()
 
@@ -81,6 +95,15 @@ class AIDashboardPanel(QWidget):
         self.agent_countdown = QLabel("")
         self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
         agent_row.addWidget(self.agent_countdown)
+        # Info button — pipeline transparency
+        info_btn = QPushButton("?")
+        info_btn.setFixedSize(26, 26)
+        info_btn.setToolTip("How the AI Agent works")
+        info_btn.setStyleSheet(
+            f"background-color: {BRAND_PRIMARY}; color: white; font-weight: bold; "
+            f"border-radius: 13px; font-size: 13px;")
+        info_btn.clicked.connect(self._show_pipeline_info)
+        agent_row.addWidget(info_btn)
         agent_row.addStretch()
         layout.addLayout(agent_row)
 
@@ -191,55 +214,390 @@ class AIDashboardPanel(QWidget):
                         pass
 
     def _show_card_detail(self, card_type):
-        """Show detail popup when stat card is clicked."""
-        main = self.window()
-        svc = None
-        if main and hasattr(main, 'scanner') and hasattr(main.scanner, '_auto_service'):
-            svc = main.scanner._auto_service
+        """Show rich detail popup with charts when stat card is clicked."""
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+        from core.logger import get_log_entries, get_log_files
+        from collections import defaultdict
 
-        monitored = svc.get_monitored() if svc else {}
-        settings = load_settings()
+        # Gather all log data across files
+        all_decisions = []
+        all_executions = []
+        all_events = []
+        for fi in get_log_files():
+            for e in get_log_entries(fi["file"], 500):
+                t = e.get("type", "")
+                if t == "decision":
+                    all_decisions.append(e)
+                elif t == "execution":
+                    all_executions.append(e)
+                elif t == "event":
+                    all_events.append(e)
+
+        # Get current engine state
+        engine = self._engine
+        agent_stocks = engine.agent_stocks
+        stats = engine.cycle_stats
+
+        dlg = QDialog(self)
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
+        dlg.setMinimumSize(700, 500)
+
+        lay = QVBoxLayout()
+        cc = chart_colors()
 
         if card_type == "monitored":
-            tickers = list(monitored.keys())
-            text = f"Monitoring {len(tickers)} stocks:\n\n" + "\n".join(
-                f"  {t}: {s.last_signal} ({s.last_confidence:.0%})" for t, s in monitored.items()
-            ) if tickers else "No stocks monitored."
-        elif card_type == "trades":
-            total = sum(getattr(s, 'check_count', 0) for s in monitored.values())
-            text = f"Total checks today: {total}\n\n" + "\n".join(
-                f"  {t}: {getattr(s, 'check_count', 0)} checks" for t, s in monitored.items()
-            )
-        elif card_type == "signals":
-            buys = [(t, s) for t, s in monitored.items() if s.last_signal == "BUY"]
-            sells = [(t, s) for t, s in monitored.items() if s.last_signal == "SELL"]
-            holds = [(t, s) for t, s in monitored.items() if s.last_signal == "HOLD"]
-            text = (f"BUY ({len(buys)}): {', '.join(t for t,_ in buys) or 'none'}\n"
-                    f"SELL ({len(sells)}): {', '.join(t for t,_ in sells) or 'none'}\n"
-                    f"HOLD ({len(holds)}): {', '.join(t for t,_ in holds) or 'none'}")
-        elif card_type == "mode":
-            aggr = settings.get("aggressivity", "Default")
-            from core.intelligent_trader import get_aggressivity
-            p = get_aggressivity(aggr)
-            text = (f"Aggressivity: {aggr}\n"
-                    f"Min Confidence: {p['min_confidence']:.0%}\n"
-                    f"Position Size: {p['size_multiplier']:.1f}x\n"
-                    f"Max Trades/Day: {p['max_trades_per_day']}\n"
-                    f"LLM: {'Yes' if p.get('use_llm') else 'No'}")
-        else:
-            text = "No data"
+            dlg.setWindowTitle("Monitored Stocks — Detail")
 
-        QMessageBox.information(self, card_type.title(), text)
+            title = QLabel(f"Tracking {len(agent_stocks)} Stocks")
+            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            # Confidence distribution chart
+            fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(cc["ax_bg"])
+
+            if agent_stocks:
+                tickers = []
+                confs = []
+                colors_list = []
+                for t, info in sorted(agent_stocks.items(), key=lambda x: -x[1].get("confidence", 0)):
+                    tickers.append(t)
+                    confs.append(info.get("confidence", 0) * 100)
+                    sig = info.get("signal", "HOLD")
+                    colors_list.append(COLOR_BUY if sig == "BUY" else COLOR_SELL if sig == "SELL" else COLOR_HOLD)
+
+                bars = ax.barh(range(len(tickers)), confs, color=colors_list, alpha=0.85)
+                ax.set_yticks(range(len(tickers)))
+                ax.set_yticklabels(tickers, fontsize=8, color=cc["text"])
+                ax.set_xlabel("Confidence %", fontsize=9, color=cc["muted"])
+                ax.invert_yaxis()
+
+                # Add value labels
+                for bar, val in zip(bars, confs):
+                    ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                            f"{val:.0f}%", va="center", fontsize=7, color=cc["text"])
+
+            ax.set_title("Current Signal Confidence by Stock", fontsize=10, color=cc["text"])
+            ax.tick_params(colors=cc["muted"], labelsize=7)
+            ax.grid(True, alpha=0.1, axis="x")
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumHeight(200)
+            lay.addWidget(canvas)
+
+            # Stock detail table
+            tbl = QTableWidget()
+            tbl.setColumnCount(7)
+            tbl.setHorizontalHeaderLabels(["Stock", "Signal", "Conf", "Price", "Mode", "Checks", "Interval"])
+            for c in range(7):
+                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+            tbl.verticalHeader().setVisible(False)
+            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            tbl.setRowCount(len(agent_stocks))
+            for i, (t, info) in enumerate(sorted(agent_stocks.items(), key=lambda x: -x[1].get("confidence", 0))):
+                sig = info.get("signal", "?")
+                sig_color = COLOR_BUY if sig == "BUY" else COLOR_SELL if sig == "SELL" else COLOR_HOLD
+                vals = [t, sig, f"{info.get('confidence',0):.0%}", f"${info.get('price',0):.2f}",
+                        info.get("mode", "?"), str(info.get("checks", 0)), info.get("interval", "?")]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j == 1:
+                        item.setForeground(QColor(sig_color))
+                    tbl.setItem(i, j, item)
+            lay.addWidget(tbl)
+
+        elif card_type == "trades":
+            dlg.setWindowTitle("Trade Activity — Detail")
+
+            # Parse execution timestamps by hour and day
+            by_hour = defaultdict(int)
+            by_day = defaultdict(int)
+            buy_trades = []
+            sell_trades = []
+            for e in all_executions:
+                ts = e.get("timestamp", "")[:19]
+                side = e.get("side", "")
+                ticker = e.get("ticker", "")
+                if len(ts) >= 13:
+                    hour = ts[11:13]
+                    by_hour[hour] += 1
+                if len(ts) >= 10:
+                    day = ts[:10]
+                    by_day[day] += 1
+                if side == "buy":
+                    buy_trades.append(e)
+                elif side == "sell":
+                    sell_trades.append(e)
+
+            title = QLabel(f"{len(all_executions)} Trades Executed ({len(buy_trades)} buys, {len(sell_trades)} sells)")
+            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            # Trades by hour chart
+            fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
+            ax = fig.add_subplot(121)
+            ax.set_facecolor(cc["ax_bg"])
+            if by_hour:
+                hours = sorted(by_hour.keys())
+                counts = [by_hour[h] for h in hours]
+                ax.bar(hours, counts, color=BRAND_ACCENT, alpha=0.8)
+                ax.set_title("Trades by Hour", fontsize=9, color=cc["text"])
+                ax.tick_params(colors=cc["muted"], labelsize=7)
+                ax.set_xlabel("Hour", fontsize=8, color=cc["muted"])
+
+            # Trades by day chart
+            ax2 = fig.add_subplot(122)
+            ax2.set_facecolor(cc["ax_bg"])
+            if by_day:
+                days = sorted(by_day.keys())
+                day_labels = [d[5:] for d in days]  # MM-DD
+                counts = [by_day[d] for d in days]
+                ax2.bar(day_labels, counts, color=BRAND_PRIMARY, alpha=0.8)
+                ax2.set_title("Trades by Day", fontsize=9, color=cc["text"])
+                ax2.tick_params(colors=cc["muted"], labelsize=7)
+
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumHeight(180)
+            lay.addWidget(canvas)
+
+            # Recent trades table
+            recent = sorted(all_executions, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
+            tbl = QTableWidget()
+            tbl.setColumnCount(6)
+            tbl.setHorizontalHeaderLabels(["Time", "Ticker", "Side", "Qty", "Status", "Error"])
+            for c in range(6):
+                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+            tbl.verticalHeader().setVisible(False)
+            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            tbl.setRowCount(len(recent))
+            for i, e in enumerate(recent):
+                ts = e.get("timestamp", "")[:19]
+                side = e.get("side", "?")
+                sc = COLOR_BUY if side == "buy" else COLOR_SELL
+                err = e.get("error", "")
+                vals = [ts[11:19] if len(ts) > 11 else ts, e.get("ticker", "?"), side.upper(),
+                        str(e.get("qty", "?")), e.get("status", "?"), str(err or "OK")[:30]]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j == 2:
+                        item.setForeground(QColor(sc))
+                    if j == 5 and err:
+                        item.setForeground(QColor(COLOR_SELL))
+                    elif j == 5:
+                        item.setForeground(QColor(BRAND_ACCENT))
+                    tbl.setItem(i, j, item)
+            lay.addWidget(tbl)
+
+        elif card_type == "signals":
+            dlg.setWindowTitle("Signal Distribution — Detail")
+
+            # Count signals by action and by ticker
+            action_counts = defaultdict(int)
+            ticker_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
+            conf_by_action = defaultdict(list)
+            hourly_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
+
+            for d in all_decisions:
+                action = d.get("action", "?")
+                ticker = d.get("ticker", "?")
+                conf = d.get("confidence", 0)
+                ts = d.get("timestamp", "")
+                action_counts[action] += 1
+                ticker_signals[ticker][action] += 1
+                conf_by_action[action].append(conf)
+                if len(ts) >= 13:
+                    hourly_signals[ts[11:13]][action] += 1
+
+            total = sum(action_counts.values())
+            title = QLabel(f"{total} Signals: {action_counts.get('BUY',0)} BUY / "
+                          f"{action_counts.get('SELL',0)} SELL / {action_counts.get('HOLD',0)} HOLD")
+            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
+
+            # Pie chart: signal distribution
+            ax1 = fig.add_subplot(131)
+            ax1.set_facecolor(cc["fig_bg"])
+            if action_counts:
+                labels = list(action_counts.keys())
+                sizes = list(action_counts.values())
+                pie_colors = [COLOR_BUY if l == "BUY" else COLOR_SELL if l == "SELL" else COLOR_HOLD for l in labels]
+                ax1.pie(sizes, labels=labels, colors=pie_colors, autopct="%1.0f%%",
+                        textprops={"fontsize": 8, "color": "white"})
+                ax1.set_title("Distribution", fontsize=9, color=cc["text"])
+
+            # Confidence box plot by action
+            ax2 = fig.add_subplot(132)
+            ax2.set_facecolor(cc["ax_bg"])
+            if conf_by_action:
+                data = []
+                labels = []
+                bcolors = []
+                for action in ["BUY", "SELL", "HOLD"]:
+                    if action in conf_by_action:
+                        data.append([c * 100 for c in conf_by_action[action]])
+                        labels.append(action)
+                        bcolors.append(COLOR_BUY if action == "BUY" else COLOR_SELL if action == "SELL" else COLOR_HOLD)
+                bp = ax2.boxplot(data, labels=labels, patch_artist=True)
+                for patch, color in zip(bp["boxes"], bcolors):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.6)
+                ax2.set_title("Confidence %", fontsize=9, color=cc["text"])
+                ax2.tick_params(colors=cc["muted"], labelsize=7)
+
+            # Signals by hour stacked bar
+            ax3 = fig.add_subplot(133)
+            ax3.set_facecolor(cc["ax_bg"])
+            if hourly_signals:
+                hours = sorted(hourly_signals.keys())
+                buys = [hourly_signals[h]["BUY"] for h in hours]
+                sells = [hourly_signals[h]["SELL"] for h in hours]
+                holds = [hourly_signals[h]["HOLD"] for h in hours]
+                x = range(len(hours))
+                ax3.bar(x, buys, color=COLOR_BUY, alpha=0.8, label="BUY")
+                ax3.bar(x, sells, bottom=buys, color=COLOR_SELL, alpha=0.8, label="SELL")
+                ax3.bar(x, holds, bottom=[b + s for b, s in zip(buys, sells)],
+                        color=COLOR_HOLD, alpha=0.8, label="HOLD")
+                ax3.set_xticks(x)
+                ax3.set_xticklabels(hours, fontsize=6, color=cc["muted"])
+                ax3.set_title("By Hour", fontsize=9, color=cc["text"])
+                ax3.tick_params(colors=cc["muted"], labelsize=7)
+                ax3.legend(fontsize=6)
+
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumHeight(220)
+            lay.addWidget(canvas)
+
+            # Top tickers table
+            top = sorted(ticker_signals.items(), key=lambda x: sum(x[1].values()), reverse=True)[:15]
+            tbl = QTableWidget()
+            tbl.setColumnCount(5)
+            tbl.setHorizontalHeaderLabels(["Ticker", "BUY", "SELL", "HOLD", "Total"])
+            for c in range(5):
+                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+            tbl.verticalHeader().setVisible(False)
+            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            tbl.setRowCount(len(top))
+            for i, (ticker, counts) in enumerate(top):
+                total = sum(counts.values())
+                vals = [ticker, str(counts["BUY"]), str(counts["SELL"]), str(counts["HOLD"]), str(total)]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j == 1: item.setForeground(QColor(COLOR_BUY))
+                    elif j == 2: item.setForeground(QColor(COLOR_SELL))
+                    elif j == 3: item.setForeground(QColor(COLOR_HOLD))
+                    tbl.setItem(i, j, item)
+            lay.addWidget(tbl)
+
+        elif card_type == "mode":
+            dlg.setWindowTitle("Agent Mode — Detail")
+
+            settings = load_settings()
+            aggr = settings.get("aggressivity", "Default")
+            from core.intelligent_trader import get_aggressivity, AGGRESSIVITY_PROFILES
+            p = get_aggressivity(aggr)
+
+            title = QLabel(f"Profile: {aggr}")
+            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+            lay.addWidget(title)
+
+            # Regime + engine state
+            regime_name = "Unknown"
+            regime_desc = ""
+            if engine.cycle_stats:
+                regime_name = engine.cycle_stats.get("regime", "?")
+                regime_desc = engine.cycle_stats.get("regime_detail", "")
+
+            info_text = (
+                f"Aggressivity: {aggr}\n"
+                f"Min Confidence: {p['min_confidence']:.0%}\n"
+                f"Position Size: {p['size_multiplier']:.1f}x\n"
+                f"Max Trades/Day: {p['max_trades_per_day']}\n"
+                f"LLM Advisor: {'Enabled' if p.get('use_llm') else 'Disabled'}\n"
+                f"Stop Loss: {p.get('atr_stop_mult', 1.5):.1f}x ATR\n"
+                f"Take Profit: {p.get('atr_profit_mult', 2.5):.1f}x ATR\n\n"
+                f"Current Regime: {regime_name}\n"
+                f"{regime_desc}\n\n"
+                f"Engine: cycle {engine.cycle}, {engine.trades_today} trades today\n"
+                f"Phase: {engine.phase}"
+            )
+            info = QLabel(info_text)
+            info.setWordWrap(True)
+            info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+            lay.addWidget(info)
+
+            # Profile comparison chart
+            fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(cc["ax_bg"])
+
+            profiles = list(AGGRESSIVITY_PROFILES.keys())
+            metrics = ["min_confidence", "size_multiplier", "max_trades_per_day"]
+            x = range(len(profiles))
+            width = 0.25
+            for mi, metric in enumerate(metrics):
+                vals = []
+                for pn in profiles:
+                    pp = AGGRESSIVITY_PROFILES[pn]
+                    v = pp.get(metric, 0)
+                    if metric == "max_trades_per_day":
+                        v = v / 30.0  # Normalize to 0-1
+                    vals.append(v)
+                offset = (mi - 1) * width
+                bar_colors = [BRAND_ACCENT if pn == aggr else cc["muted"] for pn in profiles]
+                ax.bar([xi + offset for xi in x], vals, width, label=metric.replace("_", " ").title(),
+                       color=bar_colors, alpha=0.7 + (0.3 if mi == 0 else 0))
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(profiles, fontsize=9, color=cc["text"])
+            ax.set_title("Profile Comparison (active highlighted)", fontsize=10, color=cc["text"])
+            ax.tick_params(colors=cc["muted"], labelsize=7)
+            ax.legend(fontsize=7)
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumHeight(180)
+            lay.addWidget(canvas)
+
+            # Reflection rules
+            from core.agent.reflection import get_active_rules
+            rules = get_active_rules()
+            if rules:
+                rules_label = QLabel(f"Active Reflection Rules ({len(rules)})")
+                rules_label.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+                rules_label.setStyleSheet(f"color: {BRAND_ACCENT};")
+                lay.addWidget(rules_label)
+                for r in rules:
+                    rl = QLabel(f"  {r['rule']}")
+                    rl.setWordWrap(True)
+                    rl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+                    lay.addWidget(rl)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
+
+        dlg.setLayout(lay)
+        dlg.exec_()
 
     def _on_log(self, msg, level):
         """Capture all trade/system/auto-related logs."""
+        relevant_levels = {"trade", "system", "agent", "scan", "decision", "gemini", "rl", "error", "warn", "info"}
         keywords = ["auto", "monitor", "signal", "check", "agent", "trade", "buy", "sell", "hold"]
-        if level in ("trade", "system") or any(k in msg.lower() for k in keywords):
-            ts = datetime.now().strftime("%H:%M:%S")
-            colors = {"trade": BRAND_ACCENT, "system": TEXT_MUTED, "info": BRAND_PRIMARY,
-                      "warn": COLOR_HOLD, "error": COLOR_SELL}
-            c = colors.get(level, TEXT_SECONDARY)
-            self.log_area.append(f'<span style="color:{TEXT_MUTED}">{ts}</span> <span style="color:{c}">{msg}</span>')
+        if level in relevant_levels or any(k in msg.lower() for k in keywords):
+            from core.branding import log_html
+            self.log_area.append(log_html(msg, level))
             sb = self.log_area.verticalScrollBar()
             sb.setValue(sb.maximum())
 
@@ -428,136 +786,199 @@ class AIDashboardPanel(QWidget):
         return None
 
     def _tick_countdown(self):
-        if self._countdown_secs > 0:
-            self._countdown_secs -= 1
-            mins = self._countdown_secs // 60
-            secs = self._countdown_secs % 60
+        cd = self._engine.countdown
+        if cd > 0:
+            mins, secs = cd // 60, cd % 60
             self.agent_countdown.setText(f"Next cycle: {mins}m {secs}s")
-        elif getattr(self, '_agent_running', False):
-            self.agent_countdown.setText("Scanning...")
-            self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
+        elif self._engine.running:
+            phase = self._engine.phase
+            if phase in ("scanning", "selling", "buying"):
+                self.agent_countdown.setText(f"{phase.title()}...")
+                self.agent_countdown.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 10px;")
+            else:
+                self.agent_countdown.setText("Working...")
         else:
             self.agent_countdown.setText("")
 
+    def _tray_update(self, **kwargs):
+        """Push agent state to tray overlay."""
+        try:
+            main = self.window()
+            if main and hasattr(main, '_tray'):
+                main._tray.update_agent_state(**kwargs)
+        except Exception:
+            pass
+
+    def _tray_action(self, text):
+        """Add a recent action line to the tray overlay."""
+        try:
+            main = self.window()
+            if main and hasattr(main, '_tray'):
+                main._tray.add_action(text)
+        except Exception:
+            pass
+
     def _toggle_agent(self):
         """Start/stop the fully autonomous agent."""
-        if hasattr(self, '_agent_running') and self._agent_running:
-            # Stopping — save state for potential resume
-            self._agent_running = False
-            self.agent_start_btn.setText("Start Agent")
+        if self._engine.running:
+            self._engine.stop()
+            self.agent_start_btn.setText("Resume Agent")
             self.agent_start_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 12px; padding: 8px 16px;")
-            self.agent_status.setText("Agent: Stopped")
-            self.bus.log_entry.emit("Autonomous agent stopped", "system")
-            # Mark that we have a resumable session
+            self.agent_status.setText("Agent: Stopped (session saved)")
+            self._agent_stocks = self._engine.agent_stocks
             settings = load_settings()
             settings["agent_was_running"] = True
             save_settings(settings)
             return
 
-        # Starting — check for previous session
+        # Check if there's a resumable session
         settings = load_settings()
         monitored = settings.get("monitored_stocks", {})
         tracked = settings.get("agent_tracked_stocks", {})
-        positions = settings.get("agent_managed_positions", [])
-        has_session = (monitored or tracked) and settings.get("agent_was_running", False)
+        has_session = bool(self._engine.agent_stocks) or (
+            (monitored or tracked) and settings.get("agent_was_running", False))
 
         if has_session:
-            # Rich resume dialog with position table
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Resume AI Agent")
-            dlg.setWindowIcon(QApplication.instance().windowIcon())
-            dlg.setMinimumSize(500, 350)
-
-            lay = QVBoxLayout()
-            title = QLabel("Resume Previous Session?")
-            title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
-            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-            lay.addWidget(title)
-
-            all_stocks = {**tracked}
-            for t in monitored:
-                if t not in all_stocks:
-                    all_stocks[t] = monitored[t]
-
-            info = QLabel(f"{len(all_stocks)} stocks tracked, {len(positions)} positions held")
-            info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
-            lay.addWidget(info)
-
-            if positions:
-                total_pl = sum(float(p.get("unrealized_pl", 0)) for p in positions)
-                total_val = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0)) for p in positions)
-                summary = QLabel(f"Value: ${total_val:,.0f}  |  P&L: ${total_pl:+,.2f}")
-                summary.setStyleSheet(f"color: {COLOR_PROFIT if total_pl >= 0 else COLOR_LOSS}; font-weight: bold;")
-                lay.addWidget(summary)
-
-                tbl = QTableWidget()
-                tbl.setColumnCount(4)
-                tbl.setHorizontalHeaderLabels(["Stock", "Qty", "Price", "P&L"])
-                tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-                tbl.verticalHeader().setVisible(False)
-                tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-                tbl.setMaximumHeight(150)
-                tbl.setRowCount(len(positions))
-                for i, p in enumerate(positions):
-                    vals = [p.get("symbol",""), f"{float(p.get('qty',0)):.0f}",
-                            f"${float(p.get('current_price',0)):.2f}",
-                            f"${float(p.get('unrealized_pl',0)):+,.2f}"]
-                    for j, v in enumerate(vals):
-                        item = QTableWidgetItem(v)
-                        item.setTextAlignment(Qt.AlignCenter)
-                        if j == 3:
-                            item.setForeground(QColor(COLOR_PROFIT if float(p.get("unrealized_pl",0)) >= 0 else COLOR_LOSS))
-                        tbl.setItem(i, j, item)
-                lay.addWidget(tbl)
-
-            note = QLabel("Resume = Continue with saved stocks + signals\nNew Session = Clear saved data, start fresh")
-            note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
-            lay.addWidget(note)
-
-            btn_row = QHBoxLayout()
-            resume_btn = QPushButton("Resume Session")
-            resume_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 11px; padding: 7px 16px;")
-            resume_btn.clicked.connect(dlg.accept)
-            btn_row.addWidget(resume_btn)
-            new_btn = QPushButton("New Session")
-            new_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px; padding: 7px 16px;")
-            new_btn.clicked.connect(dlg.reject)
-            btn_row.addWidget(new_btn)
-            lay.addLayout(btn_row)
-
-            dlg.setLayout(lay)
-            result = dlg.exec_()
-
-            if result == QDialog.Rejected:
-                # New session — clear saved state
-                settings["agent_was_running"] = False
-                settings["agent_tracked_stocks"] = {}
-                save_settings(settings)
-                self._agent_stocks = {}
-                self.bus.log_entry.emit("Starting fresh session — saved data cleared", "system")
+            self._show_resume_dialog()
         else:
             confirm = QMessageBox.question(
                 self, "Start Autonomous Agent",
                 "The agent will:\n"
-                "• Scan the market for opportunities\n"
-                "• Buy/sell based on AI + Gemini signals\n"
-                "• Rotate capital based on your aggressivity\n\n"
+                "- Scan the market for opportunities\n"
+                "- Buy/sell based on AI + Gemini signals\n"
+                "- Rotate capital based on your aggressivity\n\n"
                 "All decisions logged transparently.\nStart?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if confirm != QMessageBox.Yes:
                 return
+            self._start_agent()
 
-        self._agent_running = True
+    def _show_resume_dialog(self):
+        """Show resume/new session dialog with position details."""
+        settings = load_settings()
+        monitored = settings.get("monitored_stocks", {})
+        tracked = settings.get("agent_tracked_stocks", {})
+        positions = settings.get("agent_managed_positions", [])
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Resume AI Agent")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
+        dlg.setMinimumSize(500, 350)
+
+        lay = QVBoxLayout()
+        title = QLabel("Resume Previous Session?")
+        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
+
+        all_stocks = {**tracked}
+        for t in monitored:
+            if t not in all_stocks:
+                all_stocks[t] = monitored[t]
+        for t in self._engine.agent_stocks:
+            if t not in all_stocks:
+                all_stocks[t] = self._engine.agent_stocks[t]
+
+        info = QLabel(f"{len(all_stocks)} stocks tracked, {len(positions)} positions held")
+        info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        lay.addWidget(info)
+
+        if positions:
+            total_pl = sum(float(p.get("unrealized_pl", 0)) for p in positions)
+            total_val = sum(float(p.get("qty", 0)) * float(p.get("current_price", 0)) for p in positions)
+            summary = QLabel(f"Value: ${total_val:,.0f}  |  P&L: ${total_pl:+,.2f}")
+            summary.setStyleSheet(f"color: {COLOR_PROFIT if total_pl >= 0 else COLOR_LOSS}; font-weight: bold;")
+            lay.addWidget(summary)
+
+            tbl = QTableWidget()
+            tbl.setColumnCount(4)
+            tbl.setHorizontalHeaderLabels(["Stock", "Qty", "Price", "P&L"])
+            tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            tbl.verticalHeader().setVisible(False)
+            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            tbl.setMaximumHeight(150)
+            tbl.setRowCount(len(positions))
+            for i, p in enumerate(positions):
+                vals = [p.get("symbol",""), f"{float(p.get('qty',0)):.0f}",
+                        f"${float(p.get('current_price',0)):.2f}",
+                        f"${float(p.get('unrealized_pl',0)):+,.2f}"]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if j == 3:
+                        item.setForeground(QColor(COLOR_PROFIT if float(p.get("unrealized_pl",0)) >= 0 else COLOR_LOSS))
+                    tbl.setItem(i, j, item)
+            lay.addWidget(tbl)
+
+        note = QLabel("Resume = Continue with saved stocks + signals\nNew Session = Clear saved data, start fresh")
+        note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        lay.addWidget(note)
+
+        btn_row = QHBoxLayout()
+        resume_btn = QPushButton("Resume Session")
+        resume_btn.setStyleSheet(f"background-color: {BRAND_ACCENT}; font-size: 11px; padding: 7px 16px;")
+        resume_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(resume_btn)
+        new_btn = QPushButton("New Session")
+        new_btn.setStyleSheet(f"background-color: {BG_INPUT}; font-size: 11px; padding: 7px 16px;")
+        new_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(new_btn)
+        lay.addLayout(btn_row)
+
+        dlg.setLayout(lay)
+        result = dlg.exec_()
+
+        if result == QDialog.Rejected:
+            # New session — clear saved state but keep training data
+            settings["agent_was_running"] = False
+            settings["agent_tracked_stocks"] = {}
+            settings["monitored_stocks"] = {}
+            settings["agent_managed_positions"] = []
+            save_settings(settings)
+            self._engine.agent_stocks = {}
+            self._agent_stocks = self._engine.agent_stocks
+            try:
+                svc = self._get_svc()
+                if svc:
+                    for t in list(svc._stocks.keys()):
+                        svc.remove_stock(t)
+            except Exception:
+                pass
+            self.bus.log_entry.emit("Starting fresh session — saved data cleared", "system")
+
+        # Both resume and new session start the agent
+        self._start_agent()
+
+    def _start_agent(self):
+        """Start the agent engine — called after dialog decisions are made."""
         self.agent_start_btn.setText("Stop Agent")
         self.agent_start_btn.setStyleSheet(f"background-color: {COLOR_SELL}; font-size: 12px; padding: 8px 16px;")
         self.agent_status.setText("Agent: Running")
         self._countdown_timer.start(1000)
-        self.bus.log_entry.emit("Autonomous agent started", "trade")
-        log_event("agent", "Autonomous agent started")
+
+        # Restore engine state from previous session
+        settings = load_settings()
+        engine_state = settings.get("agent_engine_state")
+        if engine_state:
+            self._engine.restore_state(engine_state)
+            prev_cycle = engine_state.get("cycle", 0)
+            prev_trades = engine_state.get("trades_today", 0)
+            pdt = engine_state.get("pdt_restricted", False)
+            bp = engine_state.get("last_bp", 0)
+            if prev_cycle > 0:
+                self.bus.log_entry.emit(
+                    f"Restored session: cycle {prev_cycle}, {prev_trades} trades, "
+                    f"BP=${bp:,.0f}{' [PDT]' if pdt else ''}, "
+                    f"{len(self._engine.agent_stocks)} stocks tracked", "agent")
+            cached = engine_state.get("tradeable_cache", {})
+            if cached:
+                untradeable = [t for t, ok in cached.items() if not ok]
+                if untradeable:
+                    self.bus.log_entry.emit(
+                        f"  Cached untradeable: {', '.join(untradeable[:5])}", "system")
 
         # Log resume context
-        settings = load_settings()
         monitored = settings.get("monitored_stocks", {})
         if monitored:
             self.bus.log_entry.emit(f"Resuming with {len(monitored)} monitored stocks", "system")
@@ -567,439 +988,165 @@ class AIDashboardPanel(QWidget):
             if len(monitored) > 5:
                 self.bus.log_entry.emit(f"  +{len(monitored)-5} more...", "system")
         if settings.get("gemini_enabled"):
-            self.bus.log_entry.emit("Gemini AI Advisor: enabled", "system")
+            self.bus.log_entry.emit("Gemini AI Advisor: enabled", "gemini")
 
-        threading.Thread(target=self._run_agent, daemon=True).start()
+        self._engine.start()
+        self._agent_stocks = self._engine.agent_stocks
 
-    def _run_agent(self):
-        """Run the autonomous agent — uses aggressivity profile + RL feedback."""
-        from core.scanner import scan_multiple
-        from core.risk import RiskManager
-        from core.profiles import get_optimal_workers
-        from core.discovery import get_most_active, get_day_gainers, get_trending_social
-        from core.intelligent_trader import get_aggressivity
-        from core.logger import log_event
-
-        rm = RiskManager()
-        cycle = 0
-
-        # Load aggressivity profile
-        settings = load_settings()
-        profile_name = settings.get("aggressivity", "Default")
-        profile = get_aggressivity(profile_name)
-        min_conf = profile["min_confidence"]
-        size_mult = profile["size_multiplier"]
-        max_trades = profile["max_trades_per_day"]
-
-        # Load RL feedback model — retrains every 5 cycles with latest data
-        rl_model = None
+    def _add_to_monitor(self, ticker):
+        """Callback for engine: add a stock to the auto-monitoring service."""
         try:
-            from core.reinforcement import train_feedback_model, get_quality_score
-            rl_model, rl_acc, rl_count = train_feedback_model()
-            if rl_model:
-                self.bus.log_entry.emit(
-                    f"Agent: RL model loaded ({rl_count} trades, {rl_acc:.0%} accuracy)", "system")
+            svc = self._get_svc()
+            if svc and not svc.is_monitoring(ticker):
+                svc.add_stock(ticker, period="5d", interval="5m", auto_execute=True, min_confidence=0.5)
         except Exception:
             pass
-        rl_retrain_interval = 5
 
-        trades_today = 0
-        log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {min_conf:.0%}")
+    def _show_pipeline_info(self):
+        """Show live pipeline transparency popup with animated step indicators."""
+        from core.agent.info import PIPELINE_INFO, get_info_html
 
-        while getattr(self, '_agent_running', False):
-            cycle += 1
-            try:
-                self.bus.log_entry.emit(f"Agent cycle {cycle}: scanning market...", "system")
-                QTimer.singleShot(0, lambda c=cycle: self.agent_status.setText(
-                    f"Agent: Running — cycle {c}"))
+        dlg = QDialog(self)
+        dlg.setWindowTitle("AI Agent Pipeline")
+        dlg.setWindowIcon(QApplication.instance().windowIcon())
+        dlg.setMinimumSize(600, 520)
 
-                # Get buying power
-                bp = 0
-                if self.broker:
-                    try:
-                        acct = self.broker.get_account()
-                        bp = float(acct.get("buying_power", 0))
-                    except Exception as _e: pass
+        lay = QVBoxLayout()
+        title = QLabel("How the Autonomous Agent Works")
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
 
-                if trades_today >= max_trades:
-                    self.bus.log_entry.emit(
-                        f"Agent: max trades/day ({max_trades}) reached. Waiting.", "warn")
-                    for _ in range(300):
-                        if not getattr(self, '_agent_running', False): break
-                        time.sleep(1)
-                    continue
+        # Live status bar
+        phase = self._engine.phase if self._engine.running else "idle"
+        phase_detail = self._engine.phase_detail if self._engine.running else "Agent not running"
+        status_colors = {
+            "idle": TEXT_MUTED, "context": BRAND_PRIMARY, "discovery": BRAND_SECONDARY,
+            "scanning": "#a78bfa", "rl_adjust": "#f472b6", "filtering": COLOR_HOLD,
+            "preparing": BRAND_PRIMARY, "selling": COLOR_SELL, "buying": BRAND_ACCENT,
+            "complete": BRAND_ACCENT, "waiting": TEXT_MUTED, "error": COLOR_SELL,
+        }
+        sc = status_colors.get(phase, TEXT_MUTED)
+        status = QLabel(f"Current: {phase.upper()} — {phase_detail}")
+        status.setStyleSheet(f"color: {sc}; font-weight: bold; font-size: 11px;")
+        lay.addWidget(status)
 
-                self.bus.log_entry.emit(f"Agent: BP=${bp:,.0f}, profile={profile_name}", "system")
+        # Cycle stats
+        if self._engine.running:
+            stats = self._engine.cycle_stats
+            if stats:
+                stats_text = (
+                    f"Cycle {self._engine.cycle} | "
+                    f"{stats.get('buys',0)}B {stats.get('sells',0)}S {stats.get('holds',0)}H | "
+                    f"{stats.get('filtered',0)} filtered | "
+                    f"Trades: {stats.get('trades_today',0)} | "
+                    f"BP: ${stats.get('bp',0):,.0f}")
+                st = QLabel(stats_text)
+                st.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+                lay.addWidget(st)
 
-                # Scan multiple sources for diverse opportunities
-                tickers = set()
-                sources_used = []
-                try:
-                    ma = get_most_active(10)
-                    tickers.update(ma)
-                    sources_used.append(f"Active({len(ma)})")
-                except: pass
-                try:
-                    g = get_day_gainers(5)
-                    tickers.update(g)
-                    sources_used.append(f"Gainers({len(g)})")
-                except: pass
-                try:
-                    t = get_trending_social(5)
-                    tickers.update(t)
-                    sources_used.append(f"Trending({len(t)})")
-                except: pass
-                # Include held stocks only if managing manual positions
-                if settings.get("manage_manual_stocks"):
-                    try:
-                        positions = self.broker.get_positions()
-                        if isinstance(positions, list):
-                            held = [p.get("symbol", "") for p in positions if p.get("symbol")]
-                            tickers.update(held)
-                            if held:
-                                sources_used.append(f"Held({len(held)})")
-                    except: pass
-                # Always include stocks the agent itself bought
-                for t in list(self._agent_stocks.keys()):
-                    if self._agent_stocks[t].get("mode") == "Auto":
-                        tickers.add(t)
+            decisions = self._engine.cycle_decisions
+            if decisions:
+                dec = QLabel("Recent: " + " | ".join(decisions[-5:]))
+                dec.setStyleSheet(f"color: {BRAND_ACCENT}; font-size: 9px;")
+                dec.setWordWrap(True)
+                lay.addWidget(dec)
 
-                tickers = list(tickers)[:25]  # Allow more to fit held stocks
+        # Pipeline step indicators
+        phases = [
+            ("1", "context", "Gather Context"),
+            ("2", "discovery", "Discover Tickers"),
+            ("3", "scanning", "AI Scan + RL"),
+            ("4", "filtering", "Pre-Filter"),
+            ("5", "preparing", "Split Signals"),
+            ("6A", "selling", "Execute Sells"),
+            ("6B", "buying", "Execute Buys"),
+            ("7", "waiting", "Dynamic Wait"),
+        ]
+        steps_row = QHBoxLayout()
+        steps_row.setSpacing(2)
+        for num, key, label in phases:
+            active = (phase == key)
+            done = False
+            phase_order = [p[1] for p in phases]
+            if key in phase_order and phase in phase_order:
+                done = phase_order.index(phase) > phase_order.index(key)
 
-                self.bus.log_entry.emit(
-                    f"Agent: scanning {len(tickers)} tickers from {', '.join(sources_used)}", "system")
+            if active:
+                bg, fg = BRAND_PRIMARY, "white"
+            elif done:
+                bg, fg = BRAND_ACCENT, "white"
+            else:
+                bg, fg = BG_INPUT, TEXT_MUTED
 
-                if not tickers:
-                    self.bus.log_entry.emit("Agent: no tickers, waiting 2 min...", "warn")
-                    for _ in range(120):
-                        if not getattr(self, '_agent_running', False): break
-                        time.sleep(1)
-                    continue
+            step = QLabel(f" {num} ")
+            step.setAlignment(Qt.AlignCenter)
+            step.setToolTip(label)
+            step.setStyleSheet(
+                f"background: {bg}; color: {fg}; border-radius: 4px; "
+                f"padding: 3px 6px; font-size: 9px; font-weight: bold;")
+            steps_row.addWidget(step)
+        steps_row.addStretch()
+        lay.addLayout(steps_row)
 
-                results = scan_multiple(tickers, "5d", "5m", rm,
-                    max_workers=get_optimal_workers(), buying_power=bp)
+        # Scrollable detailed info
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        cl = QVBoxLayout()
+        cl.setContentsMargins(4, 4, 4, 4)
 
-                # Pre-load Gemini + addon data once
-                use_gemini = False
-                addon_signals = {}
-                try:
-                    from core.gemini_advisor import is_enabled as gemini_enabled, get_advisory, apply_advisory
-                    use_gemini = gemini_enabled()
-                except: pass
-                if use_gemini:
-                    try:
-                        from addons import get_all_addons
-                        for addon in get_all_addons():
-                            if addon.available and addon.enabled:
-                                try:
-                                    feats = addon.get_features("MARKET")
-                                    if feats:
-                                        for k, v in list(feats.items())[:3]:
-                                            addon_signals[f"{addon.name}_{k}"] = v
-                                except: pass
-                    except: pass
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        info_text.setHtml(get_info_html())
+        info_text.setFont(QFont(FONT_FAMILY, 10))
+        cl.addWidget(info_text)
 
-                # Retrain RL every N cycles with latest trade data
-                if cycle % rl_retrain_interval == 0 and cycle > 0:
-                    try:
-                        rl_model, rl_acc, rl_count = train_feedback_model()
-                        if rl_model:
-                            self.bus.log_entry.emit(
-                                f"  RL retrained: {rl_count} trades, {rl_acc:.0%} accuracy", "system")
-                    except: pass
+        content.setLayout(cl)
+        scroll.setWidget(content)
+        lay.addWidget(scroll)
 
-                # Apply RL quality scores
-                if rl_model:
-                    for r in results:
-                        if not r.error:
-                            try:
-                                atr_pct = r.atr / r.price if r.price > 0 else 0
-                                q = get_quality_score(rl_model, r.confidence, r.probs, atr_pct, r.action)
-                                r.confidence = min(1.0, r.confidence * q)
-                            except: pass
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
 
-                # ── Per-stock pipeline: Gemini → Decide → Execute → Update table ──
-                buys, sells, holds, skipped = 0, 0, 0, 0
+        dlg.setLayout(lay)
 
-                for r in sorted(results, key=lambda x: -x.score):
-                    if r.error:
-                        continue
-                    if not getattr(self, '_agent_running', False):
-                        break
+        # Auto-refresh the status while dialog is open
+        def _refresh_status():
+            if not dlg.isVisible():
+                return
+            p = self._engine.phase if self._engine.running else "idle"
+            pd = self._engine.phase_detail if self._engine.running else "Agent not running"
+            c = status_colors.get(p, TEXT_MUTED)
+            status.setText(f"Current: {p.upper()} — {pd}")
+            status.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 11px;")
 
-                    # 1. Gemini advisory (immediate per stock)
-                    if use_gemini and r.action in ("BUY", "SELL"):
-                        try:
-                            # Build rich position context for Gemini
-                            pos_info = None
-                            if r.ticker in self._agent_stocks:
-                                s = self._agent_stocks[r.ticker]
-                                pos_info = (f"holding {s.get('qty',0)} shares, "
-                                           f"last_signal={s.get('signal','?')}, "
-                                           f"checked {s.get('checks',0)}x")
-                            # Get exact broker position details
-                            try:
-                                bpos = self.broker.get_positions()
-                                if isinstance(bpos, list):
-                                    for p in bpos:
-                                        if p.get("symbol","").upper() == r.ticker.upper():
-                                            pos_info = (
-                                                f"holding {float(p.get('qty',0)):.0f} shares "
-                                                f"@ ${float(p.get('avg_entry_price',0)):.2f} entry, "
-                                                f"now ${float(p.get('current_price',0)):.2f}, "
-                                                f"P&L ${float(p.get('unrealized_pl',0)):+,.2f}")
-                                            break
-                            except: pass
+            # Update step indicators
+            for i, (num, key, label) in enumerate(phases):
+                active = (p == key)
+                phase_order = [pp[1] for pp in phases]
+                done = p in phase_order and key in phase_order and phase_order.index(p) > phase_order.index(key)
+                w = steps_row.itemAt(i).widget()
+                if active:
+                    w.setStyleSheet(f"background: {BRAND_PRIMARY}; color: white; border-radius: 4px; padding: 3px 6px; font-size: 9px; font-weight: bold;")
+                elif done:
+                    w.setStyleSheet(f"background: {BRAND_ACCENT}; color: white; border-radius: 4px; padding: 3px 6px; font-size: 9px; font-weight: bold;")
+                else:
+                    w.setStyleSheet(f"background: {BG_INPUT}; color: {TEXT_MUTED}; border-radius: 4px; padding: 3px 6px; font-size: 9px; font-weight: bold;")
 
-                            advisory = get_advisory(
-                                r.ticker, r.price, r.action, r.confidence, r.probs, r.atr,
-                                feature_importances=r.feature_importances,
-                                addon_data=addon_signals if addon_signals else None,
-                                position_info=pos_info,
-                                portfolio_context=f"BP=${bp:,.0f}, {trades_today}/{max_trades} trades")
-                            if advisory:
-                                old_conf = r.confidence
-                                _, r.confidence = apply_advisory(r.action, r.confidence, advisory)
-                                conv = int(advisory.get("conviction", 3))
-                                gem_rec = advisory.get("recommendation", "?")
-                                gem_weight = conv / 5.0
-                                agree = "AGREE" if gem_rec == r.action else "DISAGREE"
+        refresh_timer = QTimer(dlg)
+        refresh_timer.timeout.connect(_refresh_status)
+        refresh_timer.start(500)
 
-                                self.bus.log_entry.emit(
-                                    f"  {r.ticker}: Local={r.action}({old_conf:.0%}) "
-                                    f"Gemini={gem_rec}[{conv}/5,w={gem_weight:.1f}] "
-                                    f"→ {r.confidence:.0%} ({agree})", "info")
-                                self.bus.log_entry.emit(
-                                    f"    Reasoning: {advisory.get('reasoning','')}", "system")
-                        except: pass
+        dlg.exec_()
 
-                    # 2. Calculate dynamic interval based on ATR volatility
-                    atr_pct = r.atr / r.price if r.price > 0 and r.atr > 0 else 0.01
-                    if atr_pct > 0.02:
-                        dyn_interval = 120   # Volatile: 2 min
-                        dyn_label = "2m"
-                    elif atr_pct > 0.01:
-                        dyn_interval = 300   # Normal: 5 min
-                        dyn_label = "5m"
-                    elif atr_pct > 0.005:
-                        dyn_interval = 600   # Calm: 10 min
-                        dyn_label = "10m"
-                    else:
-                        dyn_interval = 900   # Very calm: 15 min
-                        dyn_label = "15m"
+    # Legacy method removed — agent loop now runs in core.agent.engine.AgentEngine
+    # The _run_agent method has been replaced by self._engine.start()
+    _run_agent = None  # Explicitly removed
+    # _agent_running flag replaced by self._engine.running
+    @property
+    def _agent_running(self):
+        return self._engine.running
+    # ── End of _agent_running property ──
 
-                    # Update table immediately with latest signal + dynamic interval
-                    existing = self._agent_stocks.get(r.ticker, {})
-                    self._agent_stocks[r.ticker] = {
-                        "signal": r.action, "confidence": r.confidence,
-                        "price": r.price, "last_check": datetime.now().strftime("%H:%M:%S"),
-                        "checks": existing.get("checks", 0) + 1,
-                        "qty": existing.get("qty", 0),
-                        "mode": existing.get("mode", "Scanned"),
-                        "interval": dyn_label, "next_secs": dyn_interval,
-                    }
-
-                    # 3. Classify and execute immediately
-                    if r.action == "HOLD" or r.confidence < min_conf:
-                        if r.action == "HOLD":
-                            holds += 1
-                            self.bus.log_entry.emit(f"    Decision: HOLD {r.ticker} — no action", "system")
-                        else:
-                            skipped += 1
-                            self.bus.log_entry.emit(
-                                f"    Decision: SKIP {r.ticker} — {r.confidence:.0%} below {min_conf:.0%} threshold", "system")
-                        continue
-
-                    if r.action == "SELL" and trades_today < max_trades and self.broker:
-                        sells += 1
-                        try:
-                            positions = self.broker.get_positions()
-                            held = 0
-                            if isinstance(positions, list):
-                                for p in positions:
-                                    if p.get("symbol", "").upper() == r.ticker.upper():
-                                        held = int(float(p.get("qty", 0)))
-                                        break
-                            if held > 0:
-                                qty = held if r.confidence > 0.7 else max(1, int(held * 0.5)) if r.confidence > 0.5 else max(1, int(held * 0.25))
-                                result = self.broker.close_position(r.ticker, qty=qty)
-                                if "error" not in result:
-                                    trades_today += 1
-                                    self.bus.log_entry.emit(f"    Decision: EXECUTE SELL {r.ticker} x{qty}/{held} ({r.confidence:.0%})", "trade")
-                                    self._agent_stocks[r.ticker]["qty"] = held - qty
-                                    self._agent_stocks[r.ticker]["mode"] = "Auto"
-                                else:
-                                    self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} FAILED — {result.get('error','')[:40]}", "error")
-                            else:
-                                self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} — no position held, skipping", "system")
-                        except Exception as _e:
-                            self.bus.log_entry.emit(f"    Decision: SELL {r.ticker} ERROR — {_e}", "error")
-
-                    elif r.action == "BUY" and trades_today < max_trades and self.broker:
-                        buys += 1
-                        try:
-                            acct = self.broker.get_account()
-                            bp = float(acct.get("buying_power", 0))
-                        except: pass
-                        if bp >= 100:
-                            max_spend = min(bp * 0.20, initial_bp / max(1, 5))
-                            try:
-                                qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
-                                cost = qty * r.price
-                                if qty > 0 and cost <= bp:
-                                    result = self.broker.place_order(r.ticker, qty, "buy",
-                                        stop_loss=r.stop_loss, take_profit=r.take_profit)
-                                    if "error" not in result:
-                                        trades_today += 1
-                                        bp -= cost
-                                        self.bus.log_entry.emit(f"    Decision: EXECUTE BUY {r.ticker} x{qty} @ ${r.price:.2f} (${cost:,.0f}, {r.confidence:.0%})", "trade")
-                                        self._agent_stocks[r.ticker]["qty"] = qty
-                                        self._agent_stocks[r.ticker]["mode"] = "Auto"
-                                        try:
-                                            mon_svc = self._get_svc()
-                                            if mon_svc and not mon_svc.is_monitoring(r.ticker):
-                                                mon_svc.add_stock(r.ticker, period="5d", interval="5m", auto_execute=True, min_confidence=0.5)
-                                        except: pass
-                                    else:
-                                        self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} FAILED — {result.get('error','')[:40]}", "error")
-                                else:
-                                    self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} — cost ${cost:,.0f} > BP ${bp:,.0f}, skipping", "warn")
-                            except Exception as _e:
-                                self.bus.log_entry.emit(f"    Decision: BUY {r.ticker} ERROR — {_e}", "error")
-                        else:
-                            # Capital rotation: sell weakest position to fund this buy
-                            # Default: only if this BUY is >80% confident
-                            # Aggressive/YOLO: if >60% confident
-                            rotate_threshold = 0.40 if profile_name == "YOLO" else 0.60 if profile_name == "Aggressive" else 0.80
-                            if r.confidence >= rotate_threshold and trades_today < max_trades:
-                                self.bus.log_entry.emit(
-                                    f"    BP ${bp:,.0f} too low — attempting capital rotation...", "system")
-                                try:
-                                    positions = self.broker.get_positions()
-                                    if isinstance(positions, list) and len(positions) > 1:
-                                        # Find weakest position (worst P&L %)
-                                        worst = None
-                                        worst_pct = 999
-                                        for p in positions:
-                                            sym = p.get("symbol", "")
-                                            if sym == r.ticker:
-                                                continue  # Don't sell what we're trying to buy
-                                            pct = float(p.get("unrealized_plpc", 0))
-                                            if pct < worst_pct:
-                                                worst_pct = pct
-                                                worst = p
-
-                                        if worst:
-                                            w_sym = worst.get("symbol", "")
-                                            w_qty = int(float(worst.get("qty", 0)))
-                                            w_pl = float(worst.get("unrealized_pl", 0))
-
-                                            # Default: only sell if position is losing
-                                            # Aggressive: sell even flat positions
-                                            # YOLO: sell anything for better opportunity
-                                            sell_ok = False
-                                            if profile_name == "YOLO":
-                                                sell_ok = True
-                                            elif profile_name == "Aggressive":
-                                                sell_ok = worst_pct < 0.01  # Sell if <1% gain
-                                            else:
-                                                sell_ok = worst_pct < -0.005  # Default: only sell losers
-
-                                            if sell_ok and w_qty > 0:
-                                                # Sell the worst position
-                                                sell_result = self.broker.close_position(w_sym, qty=w_qty)
-                                                if "error" not in sell_result:
-                                                    trades_today += 1
-                                                    freed = w_qty * float(worst.get("current_price", 0))
-                                                    self.bus.log_entry.emit(
-                                                        f"    ROTATE: Sold {w_sym} x{w_qty} (P&L ${w_pl:+,.0f}) "
-                                                        f"to fund {r.ticker} — freed ${freed:,.0f}", "trade")
-
-                                                    # Now buy the target
-                                                    import time as _t; _t.sleep(1)
-                                                    try:
-                                                        acct2 = self.broker.get_account()
-                                                        bp = float(acct2.get("buying_power", 0))
-                                                    except: pass
-                                                    if bp >= 100:
-                                                        buy_qty = max(1, int(min(bp * 0.20, freed * 0.9) / r.price))
-                                                        if buy_qty > 0:
-                                                            buy_result = self.broker.place_order(r.ticker, buy_qty, "buy",
-                                                                stop_loss=r.stop_loss, take_profit=r.take_profit)
-                                                            if "error" not in buy_result:
-                                                                trades_today += 1
-                                                                self.bus.log_entry.emit(
-                                                                    f"    Decision: ROTATE BUY {r.ticker} x{buy_qty} "
-                                                                    f"@ ${r.price:.2f} ({r.confidence:.0%})", "trade")
-                                                                self._agent_stocks[r.ticker]["qty"] = buy_qty
-                                                                self._agent_stocks[r.ticker]["mode"] = "Auto"
-                                                            else:
-                                                                self.bus.log_entry.emit(
-                                                                    f"    ROTATE BUY failed: {buy_result.get('error','')[:40]}", "error")
-                                                else:
-                                                    self.bus.log_entry.emit(
-                                                        f"    ROTATE: {w_sym} sell failed: {sell_result.get('error','')[:40]}", "error")
-                                            else:
-                                                self.bus.log_entry.emit(
-                                                    f"    Decision: BUY {r.ticker} — no weak positions to rotate ({profile_name})", "warn")
-                                except Exception as _e:
-                                    self.bus.log_entry.emit(f"    Rotation error: {_e}", "error")
-                            else:
-                                self.bus.log_entry.emit(
-                                    f"    Decision: BUY {r.ticker} — BP ${bp:,.0f} too low, "
-                                    f"need >{rotate_threshold:.0%} conf for rotation ({r.confidence:.0%})", "warn")
-
-                self.bus.log_entry.emit(
-                    f"Cycle {cycle}: {buys}B {sells}S {holds}H ({skipped} skipped)", "trade")
-
-                # Dynamic next cycle timing based on what happened
-                # More action = check sooner, quiet market = wait longer
-                base_wait = 300  # 5 min default
-
-                # Factor 1: trades executed — more trades = check sooner
-                if trades_today > 3:
-                    base_wait = int(base_wait * 0.5)   # 2.5 min
-                elif trades_today > 0:
-                    base_wait = int(base_wait * 0.75)  # 3.75 min
-
-                # Factor 2: strong signals found — opportunity = check sooner
-                strong_signals = buys + sells
-                if strong_signals > 5:
-                    base_wait = int(base_wait * 0.6)
-                elif strong_signals == 0:
-                    base_wait = int(base_wait * 1.5)   # Quiet = wait longer
-
-                # Factor 3: aggressivity — aggressive profiles check faster
-                if profile_name == "YOLO":
-                    base_wait = int(base_wait * 0.5)
-                elif profile_name == "Aggressive":
-                    base_wait = int(base_wait * 0.7)
-                elif profile_name == "Chill":
-                    base_wait = int(base_wait * 1.5)
-
-                # Clamp: minimum 1 min, maximum 15 min
-                wait_secs = max(60, min(900, base_wait))
-                wait_min = wait_secs / 60
-
-                self.bus.log_entry.emit(
-                    f"Cycle {cycle} done. {trades_today}/{max_trades} trades. "
-                    f"Next in {wait_min:.1f} min (dynamic).", "system")
-                self._last_cycle = cycle
-                self._last_trades_today = trades_today
-
-            except Exception as e:
-                self.bus.log_entry.emit(f"Agent error: {e}", "error")
-                wait_secs = 300  # Default on error
-
-            # Dynamic countdown
-            self._countdown_secs = wait_secs
-            for _ in range(wait_secs):
-                if not getattr(self, '_agent_running', False): break
-                time.sleep(1)
-                self._countdown_secs = max(0, self._countdown_secs - 1)
-
-        self._countdown_secs = 0
-        self._countdown_timer.stop()
-        QTimer.singleShot(0, lambda: self.agent_countdown.setText(""))
-        self.bus.log_entry.emit("Autonomous agent stopped", "system")
-        log_event("agent", f"Agent stopped after {cycle} cycles, {trades_today} trades")

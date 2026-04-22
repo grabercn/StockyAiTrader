@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Tray Explode Animation — particles burst from tray icon when quitting.
 
@@ -13,10 +14,11 @@ from PyQt5.QtCore import Qt, QTimer, QPointF
 from PyQt5.QtGui import QPainter, QColor, QRadialGradient
 
 from ..branding import BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT
+from .anim_config import get_particle_count, get_timer_interval
 
 
 class TrayExplode(QWidget):
-    """Fullscreen overlay — firework burst from tray icon position."""
+    """Fullscreen overlay -- firework burst from tray icon position."""
 
     def __init__(self, cx, cy, on_done=None):
         super().__init__()
@@ -29,27 +31,26 @@ class TrayExplode(QWidget):
         screen = QApplication.primaryScreen().availableGeometry()
         self.setGeometry(screen)
 
-        # Explosion center (tray icon position in screen coords)
         self._cx = cx - screen.x()
         self._cy = cy - screen.y()
 
-        # Generate burst particles
         self._particles = []
         colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#e2e8f0", "#ffffff"]
+        num = get_particle_count("tray")
 
-        for _ in range(100):
+        for _ in range(num):
             angle = random.uniform(0, 6.28)
-            speed = random.uniform(3, 15)
+            speed = random.uniform(3, 14)
             self._particles.append({
                 "x": self._cx,
                 "y": self._cy,
                 "vx": math.cos(angle) * speed,
-                "vy": math.sin(angle) * speed - random.uniform(1, 4),  # Bias upward
-                "size": random.uniform(2, 7),
+                "vy": math.sin(angle) * speed - random.uniform(1, 4),
+                "size": random.uniform(2, 6),
                 "color": random.choice(colors),
                 "alpha": 1.0,
-                "decay": random.uniform(0.015, 0.035),
-                "spark": random.random() > 0.7,  # 30% are sparkle particles
+                "decay": random.uniform(0.018, 0.04),
+                "spark": random.random() > 0.75,
             })
 
         self._phase = 0.0
@@ -59,24 +60,24 @@ class TrayExplode(QWidget):
         self.raise_()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(16)
+        self._timer.start(get_timer_interval())
 
     def _tick(self):
-        self._phase += 0.03
+        self._phase += 0.035
         all_dead = True
 
         for p in self._particles:
             p["x"] += p["vx"]
             p["y"] += p["vy"]
-            p["vy"] += 0.15  # Gravity
-            p["vx"] *= 0.99  # Air resistance
+            p["vy"] += 0.15
+            p["vx"] *= 0.99
             p["alpha"] -= p["decay"]
             if p["alpha"] > 0:
                 all_dead = False
 
         self.update()
 
-        if all_dead or self._phase > 2.0:
+        if all_dead or self._phase > 1.8:
             self._timer.stop()
             if self._on_done:
                 self._on_done()
@@ -87,15 +88,15 @@ class TrayExplode(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # Initial flash at explosion center
-        if self._phase < 0.15:
-            flash_a = (0.15 - self._phase) / 0.15 * 0.5
-            flash = QRadialGradient(QPointF(self._cx, self._cy), 80)
+        # Initial flash
+        if self._phase < 0.12:
+            flash_a = (0.12 - self._phase) / 0.12 * 0.4
+            flash = QRadialGradient(QPointF(self._cx, self._cy), 60)
             fc = QColor("#ffffff")
             fc.setAlphaF(flash_a)
             flash.setColorAt(0, fc)
             fc2 = QColor(BRAND_PRIMARY)
-            fc2.setAlphaF(flash_a * 0.3)
+            fc2.setAlphaF(flash_a * 0.25)
             flash.setColorAt(0.5, fc2)
             fc3 = QColor(BRAND_PRIMARY)
             fc3.setAlphaF(0)
@@ -104,7 +105,6 @@ class TrayExplode(QWidget):
             painter.setPen(Qt.NoPen)
             painter.drawRect(self.rect())
 
-        # Particles
         painter.setPen(Qt.NoPen)
         for p in self._particles:
             if p["alpha"] <= 0:
@@ -117,23 +117,11 @@ class TrayExplode(QWidget):
             painter.setBrush(c)
             painter.drawEllipse(QPointF(p["x"], p["y"]), s, s)
 
-            # Sparkle particles twinkle
+            # Sparkle twinkle
             if p.get("spark") and int(self._phase * 20) % 3 == 0:
                 sc = QColor("#ffffff")
-                sc.setAlphaF(a * 0.8)
+                sc.setAlphaF(a * 0.7)
                 painter.setBrush(sc)
-                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 0.5, s * 0.5)
-
-            # Glow
-            if a > 0.2:
-                gc = QColor(p["color"])
-                gc.setAlphaF(a * 0.08)
-                glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 4)
-                glow.setColorAt(0, gc)
-                gc2 = QColor(p["color"])
-                gc2.setAlphaF(0)
-                glow.setColorAt(1, gc2)
-                painter.setBrush(glow)
-                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 4, s * 4)
+                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 0.4, s * 0.4)
 
         painter.end()

@@ -172,6 +172,15 @@ class SettingsPanel(QWidget):
         self._update_close_note()
         al2.addWidget(self.close_note)
 
+        # Animations note
+        anim_note = QLabel(
+            "Note: Particle animations (boot, minimize, restore, quit) are automatically "
+            "disabled when the hardware profile is set to Light or Minimal for better performance."
+        )
+        anim_note.setWordWrap(True)
+        anim_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px; font-style: italic; padding-top: 4px;")
+        al2.addWidget(anim_note)
+
         appear_box.setLayout(al2)
         inner_layout.addWidget(appear_box)
 

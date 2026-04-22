@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Window Reveal Animation — particles converge to form the main window outline.
 
@@ -18,6 +19,7 @@ from PyQt5.QtCore import Qt, QTimer, QPointF
 from PyQt5.QtGui import QPainter, QColor, QRadialGradient, QPen
 
 from ..branding import BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT
+from .anim_config import get_particle_count, get_timer_interval
 
 
 class WindowReveal(QWidget):
@@ -51,22 +53,18 @@ class WindowReveal(QWidget):
 
         # Distribute target points along the window rectangle perimeter
         perimeter = 2 * (self._tw + self._th)
-        num_particles = 150
+        num_particles = get_particle_count("reveal")
 
         for i in range(num_particles):
             # Target: point on the window edge
             t = (i / num_particles) * perimeter
             if t < self._tw:
-                # Top edge
                 tx, ty = self._tx + t, self._ty
             elif t < self._tw + self._th:
-                # Right edge
                 tx, ty = self._tx + self._tw, self._ty + (t - self._tw)
             elif t < 2 * self._tw + self._th:
-                # Bottom edge
                 tx, ty = self._tx + self._tw - (t - self._tw - self._th), self._ty + self._th
             else:
-                # Left edge
                 tx, ty = self._tx, self._ty + self._th - (t - 2 * self._tw - self._th)
 
             # Start: random position far from target
@@ -77,12 +75,12 @@ class WindowReveal(QWidget):
 
             self._particles.append({
                 "x": sx, "y": sy,
-                "tx": tx, "ty": ty,      # Target position
-                "sx": sx, "sy": sy,       # Start position
-                "size": random.uniform(2, 5),
+                "tx": tx, "ty": ty,
+                "sx": sx, "sy": sy,
+                "size": random.uniform(2, 4),
                 "color": random.choice(colors),
                 "arrived": False,
-                "delay": random.uniform(0, 0.3),  # Staggered start
+                "delay": random.uniform(0, 0.3),
             })
 
     def start(self):
@@ -90,24 +88,22 @@ class WindowReveal(QWidget):
         self.raise_()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(16)  # ~60fps
+        self._timer.start(get_timer_interval())
 
     def _tick(self):
-        self._phase += 0.02
+        self._phase += 0.025
         all_arrived = True
 
         for p in self._particles:
             if p["arrived"]:
                 continue
 
-            # Staggered start
             if self._phase < p["delay"]:
                 all_arrived = False
                 continue
 
-            # Ease-in towards target (cubic interpolation)
-            t = min(1.0, (self._phase - p["delay"]) / 0.8)  # 0.8s travel time
-            ease = t * t * (3 - 2 * t)  # Smoothstep
+            t = min(1.0, (self._phase - p["delay"]) / 0.8)
+            ease = t * t * (3 - 2 * t)
 
             p["x"] = p["sx"] + (p["tx"] - p["sx"]) * ease
             p["y"] = p["sy"] + (p["ty"] - p["sy"]) * ease
@@ -121,18 +117,15 @@ class WindowReveal(QWidget):
 
         self.update()
 
-        # When all particles arrive, show window and start fade-out
         if all_arrived or self._phase > 1.5:
             if not hasattr(self, '_fading_out'):
                 self._fading_out = True
                 self._fade_phase = 0.0
-                # Callback to show the main window
                 if self._on_done:
                     self._on_done()
 
-        # Fade out the particles after arrival
         if hasattr(self, '_fading_out'):
-            self._fade_phase += 0.04
+            self._fade_phase += 0.05
             if self._fade_phase > 1.0:
                 self._timer.stop()
                 self.hide()
@@ -153,7 +146,6 @@ class WindowReveal(QWidget):
 
             c = QColor(p["color"])
             alpha = fade
-            # Particles glow brighter as they approach target
             if not p["arrived"]:
                 dx = p["x"] - p["tx"]
                 dy = p["y"] - p["ty"]
@@ -163,24 +155,24 @@ class WindowReveal(QWidget):
             c.setAlphaF(max(0, min(1, alpha)))
             s = p["size"]
 
-            # Bright core
+            # Core dot
             painter.setBrush(c)
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(QPointF(p["x"], p["y"]), s, s)
 
-            # Glow
-            if alpha > 0.15:
+            # Subtle glow (reduced radius)
+            if alpha > 0.3:
                 gc = QColor(p["color"])
-                gc.setAlphaF(max(0, alpha * 0.15))
-                glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 5)
+                gc.setAlphaF(max(0, alpha * 0.12))
+                glow = QRadialGradient(QPointF(p["x"], p["y"]), s * 3)
                 glow.setColorAt(0, gc)
                 gc2 = QColor(p["color"])
                 gc2.setAlphaF(0)
                 glow.setColorAt(1, gc2)
                 painter.setBrush(glow)
-                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 5, s * 5)
+                painter.drawEllipse(QPointF(p["x"], p["y"]), s * 3, s * 3)
 
-        # After arrival: draw a glowing rectangle outline where particles settled
+        # Outline glow after arrival
         if hasattr(self, '_fading_out') and fade > 0:
             rc = QColor(BRAND_PRIMARY)
             rc.setAlphaF(fade * 0.3)

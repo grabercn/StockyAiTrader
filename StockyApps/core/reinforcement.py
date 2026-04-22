@@ -122,6 +122,16 @@ def build_training_data():
     X = []
     y = []
 
+    # Build a price lookup: find the next known price for each ticker after each trade
+    # by scanning all decisions chronologically
+    ticker_prices = {}  # {ticker: [(timestamp, price), ...]}
+    for d in decisions:
+        t = d.get("ticker", "")
+        ts = d.get("timestamp", "")
+        price = d.get("price", 0)
+        if t and price > 0:
+            ticker_prices.setdefault(t, []).append((ts, price))
+
     for m in matched:
         features = [
             m["confidence"],
@@ -133,14 +143,36 @@ def build_training_data():
         ]
         X.append(features)
 
-        # Label: was the trade direction correct?
-        # For now, use confidence as a proxy (we'll improve with actual P&L data)
-        if m["action"] == "BUY" and m["probabilities"].get("buy", 0) > 0.5:
-            y.append(1)
-        elif m["action"] == "SELL" and m["probabilities"].get("sell", 0) > 0.5:
-            y.append(1)
+        # Label: did the price move in the predicted direction?
+        # Find the next price observation for this ticker after this trade
+        label = 0
+        entry_price = m.get("fill_price") or m["price_at_decision"]
+        ticker = m.get("ticker", "")
+        trade_ts = m.get("timestamp", "")
+
+        prices = ticker_prices.get(ticker, [])
+        future_price = None
+        for ts, p in prices:
+            if ts > trade_ts and p > 0:
+                future_price = p
+                break
+
+        if future_price and entry_price > 0:
+            # Direction-based labeling: did price move the right way?
+            if m["action"] == "BUY" and future_price > entry_price:
+                label = 1  # Price went up after BUY — good
+            elif m["action"] == "SELL" and future_price < entry_price:
+                label = 1  # Price went down after SELL — good
+            else:
+                label = 0  # Wrong direction
         else:
-            y.append(0)
+            # Fallback: use probability alignment if no future price available
+            if m["action"] == "BUY" and m["probabilities"].get("buy", 0) > 0.5:
+                label = 1
+            elif m["action"] == "SELL" and m["probabilities"].get("sell", 0) > 0.5:
+                label = 1
+
+        y.append(label)
 
     return np.array(X), np.array(y), len(matched)
 

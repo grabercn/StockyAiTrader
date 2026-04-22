@@ -118,7 +118,7 @@ class AutoTraderService(QThread):
     def run(self):
         """Main loop — ticks every second, checks each stock's countdown."""
         log_event("auto_trader", "Background auto-trader service started")
-        self.log.emit("Auto-trader service started", "system")
+        self.log.emit("Auto-trader service started", "agent")
 
         while self._running:
             for ticker, stock in list(self._stocks.items()):

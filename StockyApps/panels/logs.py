@@ -109,34 +109,30 @@ class LogsPanel(QWidget):
                 ticker = e.get("ticker", "?")
                 conf = e.get("confidence", 0)
                 reason = e.get("reasoning", "")
-                ac = {"BUY": COLOR_BUY, "SELL": COLOR_SELL, "HOLD": COLOR_HOLD}.get(act, TEXT_MUTED)
-                self.log_view.append(
-                    f'<span style="color:{TEXT_MUTED}">{ts}</span> '
-                    f'<span style="color:{ac};font-weight:bold">{act} {ticker}</span> '
-                    f'<span style="color:{TEXT_MUTED}">({conf:.0%})</span>')
+                self.log_view.append(log_html(
+                    f"{act} {ticker} ({conf:.0%})", "decision"))
                 if reason:
-                    self.log_view.append(f'<span style="color:{TEXT_MUTED};font-size:10px">  {reason}</span>')
+                    self.log_view.append(log_html(f"  {reason}", "gemini"))
                 imps = e.get("feature_importances", {})
                 if imps:
                     s = ", ".join([f"{k}:{v:.0f}" for k, v in list(imps.items())[:5]])
-                    self.log_view.append(f'<span style="color:{BORDER};font-size:9px">  Features: {s}</span>')
+                    self.log_view.append(log_html(f"  Features: {s}", "rl"))
             elif t == "execution":
                 side = e.get("side", "?")
                 ticker = e.get("ticker", "?")
                 err = e.get("error")
-                c = COLOR_SELL if err else BRAND_ACCENT
-                self.log_view.append(
-                    f'<span style="color:{TEXT_MUTED}">{ts}</span> '
-                    f'<span style="color:{c}">{side.upper()} {ticker} x{e.get("qty",0)}</span>'
-                    + (f' <span style="color:{COLOR_SELL}">{err}</span>' if err else ""))
+                if err:
+                    self.log_view.append(log_html(
+                        f"{side.upper()} {ticker} x{e.get('qty',0)} — {err}", "error"))
+                else:
+                    self.log_view.append(log_html(
+                        f"{side.upper()} {ticker} x{e.get('qty',0)}", "trade"))
             elif t == "scan":
-                self.log_view.append(
-                    f'<span style="color:{TEXT_MUTED}">{ts}</span> '
-                    f'<span style="color:{COLOR_HOLD}">SCAN {e.get("tickers_scanned",0)} tickers ({e.get("duration_seconds",0):.1f}s)</span>')
+                self.log_view.append(log_html(
+                    f"SCAN {e.get('tickers_scanned',0)} tickers ({e.get('duration_seconds',0):.1f}s)", "scan"))
             else:
-                self.log_view.append(
-                    f'<span style="color:{TEXT_MUTED}">{ts}</span> '
-                    f'<span style="color:{TEXT_SECONDARY}">{e.get("message","")}</span>')
+                msg = e.get("message", "") or e.get("event", t)
+                self.log_view.append(log_html(str(msg), "system"))
 
 
 # ═════════════════════════════════════════════════════════════════════════════

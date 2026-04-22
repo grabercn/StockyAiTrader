@@ -35,6 +35,7 @@ from ..branding import (
     BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT,
     FONT_FAMILY, FONT_MONO,
 )
+from .anim_config import get_particle_count, get_timer_interval
 
 
 class _AnimatedBackground(QWidget):
@@ -332,7 +333,8 @@ class _DissolveOverlay(QWidget):
         self._particles = []
         colors = [BRAND_PRIMARY, BRAND_SECONDARY, BRAND_ACCENT, "#94a3b8", "#e2e8f0", "#ffffff"]
 
-        for _ in range(140):
+        num = get_particle_count("dissolve")
+        for _ in range(num):
             angle = random.uniform(0, 6.28)
             speed = random.uniform(2, 10)
             dist = random.uniform(0, 60)
@@ -357,7 +359,7 @@ class _DissolveOverlay(QWidget):
         self.raise_()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(20)
+        self._timer.start(get_timer_interval())
 
     def _tick(self):
         self._phase += 0.03

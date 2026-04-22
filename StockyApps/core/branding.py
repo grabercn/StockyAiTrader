@@ -471,15 +471,25 @@ def log_html(msg, level="info"):
     """Format a log message as colored HTML for QTextEdit display."""
     from datetime import datetime
     ts = datetime.now().strftime("%H:%M:%S")
-    colors = {
-        "info": BRAND_PRIMARY,
-        "warn": COLOR_HOLD,
-        "error": COLOR_SELL,
-        "trade": BRAND_ACCENT,
-        "system": TEXT_MUTED,
+    # (text color, badge label, badge bg)
+    styles = {
+        "info":     (BRAND_PRIMARY,    "INFO",     "#0ea5e9"),
+        "warn":     (COLOR_HOLD,       "WARN",     "#d97706"),
+        "error":    (COLOR_SELL,       "ERROR",    "#dc2626"),
+        "trade":    (BRAND_ACCENT,     "TRADE",    "#059669"),
+        "system":   (TEXT_MUTED,       "SYS",      "#475569"),
+        "gemini":   ("#c084fc",        "GEMINI",   "#7c3aed"),  # Purple
+        "decision": ("#38bdf8",        "SIGNAL",   "#0284c7"),  # Bright blue
+        "agent":    ("#fb923c",        "AGENT",    "#c2410c"),  # Orange
+        "rl":       ("#f472b6",        "RL",       "#be185d"),  # Pink
+        "scan":     ("#a78bfa",        "SCAN",     "#6d28d9"),  # Violet
     }
-    color = colors.get(level, TEXT_SECONDARY)
+    color, badge_text, badge_bg = styles.get(level, (TEXT_SECONDARY, level.upper(), "#475569"))
+    badge = (
+        f'<span style="background:{badge_bg}; color:white; padding:1px 4px; '
+        f'border-radius:3px; font-size:8px; font-weight:bold;">{badge_text}</span> '
+    )
     return (
-        f'<span style="color:{TEXT_MUTED}">{ts}</span> '
+        f'<span style="color:#475569">{ts}</span> {badge}'
         f'<span style="color:{color}">{msg}</span>'
     )

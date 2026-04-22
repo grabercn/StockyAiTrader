@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Panel module — auto-extracted from StockySuite.py"""
 import sys, os, json, time
 import numpy as np

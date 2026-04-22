@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Stocky Suite — Unified AI Trading Dashboard.
 
@@ -332,10 +333,12 @@ class StockySuite(QMainWindow):
             except Exception:
                 pass
 
-        # Save agent cycle metadata
-        if ai_agent:
-            settings["agent_cycle_count"] = getattr(ai_agent, '_last_cycle', 0)
-            settings["agent_trades_today"] = getattr(ai_agent, '_last_trades_today', 0)
+        # Save full engine state for seamless resume
+        if ai_agent and hasattr(ai_agent, '_engine'):
+            engine_state = ai_agent._engine.get_state()
+            settings["agent_engine_state"] = engine_state
+            settings["agent_cycle_count"] = engine_state.get("cycle", 0)
+            settings["agent_trades_today"] = engine_state.get("trades_today", 0)
 
         save_settings(settings)
 
@@ -350,23 +353,27 @@ class StockySuite(QMainWindow):
                 self._tray.tray.hide()
             event.accept()
         else:
-            # Reverse particle animation — edges collapse to center
             event.ignore()
-            from core.ui.window_collapse import WindowCollapse
-            snapshot = self.grab()
-            geo = self.geometry()
-            self.hide()
+            from core.ui.anim_config import animations_enabled
 
-            def _on_collapse_done():
+            def _notify_tray():
                 self._tray.send_notification(
                     "Stocky Suite",
                     "Running in background. Double-click tray icon to restore.",
                     "info",
                 )
 
-            overlay = WindowCollapse(snapshot, geo, on_done=_on_collapse_done)
-            overlay.start()
-            self._close_overlay = overlay
+            if animations_enabled():
+                from core.ui.window_collapse import WindowCollapse
+                snapshot = self.grab()
+                geo = self.geometry()
+                self.hide()
+                overlay = WindowCollapse(snapshot, geo, on_done=_notify_tray)
+                overlay.start()
+                self._close_overlay = overlay
+            else:
+                self.hide()
+                _notify_tray()
 
     def _init_broker(self):
         settings = load_settings()
@@ -885,15 +892,16 @@ def boot_app():
 
             if reply == QMessageBox.Yes:
                 suite.event_bus.log_entry.emit(
-                    f"Resuming AI — {len(monitored)} stocks", "trade")
+                    f"Resuming AI — {len(monitored)} stocks", "agent")
                 for ticker in monitored:
                     suite.event_bus.log_entry.emit(f"Restored {ticker}: will check shortly", "system")
-                suite.event_bus.log_entry.emit("Starting autonomous agent...", "system")
+                # Navigate to AI Agent tab
                 suite.tabs.setCurrentIndex(1)
+                # Start agent directly — skip the in-page dialog
                 def _start_agent_delayed():
                     ai = getattr(suite, 'ai_agent', None)
-                    if ai and hasattr(ai, '_toggle_agent'):
-                        ai._toggle_agent()
+                    if ai and hasattr(ai, '_start_agent'):
+                        ai._start_agent()
                 QTimer.singleShot(1500, _start_agent_delayed)
             else:
                 settings["agent_was_running"] = False
@@ -904,12 +912,16 @@ def boot_app():
             print(f"[RESUME ERROR] {e}", flush=True)
 
     # Start the reveal animation, fall back to direct fade-in
-    try:
-        reveal = WindowReveal(suite, on_done=_fade_in_app)
-        reveal.start()
-        suite._reveal = reveal
-    except Exception:
-        print("[BOOT] Reveal failed, direct fade-in", flush=True)
+    from core.ui.anim_config import animations_enabled
+    if animations_enabled():
+        try:
+            reveal = WindowReveal(suite, on_done=_fade_in_app)
+            reveal.start()
+            suite._reveal = reveal
+        except Exception:
+            print("[BOOT] Reveal failed, direct fade-in", flush=True)
+            _fade_in_app()
+    else:
         _fade_in_app()
 
     suite.raise_()
