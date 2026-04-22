@@ -115,6 +115,22 @@ class TestingPanel(QWidget):
         sim_box.setLayout(sl)
         layout.addWidget(sim_box)
 
+        # Agent Backtest
+        bt_box = QGroupBox("Agent Backtest (Historical Simulation)")
+        bl = QVBoxLayout()
+        bl.addWidget(QLabel("Replay agent decisions from JSONL logs and simulate P&L with different strategies."))
+        self.bt_output = QTextEdit()
+        self.bt_output.setReadOnly(True)
+        self.bt_output.setFont(QFont(FONT_MONO, 9))
+        self.bt_output.setMinimumHeight(200)
+        bl.addWidget(self.bt_output)
+        run_bt_btn = QPushButton("Run Agent Backtest")
+        run_bt_btn.setStyleSheet(f"background-color: {BRAND_ACCENT};")
+        run_bt_btn.clicked.connect(self._run_backtest)
+        bl.addWidget(run_bt_btn)
+        bt_box.setLayout(bl)
+        layout.addWidget(bt_box)
+
         # Unit test runner
         test_box = QGroupBox("Unit Tests (pytest)")
         tl = QVBoxLayout()
@@ -140,6 +156,42 @@ class TestingPanel(QWidget):
             f"Trade delay simulation {'enabled (10s delay)' if checked else 'disabled'}",
             "system",
         )
+
+    def _run_backtest(self):
+        """Run agent backtest using historical JSONL data."""
+        self.bt_output.clear()
+        self.bt_output.append("Running agent backtest on historical data...\n")
+        QApplication.processEvents()
+
+        import threading
+        def _do_backtest():
+            try:
+                import subprocess
+                result = subprocess.run(
+                    [sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "backtest_agent.py")],
+                    capture_output=True, text=True, timeout=120,
+                    cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                )
+                output = result.stdout + result.stderr
+                QTimer.singleShot(0, lambda: self._bt_done(output))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._bt_done(f"Backtest error: {e}"))
+
+        threading.Thread(target=_do_backtest, daemon=True).start()
+
+    def _bt_done(self, output):
+        self.bt_output.clear()
+        for line in output.split("\n"):
+            if "BEST:" in line or "WORST:" in line:
+                self.bt_output.append(f'<b style="color:{BRAND_ACCENT};">{line}</b>')
+            elif "RECOMMEND" in line or "+" in line[:5]:
+                self.bt_output.append(f'<span style="color:{BRAND_ACCENT};">{line}</span>')
+            elif "-" in line[:5]:
+                self.bt_output.append(f'<span style="color:{COLOR_SELL};">{line}</span>')
+            elif "===" in line or "---" in line:
+                self.bt_output.append(f'<span style="color:{BRAND_PRIMARY};">{line}</span>')
+            else:
+                self.bt_output.append(line)
 
     def _test_trade(self, side, ticker, qty, limit=None):
         if not self.broker:
