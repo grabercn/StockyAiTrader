@@ -213,9 +213,21 @@ def scan_ticker(ticker, period="5d", interval="5m", risk_manager=None, auto_sett
         )
 
         # Composite score for ranking (higher = better opportunity)
-        # Weights: confidence matters most, BUY/SELL bonus, volume factor
-        action_bonus = 1.0 if last_action in ("BUY", "SELL") else 0.0
-        score = (last_conf * 0.6) + (action_bonus * 0.3) + (abs(last_probs[2] - last_probs[0]) * 0.1)
+        # Improved formula: strongly favors high-confidence directional signals
+        # and penalizes marginal predictions where probabilities are close
+        if last_action in ("BUY", "SELL"):
+            action_bonus = 1.0
+            # Conviction: how much stronger is the predicted class vs the next best?
+            sorted_probs = sorted(last_probs, reverse=True)
+            conviction = sorted_probs[0] - sorted_probs[1]  # margin over 2nd-best
+        else:
+            action_bonus = 0.0
+            conviction = 0.0
+
+        # Directional clarity: how separated are BUY and SELL probabilities?
+        directional_clarity = abs(last_probs[2] - last_probs[0])
+
+        score = (last_conf * 0.40) + (action_bonus * 0.25) + (conviction * 0.20) + (directional_clarity * 0.15)
 
         return ScanResult(
             ticker=ticker, action=last_action, confidence=last_conf,

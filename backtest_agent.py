@@ -68,6 +68,7 @@ def simulate(decisions, config):
         position_pct: float (fraction of BP per trade)
         stop_mult: float (ATR stop multiplier)
         profit_mult: float (ATR profit multiplier)
+        min_prob_margin: float (BUY prob must exceed SELL prob by this amount)
     """
     series = build_price_series(decisions)
     min_conf = config.get("min_confidence", 0.5)
@@ -76,6 +77,8 @@ def simulate(decisions, config):
     position_pct = config.get("position_pct", 0.20)
     stop_mult = config.get("stop_mult", 1.5)
     profit_mult = config.get("profit_mult", 2.5)
+    min_prob_margin = config.get("min_prob_margin", 0.0)
+    confidence_scaling = config.get("confidence_scaling", False)
 
     starting_capital = 50000
     capital = starting_capital
@@ -140,9 +143,23 @@ def simulate(decisions, config):
                 prev_signals[ticker] = action
                 continue
 
+        # Probability margin filter: BUY prob must exceed SELL prob by min_prob_margin
+        if action == "BUY" and min_prob_margin > 0:
+            probs = point.get("probs", {})
+            buy_prob = probs.get("buy", 0) if isinstance(probs, dict) else 0
+            sell_prob = probs.get("sell", 0) if isinstance(probs, dict) else 0
+            if (buy_prob - sell_prob) < min_prob_margin:
+                prev_signals[ticker] = action
+                continue
+
         # Execute trade
         if action == "BUY" and capital > 100:
-            spend = capital * position_pct
+            # Scale position size by confidence if enabled
+            effective_pct = position_pct
+            if confidence_scaling and conf > 0:
+                # 50% conf = 0.7x position, 100% conf = 1.3x position
+                effective_pct = position_pct * (0.7 + conf * 0.6)
+            spend = capital * effective_pct
             qty = max(1, int(spend / price))
             cost = qty * price
             if cost <= capital:
@@ -248,6 +265,99 @@ def main():
             "min_confidence": 0.35, "max_trades_per_day": 15,
             "require_confirmation": False, "position_pct": 0.20,
             "stop_mult": 1.2, "profit_mult": 2.0,
+        },
+        "Optimal (60% conf, confirm, wide TP)": {
+            "min_confidence": 0.60, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.0,
+        },
+        "High-conf wide TP (75% + 3.5x)": {
+            "min_confidence": 0.75, "max_trades_per_day": 6,
+            "require_confirmation": False, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.5,
+        },
+        "Ultra-conservative (80% + confirm)": {
+            "min_confidence": 0.80, "max_trades_per_day": 4,
+            "require_confirmation": True, "position_pct": 0.12,
+            "stop_mult": 1.0, "profit_mult": 3.0,
+        },
+        "Balanced (65% conf, 1.3x/2.8x)": {
+            "min_confidence": 0.65, "max_trades_per_day": 8,
+            "require_confirmation": False, "position_pct": 0.18,
+            "stop_mult": 1.3, "profit_mult": 2.8,
+        },
+        "High-conf + prob margin (75%+10%)": {
+            "min_confidence": 0.75, "max_trades_per_day": 6,
+            "require_confirmation": False, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.5,
+            "min_prob_margin": 0.10,
+        },
+        "Confirm + prob margin (65%+15%)": {
+            "min_confidence": 0.65, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.0,
+            "min_prob_margin": 0.15,
+        },
+        "Best + conf scaling (75%+3.5x+cs)": {
+            "min_confidence": 0.75, "max_trades_per_day": 6,
+            "require_confirmation": False, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.5,
+            "confidence_scaling": True,
+        },
+        "Best + confirm + scaling": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.15,
+            "stop_mult": 1.2, "profit_mult": 3.5,
+            "confidence_scaling": True,
+        },
+        "TUNED: 72% + 1.1x/4.0x + cs": {
+            "min_confidence": 0.72, "max_trades_per_day": 6,
+            "require_confirmation": False, "position_pct": 0.18,
+            "stop_mult": 1.1, "profit_mult": 4.0,
+            "confidence_scaling": True,
+        },
+        "TUNED: 70% + confirm + 1.0x/3.5x": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.18,
+            "stop_mult": 1.0, "profit_mult": 3.5,
+            "confidence_scaling": True,
+        },
+        "TUNED: 68% + 1.2x/3.0x + cs + margin": {
+            "min_confidence": 0.68, "max_trades_per_day": 8,
+            "require_confirmation": False, "position_pct": 0.18,
+            "stop_mult": 1.2, "profit_mult": 3.0,
+            "confidence_scaling": True,
+            "min_prob_margin": 0.10,
+        },
+        "FINAL: 70% + confirm + 0.8x/3.5x + cs": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 0.8, "profit_mult": 3.5,
+            "confidence_scaling": True,
+        },
+        "FINAL: 70% + confirm + 1.0x/4.0x + cs": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 1.0, "profit_mult": 4.0,
+            "confidence_scaling": True,
+        },
+        "FINAL: 65% + confirm + 1.0x/3.5x + cs": {
+            "min_confidence": 0.65, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 1.0, "profit_mult": 3.5,
+            "confidence_scaling": True,
+        },
+        "FINAL: 70% + confirm + 1.0x/4.5x + cs": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.22,
+            "stop_mult": 1.0, "profit_mult": 4.5,
+            "confidence_scaling": True,
+        },
+        "FINAL: 70% + confirm + 0.9x/4.0x + cs": {
+            "min_confidence": 0.70, "max_trades_per_day": 6,
+            "require_confirmation": True, "position_pct": 0.20,
+            "stop_mult": 0.9, "profit_mult": 4.0,
+            "confidence_scaling": True,
         },
     }
 

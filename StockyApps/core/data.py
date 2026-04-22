@@ -60,8 +60,8 @@ def fetch_intraday(ticker, period="5d", interval="5m"):
     # Add addon features (dynamic — whatever's enabled)
     _add_addon_features(data, ticker)
 
-    # Label using aggressive intraday thresholds
-    data["Label"] = triple_barrier_label(data, atr_tp=2.0, atr_sl=1.5, max_bars=20)
+    # Label with symmetric barriers for balanced BUY/SELL labels
+    data["Label"] = triple_barrier_label(data, atr_tp=1.5, atr_sl=1.5, max_bars=20)
 
     # Drop rows where features couldn't be calculated (start of series)
     all_features = get_all_features("intraday")

@@ -25,9 +25,13 @@ BUY = 2
 LABEL_NAMES = {SELL: "SELL", HOLD: "HOLD", BUY: "BUY"}
 
 
-def triple_barrier_label(data, atr_tp=2.0, atr_sl=1.5, max_bars=20):
+def triple_barrier_label(data, atr_tp=1.5, atr_sl=1.5, max_bars=20):
     """
     Label each bar based on which price barrier is hit first.
+
+    Symmetric barriers (TP == SL) produce balanced labels, which is critical
+    for BUY accuracy. Previously TP=2.0 / SL=1.5 meant stop-loss was hit
+    more often, biasing the model toward SELL and making BUY unreliable.
 
     Args:
         data:     DataFrame with 'Close' and 'ATRr_14' columns

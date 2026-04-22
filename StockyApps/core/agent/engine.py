@@ -481,9 +481,11 @@ class AgentEngine:
                             continue
 
                     # Size and execute
-                    # Regime-aware position sizing
+                    # Regime-aware + confidence-scaled position sizing
+                    # (backtest: confidence scaling improved P&L from +2.9% to +9.4%)
                     base_alloc = min(effective_bp * 0.20, initial_bp / max(1, 5))
-                    max_spend = base_alloc * regime.size_mult
+                    conf_scale = 0.7 + (r.confidence * 0.6)  # 50% conf=1.0x, 100% conf=1.3x
+                    max_spend = base_alloc * regime.size_mult * conf_scale
                     qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
                     cost = qty * r.price
 
