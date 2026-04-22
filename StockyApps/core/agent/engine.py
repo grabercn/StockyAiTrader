@@ -110,18 +110,33 @@ class AgentEngine:
             "pdt_restricted": getattr(self, '_last_pdt', False),
             "last_bp": getattr(self, '_last_bp', 0),
             "last_dt_bp": getattr(self, '_last_dt_bp', 0),
+            "saved_date": datetime.now().strftime("%Y-%m-%d"),
         }
 
     def restore_state(self, state):
-        """Restore state from a previous session."""
+        """Restore state from a previous session. Resets daily counters if date changed."""
         if not state:
             return
+
+        saved_date = state.get("saved_date", "")
+        today = datetime.now().strftime("%Y-%m-%d")
+        is_new_day = (saved_date != today)
+
+        # Always restore: stocks, cache, decisions (carry across days)
         self._agent_stocks = state.get("agent_stocks", {})
-        self._cycle = state.get("cycle", 0)
-        self._trades_today = state.get("trades_today", 0)
         self._tradeable_cache = state.get("tradeable_cache", {})
         self._cycle_decisions = state.get("cycle_decisions", [])
         self._cycle_stats = state.get("cycle_stats", {})
+
+        if is_new_day:
+            # New day: reset daily counters, keep stocks + cache
+            self._cycle = 0
+            self._trades_today = 0
+            self._log(f"  New trading day (saved {saved_date}) — daily counters reset", "agent")
+        else:
+            # Same day: restore everything
+            self._cycle = state.get("cycle", 0)
+            self._trades_today = state.get("trades_today", 0)
 
     # ── Control ─────────────────────────────────────────────────────────
 
