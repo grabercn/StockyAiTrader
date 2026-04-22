@@ -376,6 +376,13 @@ class AgentEngine:
                         self._log(f"    SKIP BUY {r.ticker} — {r.confidence:.0%} below threshold", "decision")
                         continue
 
+                    # PDT: skip buying stocks we already hold (adding would create round-trip risk)
+                    if pdt_restricted and r.ticker.upper() in held_map:
+                        self._log(
+                            f"    SKIP BUY {r.ticker} — PDT restricted, already holding "
+                            f"(adding shares risks day-trade violation)", "warn")
+                        continue
+
                     buys += 1
 
                     # Capital rotation if BP too low
@@ -649,7 +656,8 @@ class AgentEngine:
                 s = self._agent_stocks[r.ticker]
                 pos_info = f"holding {s.get('qty',0)} shares, signal={s.get('signal','?')}"
 
-            pdt_note = " PDT RESTRICTED — can only do GTC swing trades." if pdt_restricted else ""
+            pdt_note = (" PDT RESTRICTED — cannot buy stocks already held (round-trip risk). "
+                       "Only new positions allowed.") if pdt_restricted else ""
             port_ctx = (
                 f"BP=${effective_bp:,.0f},{pdt_note} "
                 f"{self._trades_today} trades today, "
