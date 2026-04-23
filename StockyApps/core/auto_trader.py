@@ -161,6 +161,20 @@ class AutoTraderService(QThread):
     def _check_stock(self, stock):
         """Run the full analysis pipeline on a single stock."""
         try:
+            # Skip untradeable stocks (cached by agent engine)
+            try:
+                import json
+                settings_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "settings.json")
+                with open(settings_path) as _f:
+                    _s = json.load(_f)
+                engine_state = _s.get("agent_engine_state", {})
+                tcache = engine_state.get("tradeable_cache", {})
+                if tcache.get(stock.ticker) is False:
+                    stock.next_check_seconds = 900  # Check again in 15 min
+                    return
+            except Exception:
+                pass
+
             self.log.emit(f"Checking {stock.ticker}...", "info")
             stock.last_check = datetime.now().strftime("%H:%M:%S")
 
