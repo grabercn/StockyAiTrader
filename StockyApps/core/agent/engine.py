@@ -321,6 +321,45 @@ class AgentEngine:
                     except Exception:
                         pass
 
+                # ── Zombie Position Cleanup ──
+                # Positions down >8% with no stored stop = legacy holdings bleeding capital
+                if held_map and can_trade and self.broker:
+                    for sym, pos in list(held_map.items()):
+                        upl_pct = float(pos.get("unrealized_plpc", 0))
+                        stock_info = self._agent_stocks.get(sym, {})
+                        has_stop = stock_info.get("stop_loss", 0) > 0
+                        if upl_pct < -0.08 and not has_stop:
+                            qty = int(float(pos.get("qty", 0)))
+                            if qty <= 0 or self._trades_today >= max_trades:
+                                continue
+                            self._log(
+                                f"  ZOMBIE CUT: {sym} down {upl_pct:.1%} with no stop — "
+                                f"selling to free capital", "warn")
+                            try:
+                                result = self.broker.close_position(sym, qty=qty)
+                                if "error" not in result:
+                                    self._trades_today += 1
+                                    sell_price = float(pos.get("current_price", 0))
+                                    entry = float(pos.get("avg_entry_price", 0))
+                                    trade_pnl = (sell_price - entry) * qty
+                                    self._session_pnl += trade_pnl
+                                    self._losses += 1
+                                    self._trade_log.append({
+                                        "ticker": sym, "side": "zombie_sell", "qty": qty,
+                                        "entry": entry, "exit": sell_price,
+                                        "pnl": round(trade_pnl, 2),
+                                        "timestamp": datetime.now().isoformat(),
+                                    })
+                                    self._log(
+                                        f"  ZOMBIE SOLD {sym} x{qty} — P&L ${trade_pnl:+,.2f}", "trade")
+                                    self._tray_act(f"ZOMBIE {sym} ${trade_pnl:+,.0f}")
+                                    self._cycle_decisions.append(f"ZOMBIE {sym} (${trade_pnl:+,.0f})")
+                                    held_map.pop(sym, None)
+                                    if sym in self._agent_stocks:
+                                        self._agent_stocks[sym]["qty"] = 0
+                            except Exception as _e:
+                                self._log(f"  Zombie sell {sym} error: {_e}", "error")
+
                 # ── Manual Stop-Loss Monitor ──
                 # For positions without bracket orders, check if price hit stop
                 if held_map and can_trade and self.broker:
