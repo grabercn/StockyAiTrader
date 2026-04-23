@@ -121,6 +121,16 @@ class AutoTraderService(QThread):
         self.log.emit("Auto-trader service started", "agent")
 
         while self._running:
+            # Market hours check — skip execution outside trading hours
+            try:
+                from core.market_hours import get_session
+                mkt = get_session()
+                if not mkt.can_scan:
+                    time.sleep(30)
+                    continue
+            except Exception:
+                pass
+
             for ticker, stock in list(self._stocks.items()):
                 if not stock.enabled:
                     continue

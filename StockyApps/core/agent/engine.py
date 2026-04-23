@@ -242,7 +242,9 @@ class AgentEngine:
 
             try:
                 # Check market session
-                session, session_wait, can_trade, session_note = self._get_market_session()
+                from core.market_hours import get_session as _get_mkt_session
+                _mkt = _get_mkt_session()
+                session, session_wait, can_trade, session_note = _mkt.name, _mkt.wait_seconds, _mkt.can_trade, _mkt.note
                 self._log(f"Agent cycle {cycle}: {session_note}", "agent")
                 self._tray(cycle=cycle)
 
@@ -629,7 +631,8 @@ class AgentEngine:
 
             # Market hours check before next cycle
             if self._running:
-                session, wait_for, can_trade, note = self._get_market_session()
+                _mkt_end = _get_mkt_session()
+                session, wait_for, can_trade, note = _mkt_end.name, _mkt_end.wait_seconds, _mkt_end.can_trade, _mkt_end.note
                 if not can_trade and wait_for > 0:
                     self._set_phase("waiting", f"{session}: {note}")
                     self._log(f"  {note}. Agent paused.", "system")
@@ -639,14 +642,22 @@ class AgentEngine:
                         self._countdown = max(0, int(end_wait - time.time()))
                         time.sleep(30)
                         # Re-check in case we crossed into a new session
-                        _, _, new_can_trade, _ = self._get_market_session()
+                        new_can_trade = _get_mkt_session().can_trade
                         if new_can_trade:
                             break
                 elif not can_trade:
                     # Pre/after market: data changes but don't trade
-                    # Scan less frequently (every 10 min)
+                    # Scan more often near market open to have fresh signals ready
+                    if session == "PRE_MARKET":
+                        try:
+                            import pytz
+                            et = pytz.timezone("US/Eastern")
+                            mins_to_open = (9 * 60 + 45) - (datetime.now(et).hour * 60 + datetime.now(et).minute)
+                            if mins_to_open <= 30:
+                                self._log(f"  {mins_to_open}m to open — scanning frequently for ready signals", "agent")
+                                wait_secs = 120  # Scan every 2 min in last 30 min before open
+                        except: pass
                     self._set_phase("waiting", f"{session}: {note}")
-                    self._log(f"  {note}. Scanning only (no trades).", "system")
 
         # Cleanup
         self._countdown = 0
