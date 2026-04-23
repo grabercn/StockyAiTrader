@@ -537,6 +537,12 @@ class AgentEngine:
                         self._log(f"    SKIP BUY {r.ticker} — {r.confidence:.0%} below threshold", "decision")
                         continue
 
+                    # Skip buying stocks we already hold (prevents concentration + PDT issues)
+                    if r.ticker.upper() in held_map or self._agent_stocks.get(r.ticker, {}).get("qty", 0) > 0:
+                        self._log(
+                            f"    SKIP BUY {r.ticker} — already holding, no double-buy", "decision")
+                        continue
+
                     # Buy confirmation: require 2+ consecutive BUY signals before executing
                     # (backtest showed this improves P&L by +$463 and win rate by +8%)
                     self._buy_confirmations[r.ticker] = self._buy_confirmations.get(r.ticker, 0) + 1
@@ -545,13 +551,6 @@ class AgentEngine:
                         self._log(
                             f"    WAIT BUY {r.ticker} — first scan ({r.confidence:.0%}), "
                             f"need 1 more confirmation", "decision")
-                        continue
-
-                    # PDT: skip buying stocks we already hold (adding would create round-trip risk)
-                    if pdt_restricted and r.ticker.upper() in held_map:
-                        self._log(
-                            f"    SKIP BUY {r.ticker} — PDT restricted, already holding "
-                            f"(adding shares risks day-trade violation)", "warn")
                         continue
 
                     # Earnings avoidance: skip stocks within 3 days of earnings
