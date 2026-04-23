@@ -214,6 +214,8 @@ class AgentEngine:
         from core.agent.safeguards import (
             check_earnings_proximity, check_stop_loss_hits,
             update_trailing_stops, check_sector_limit, get_addon_sentiment,
+            is_economic_event_day, check_volume, should_cooldown,
+            check_correlation, get_time_of_day_multiplier, is_friday_afternoon,
         )
 
         settings = self._settings()
@@ -273,9 +275,17 @@ class AgentEngine:
                         time.sleep(1)
                     continue
 
+                # ── FOMC/CPI Calendar Check ──
+                is_event, event_type = is_economic_event_day()
+                if is_event:
+                    self._log(
+                        f"  {event_type} day — reducing position sizes by 50% "
+                        f"(major economic event risk)", "warn")
+
                 pdt_tag = " [PDT RESTRICTED]" if pdt_restricted else ""
+                event_tag = f" [{event_type} DAY]" if is_event else ""
                 self._log(
-                    f"Agent: BP=${effective_bp:,.0f}{pdt_tag}, "
+                    f"Agent: BP=${effective_bp:,.0f}{pdt_tag}{event_tag}, "
                     f"{len(held_map)} positions, profile={profile_name}", "agent")
                 if pdt_restricted:
                     self._log("  PDT restriction: buying with GTC only (swing trades, hold overnight)", "warn")
@@ -569,12 +579,43 @@ class AgentEngine:
                         sentiment, sent_detail = get_addon_sentiment(r.ticker)
                         if sentiment != 0:
                             old_conf = r.confidence
-                            # Sentiment adjusts confidence by ±5%
                             r.confidence = max(0.1, min(1.0, r.confidence + sentiment * 0.05))
                             if abs(sentiment) >= 0.3:
                                 self._log(
                                     f"    Sentiment {r.ticker}: {sent_detail} "
                                     f"({old_conf:.0%} -> {r.confidence:.0%})", "scan")
+                    except Exception:
+                        pass
+
+                    # Volume filter: skip low-activity BUY signals
+                    try:
+                        vol_ok, vol_ratio, vol_reason = check_volume(r)
+                        if not vol_ok:
+                            self._log(f"    SKIP BUY {r.ticker} — {vol_reason}", "warn")
+                            continue
+                    except Exception:
+                        pass
+
+                    # Correlation filter: skip if holding a highly correlated stock
+                    try:
+                        corr_ok, corr_with, corr_reason = check_correlation(r.ticker, held_map)
+                        if not corr_ok:
+                            self._log(f"    SKIP BUY {r.ticker} — {corr_reason}", "warn")
+                            continue
+                    except Exception:
+                        pass
+
+                    # Loss cooldown: wait after a losing trade
+                    try:
+                        cool, last_pnl = should_cooldown(self._trade_log)
+                        if cool and not hasattr(self, '_cooldown_skipped'):
+                            self._log(
+                                f"    COOLDOWN — last trade lost ${last_pnl:+,.0f}, "
+                                f"waiting 1 cycle before buying", "warn")
+                            self._cooldown_skipped = True
+                            continue
+                        else:
+                            self._cooldown_skipped = False
                     except Exception:
                         pass
 
@@ -599,11 +640,15 @@ class AgentEngine:
                             continue
 
                     # Size and execute
-                    # Regime-aware + confidence-scaled position sizing
-                    # (backtest: confidence scaling improved P&L from +2.9% to +9.4%)
+                    # Multi-factor position sizing:
+                    # base * regime * confidence * time-of-day * FOMC * Friday
                     base_alloc = min(effective_bp * 0.20, initial_bp / max(1, 5))
-                    conf_scale = 0.7 + (r.confidence * 0.6)  # 50% conf=1.0x, 100% conf=1.3x
-                    max_spend = base_alloc * regime.size_mult * conf_scale
+                    conf_scale = 0.7 + (r.confidence * 0.6)  # 50%=1.0x, 100%=1.3x
+                    tod_mult, tod_window = get_time_of_day_multiplier()
+                    friday_pm, _ = is_friday_afternoon()
+                    friday_mult = 0.5 if friday_pm else 1.0  # Half size on Friday PM
+                    event_mult = 0.5 if is_event else 1.0    # Half size on FOMC/CPI
+                    max_spend = base_alloc * regime.size_mult * conf_scale * tod_mult * friday_mult * event_mult
                     qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
                     cost = qty * r.price
 

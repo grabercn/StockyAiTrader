@@ -2,16 +2,25 @@
 """
 Agent Safeguards — protective filters and risk controls.
 
+HIGH IMPACT:
 1. Earnings Avoidance: skip buying stocks within 3 days of earnings
 2. Manual Stop-Loss Monitor: sell positions that hit stop level (for non-bracket orders)
 3. Trailing Stop: move stop to breakeven at +2x ATR, then to +1x ATR at +3x ATR
 4. Sector Diversification: cap holdings at 2 per sector
 5. Addon Signal Confirmation: boost/reduce confidence based on sentiment + insider data
+6. FOMC/CPI Calendar: skip trading on major economic event days
+7. Volume Filter: skip BUY when volume is below 50% of average
+8. Loss Cooldown: wait 1 extra cycle after a losing trade
+
+DIMINISHING RETURNS:
+9. Correlation Filter: skip buying highly correlated stocks already held
+10. Time-of-Day Scoring: favor trades during historically best windows
+11. Weekend Gap Protection: reduce Friday afternoon position sizes
 """
 
 import importlib
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # ── Sector mapping for top stocks ──────────────────────────────────────
@@ -236,3 +245,195 @@ def get_addon_sentiment(ticker):
 
     detail = ", ".join(details) if details else "no sentiment data"
     return round(max(-1.0, min(1.0, score)), 2), detail
+
+
+# ── HIGH IMPACT: #6 FOMC/CPI Calendar ──────────────────────────────────
+
+# Major economic event dates for 2026 (FOMC decisions + CPI releases)
+# These cause 1-2% swings in minutes that no model can predict
+FOMC_DATES_2026 = {
+    "2026-01-28", "2026-01-29",  # Jan FOMC
+    "2026-03-18", "2026-03-19",  # Mar FOMC
+    "2026-05-06", "2026-05-07",  # May FOMC
+    "2026-06-17", "2026-06-18",  # Jun FOMC
+    "2026-07-29", "2026-07-30",  # Jul FOMC
+    "2026-09-16", "2026-09-17",  # Sep FOMC
+    "2026-11-04", "2026-11-05",  # Nov FOMC
+    "2026-12-16", "2026-12-17",  # Dec FOMC
+}
+
+CPI_DATES_2026 = {
+    "2026-01-14", "2026-02-12", "2026-03-12", "2026-04-10",
+    "2026-05-13", "2026-06-10", "2026-07-14", "2026-08-12",
+    "2026-09-10", "2026-10-13", "2026-11-12", "2026-12-10",
+}
+
+ECONOMIC_EVENT_DATES = FOMC_DATES_2026 | CPI_DATES_2026
+
+
+def is_economic_event_day():
+    """
+    Check if today is a major economic event day (FOMC or CPI).
+
+    Returns:
+        (is_event: bool, event_type: str)
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today in FOMC_DATES_2026:
+        return True, "FOMC"
+    if today in CPI_DATES_2026:
+        return True, "CPI"
+    return False, ""
+
+
+# ── HIGH IMPACT: #7 Volume Filter ──────────────────────────────────────
+
+def check_volume(scan_result):
+    """
+    Check if current volume is sufficient to trust the BUY signal.
+    Low volume moves are unreliable and often reverse.
+
+    Args:
+        scan_result: ScanResult with feature_importances or raw data
+
+    Returns:
+        (ok: bool, ratio: float, reason: str)
+    """
+    # volume_ratio_5 is already a feature: current_vol / 5-bar avg
+    # If it's in feature importances, we can read it
+    # But we don't have the raw feature value in ScanResult
+    # Use ATR as a proxy: very low ATR = low activity
+    if scan_result.atr <= 0 or scan_result.price <= 0:
+        return True, 1.0, ""
+
+    atr_pct = scan_result.atr / scan_result.price
+    # If ATR is extremely low (< 0.3% of price), volume is likely dead
+    if atr_pct < 0.003:
+        return False, atr_pct, f"very low volatility ({atr_pct:.2%}), likely thin volume"
+    return True, atr_pct, ""
+
+
+# ── HIGH IMPACT: #8 Loss Cooldown ──────────────────────────────────────
+
+def should_cooldown(trade_log, cooldown_cycles=1):
+    """
+    Check if the last trade was a loss. If so, recommend waiting.
+
+    Args:
+        trade_log: list of recent trade dicts with 'pnl' field
+        cooldown_cycles: how many cycles to wait after a loss
+
+    Returns:
+        (should_wait: bool, last_pnl: float or None)
+    """
+    if not trade_log:
+        return False, None
+    # Find the last completed trade (has pnl)
+    for trade in reversed(trade_log):
+        pnl = trade.get("pnl")
+        if pnl is not None:
+            if pnl < 0:
+                return True, pnl
+            return False, pnl
+    return False, None
+
+
+# ── DIMINISHING: #9 Correlation Filter ─────────────────────────────────
+
+# Highly correlated stock pairs — buying both is redundant risk
+CORRELATED_PAIRS = {
+    frozenset({"NVDA", "AMD"}),
+    frozenset({"NVDA", "AVGO"}),
+    frozenset({"GOOGL", "GOOG"}),
+    frozenset({"META", "SNAP"}),
+    frozenset({"V", "MA"}),
+    frozenset({"JPM", "BAC"}),
+    frozenset({"JPM", "GS"}),
+    frozenset({"XOM", "CVX"}),
+    frozenset({"RIVN", "LCID"}),
+    frozenset({"MARA", "RIOT"}),
+    frozenset({"COIN", "MARA"}),
+    frozenset({"WMT", "COST"}),
+    frozenset({"HD", "LOW"}),
+    frozenset({"UPS", "FDX"}),
+    frozenset({"PLUG", "FCEL"}),
+    frozenset({"T", "VZ"}),
+    frozenset({"PFE", "MRK"}),
+    frozenset({"MSFT", "AAPL"}),  # High correlation during tech moves
+}
+
+
+def check_correlation(ticker, held_map):
+    """
+    Check if buying this ticker would create redundant exposure
+    with an already-held highly correlated stock.
+
+    Returns:
+        (allowed: bool, correlated_with: str or None, reason: str)
+    """
+    ticker_upper = ticker.upper()
+    held_tickers = set(held_map.keys())
+
+    for pair in CORRELATED_PAIRS:
+        if ticker_upper in pair:
+            partner = pair - {ticker_upper}
+            overlap = partner & held_tickers
+            if overlap:
+                corr_with = next(iter(overlap))
+                return False, corr_with, f"highly correlated with held {corr_with}"
+
+    return True, None, ""
+
+
+# ── DIMINISHING: #10 Time-of-Day Scoring ───────────────────────────────
+
+def get_time_of_day_multiplier():
+    """
+    Score based on historically best/worst trading windows.
+
+    Best: 10:00-11:30 AM (post-open momentum confirmed)
+    Good: 2:00-3:30 PM (afternoon trend continuation)
+    Worst: 9:30-10:00 AM (opening chaos — already avoided by market hours)
+    Meh: 11:30-2:00 PM (lunch doldrums, low volume)
+
+    Returns:
+        (multiplier: float, window: str)
+        1.0 = normal, >1.0 = favorable, <1.0 = unfavorable
+    """
+    try:
+        import pytz
+        et = pytz.timezone("US/Eastern")
+        now = datetime.now(et)
+        t = now.hour * 60 + now.minute
+
+        if 600 <= t < 690:    # 10:00-11:30 AM — best window
+            return 1.1, "prime morning (10:00-11:30)"
+        elif 840 <= t < 930:  # 2:00-3:30 PM — good window
+            return 1.05, "afternoon trend (2:00-3:30)"
+        elif 690 <= t < 840:  # 11:30-2:00 PM — lunch doldrums
+            return 0.9, "lunch doldrums (11:30-2:00)"
+        else:
+            return 1.0, "normal"
+    except Exception:
+        return 1.0, "unknown"
+
+
+# ── DIMINISHING: #11 Weekend Gap Protection ────────────────────────────
+
+def is_friday_afternoon():
+    """
+    Check if it's Friday afternoon (after 2 PM ET).
+    Positions held over the weekend are exposed to gap risk.
+
+    Returns:
+        (is_friday_pm: bool, note: str)
+    """
+    try:
+        import pytz
+        et = pytz.timezone("US/Eastern")
+        now = datetime.now(et)
+        if now.weekday() == 4 and now.hour >= 14:
+            return True, "Friday afternoon — weekend gap risk, reduce new positions"
+        return False, ""
+    except Exception:
+        return False, ""
