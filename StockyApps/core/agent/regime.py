@@ -92,15 +92,16 @@ def detect_regime(addon_data=None, log_fn=None):
         addon_data = _fetch_addon_data()
 
     # Extract signals
-    fg = addon_data.get("fear_greed_index")          # 0-100 (0=extreme fear, 100=extreme greed)
+    fg = addon_data.get("fear_greed_index")          # Could be 0-1 or 0-100 depending on addon
     fg_cat = addon_data.get("fear_greed_category")   # -1, 0, +1
     spy_ret = addon_data.get("spy_return")            # Recent SPY return
     spy_ret5 = addon_data.get("spy_return_5")         # 5-bar SPY return
     vix = addon_data.get("vix_level")                 # VIX index
     vix_chg = addon_data.get("vix_change")            # VIX change
 
-    # Normalize to 0-1 scale where available
-    fg_norm = fg / 100.0 if fg is not None else 0.5
+    # Normalize F&G to 0-100 scale (addon may return 0-1)
+    if fg is not None and fg <= 1.0:
+        fg = fg * 100  # Convert 0-1 to 0-100
     vix_norm = min(1.0, vix / 40.0) if vix is not None else None  # VIX 40+ = extreme
 
     # Classification logic
@@ -203,7 +204,9 @@ def detect_regime(addon_data=None, log_fn=None):
 
 def _fetch_addon_data():
     """Fetch regime-relevant addon data (Fear & Greed, SPY, VIX)."""
+    import pandas as pd
     data = {}
+    empty_df = pd.DataFrame()  # Addons require (ticker, data) but most don't use the df
     try:
         import importlib
         from addons import get_all_addons
@@ -214,7 +217,7 @@ def _fetch_addon_data():
                 try:
                     mod = importlib.import_module(f"addons.{addon.module_name}")
                     if hasattr(mod, "get_features"):
-                        feats = mod.get_features("SPY")
+                        feats = mod.get_features("SPY", empty_df)
                         if isinstance(feats, dict):
                             data.update(feats)
                 except Exception:
