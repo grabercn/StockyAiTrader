@@ -515,9 +515,19 @@ class AIDashboardPanel(QWidget):
             # Use engine trade log for current session
             trade_log = list(engine.trade_log)
             buy_count = sum(1 for t in trade_log if t.get("side") == "buy")
-            sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell"))
+            sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell", "stop_sell", "zombie_sell"))
             title_text = f"{len(trade_log)} Trades ({buy_count} buys, {sell_count} sells)"
             pnl_val = engine.session_pnl
+            # Add unrealized P&L from current positions
+            unrealized = 0
+            try:
+                if self.broker:
+                    positions = self.broker.get_positions()
+                    if isinstance(positions, list):
+                        for p in positions:
+                            unrealized += float(p.get("unrealized_pl", 0))
+            except Exception:
+                pass
             wins = engine._wins
             losses = engine._losses
         else:
@@ -540,10 +550,18 @@ class AIDashboardPanel(QWidget):
         title.setStyleSheet(f"color: {BRAND_PRIMARY};")
         lay.addWidget(title)
 
-        # P&L summary line
-        pnl_color = COLOR_PROFIT if pnl_val >= 0 else COLOR_LOSS
-        wr_str = f" | Win Rate: {wr:.0%} ({wins}W/{losses}L)" if total_trades > 0 else ""
-        pnl_label = QLabel(f"P&L: ${pnl_val:+,.2f}{wr_str}")
+        # P&L summary line (realized + unrealized for live)
+        if is_live and unrealized != 0:
+            total_pnl = pnl_val + unrealized
+            pnl_color = COLOR_PROFIT if total_pnl >= 0 else COLOR_LOSS
+            wr_str = f" | WR: {wr:.0%} ({wins}W/{losses}L)" if total_trades > 0 else ""
+            pnl_label = QLabel(
+                f"Realized: ${pnl_val:+,.2f} | Unrealized: ${unrealized:+,.2f} | "
+                f"Total: ${total_pnl:+,.2f}{wr_str}")
+        else:
+            pnl_color = COLOR_PROFIT if pnl_val >= 0 else COLOR_LOSS
+            wr_str = f" | Win Rate: {wr:.0%} ({wins}W/{losses}L)" if total_trades > 0 else ""
+            pnl_label = QLabel(f"P&L: ${pnl_val:+,.2f}{wr_str}")
         pnl_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
         pnl_label.setStyleSheet(f"color: {pnl_color};")
         lay.addWidget(pnl_label)
@@ -580,6 +598,28 @@ class AIDashboardPanel(QWidget):
                 ax.set_xticklabels(timestamps[::step], fontsize=6, rotation=45, color=cc["muted"])
             ax.set_ylabel("P&L ($)", fontsize=8, color=cc["muted"])
             ax.set_title("Cumulative P&L", fontsize=9, color=cc["text"])
+        elif is_live:
+            # No closed trades yet — show unrealized P&L per position
+            try:
+                if self.broker:
+                    positions = self.broker.get_positions()
+                    if isinstance(positions, list) and positions:
+                        syms = [p.get("symbol", "?") for p in positions]
+                        pnls = [float(p.get("unrealized_pl", 0)) for p in positions]
+                        bar_colors = [COLOR_PROFIT if v >= 0 else COLOR_LOSS for v in pnls]
+                        ax.barh(range(len(syms)), pnls, color=bar_colors, alpha=0.8)
+                        ax.set_yticks(range(len(syms)))
+                        ax.set_yticklabels(syms, fontsize=8, color=cc["text"])
+                        ax.set_xlabel("Unrealized P&L ($)", fontsize=8, color=cc["muted"])
+                        ax.set_title("Position P&L (no closed trades yet)", fontsize=9, color=cc["text"])
+                        ax.axvline(x=0, color=cc["muted"], linewidth=0.5, linestyle="--")
+                    else:
+                        ax.text(0.5, 0.5, "No positions", ha="center", va="center",
+                                fontsize=10, color=cc["muted"], transform=ax.transAxes)
+            except Exception:
+                ax.text(0.5, 0.5, "No data", ha="center", va="center",
+                        fontsize=10, color=cc["muted"], transform=ax.transAxes)
+            ax.set_title("Position P&L", fontsize=9, color=cc["text"])
         else:
             ax.text(0.5, 0.5, "No closed trades", ha="center", va="center",
                     fontsize=10, color=cc["muted"], transform=ax.transAxes)

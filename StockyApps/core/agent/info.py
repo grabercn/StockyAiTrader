@@ -16,25 +16,21 @@ PIPELINE_INFO = {
         ),
     },
     "phase1_context": {
-        "title": "Phase 1: Gather Context + Regime Detection",
+        "title": "Phase 1: Context + Regime + Safety Checks",
         "text": (
-            "At the start of each cycle, the agent takes a single snapshot of your account:\n\n"
-            "- Portfolio value, cash, and equity\n"
-            "- Buying power AND day-trading buying power (uses the lower to avoid rejections)\n"
-            "- All current positions with P&L, entry price, and current price\n\n"
-            "Then it detects the current MARKET REGIME using addon data:\n"
-            "- CNN Fear & Greed Index (0-100)\n"
-            "- SPY direction and correlation\n"
-            "- VIX level (if FRED key is set)\n\n"
-            "Regimes: RISK_ON (normal trading), CAUTIOUS (reduce sizing), "
-            "RISK_OFF (minimal trading), VOLATILE (only highest conviction).\n"
-            "Each regime adjusts: position size, confidence threshold, stop/target distances, "
-            "and cycle frequency.\n\n"
-            "Finally, it runs POST-TRADE REFLECTION on held positions:\n"
-            "- Checks for positions with significant losses (>3%)\n"
-            "- Extracts verbal rules about what went wrong\n"
-            "- Rules are injected into Gemini prompts to prevent repeating mistakes\n"
-            "- Rules expire after 7 days (max 10 active)"
+            "At the start of each cycle, the agent runs 5 sequential checks:\n\n"
+            "1. ACCOUNT SNAPSHOT — BP, day-trading BP, all positions with P&L\n"
+            "2. FOMC/CPI CHECK — halves position sizes on Fed/CPI announcement days\n"
+            "3. REGIME DETECTION — classifies market using Fear & Greed (68=bullish), "
+            "VIX (18.9=calm), SPY direction. 4 regimes: RISK_ON (1.2x sizing), "
+            "CAUTIOUS (0.7x), RISK_OFF (0.4x), VOLATILE (0.25x)\n"
+            "4. POST-TRADE REFLECTION — checks for >3% losses, extracts verbal rules, "
+            "injects into Gemini prompts (max 10 rules, 7-day expiry)\n"
+            "5. SAFETY SYSTEMS:\n"
+            "   - Trailing stops: ratchets SL up at +2/3/4x ATR (locks profit)\n"
+            "   - Stop-loss monitor: emergency sells if price hits stored SL\n"
+            "   - Zombie cleanup: auto-sells positions down >8% with no stop\n\n"
+            "All data reused throughout the cycle — no redundant API calls."
         ),
     },
     "phase2_discovery": {
@@ -54,7 +50,8 @@ PIPELINE_INFO = {
         "text": (
             "Each ticker is analyzed in parallel using LightGBM:\n\n"
             "1. Fetch 5 days of 5-minute OHLCV data\n"
-            "2. Extract 23 technical features (RSI, MACD, VWAP, Bollinger, etc.)\n"
+            "2. Extract 31 technical features including 7 momentum indicators\n"
+            "   (RSI, MACD, VWAP, Bollinger, trend consistency, volume direction, etc.)\n"
             "3. Label historical bars using triple-barrier method (ATR-based)\n"
             "4. Train a per-ticker LightGBM model on this data\n"
             "5. Predict: BUY / SELL / HOLD with probability distribution\n\n"
@@ -93,29 +90,27 @@ PIPELINE_INFO = {
         ),
     },
     "safeguards": {
-        "title": "Safety Systems",
+        "title": "Safety Systems (11 Active)",
         "text": (
-            "Active protective filters running every cycle:\n\n"
-            "MANUAL STOP-LOSS MONITOR:\n"
-            "For positions without bracket orders (PDT fallback), the agent\n"
-            "checks if current price hit the stored stop-loss level and sells\n"
-            "immediately. Prevents large drawdowns like the -8% on OPEN.\n\n"
-            "TRAILING STOP:\n"
-            "As a position moves favorably, the stop-loss ratchets up:\n"
-            "  +2x ATR → stop moves to breakeven\n"
-            "  +3x ATR → stop moves to entry + 1x ATR (locks profit)\n"
-            "  +4x ATR → stop moves to entry + 2x ATR\n"
-            "Stops only move UP, never down.\n\n"
-            "EARNINGS AVOIDANCE:\n"
-            "Skips buying stocks within 3 days of earnings announcements.\n"
-            "Earnings are binary events with unpredictable outcomes.\n"
-            "Uses Finnhub calendar data.\n\n"
-            "SECTOR DIVERSIFICATION:\n"
-            "Maximum 2 stocks per sector (Tech, Consumer, Finance, etc.).\n"
-            "Prevents correlated drawdowns from sector-wide moves.\n\n"
-            "ADDON SENTIMENT CONFIRMATION:\n"
-            "StockTwits bull/bear ratio and SEC insider trades adjust\n"
-            "confidence by up to ±5%. Insiders buying = stronger BUY signal."
+            "Protective filters running every cycle:\n\n"
+            "PHASE 1 (every cycle):\n"
+            "1. Trailing Stop — ratchets SL up at +2/3/4x ATR (locks profit)\n"
+            "2. Stop-Loss Monitor — emergency sell if price <= stored SL\n"
+            "3. Zombie Cleanup — auto-sells positions >8% loss with no stop\n\n"
+            "PHASE 6 (before each BUY):\n"
+            "4. Buy Confirmation — requires 2+ consecutive BUY scans\n"
+            "5. No Double-Buy — skips stocks already held\n"
+            "6. Earnings Avoidance — skips if earnings < 3 days (Finnhub)\n"
+            "7. Sector Limit — max 2 per sector (93 stocks, 11 sectors)\n"
+            "8. Sentiment Boost — StockTwits + insider data adjusts conf ±5%\n"
+            "9. Volume Filter — skips BUY when ATR < 0.3% (dead volume)\n"
+            "10. Correlation Filter — blocks buying correlated pairs (18 pairs)\n"
+            "11. Loss Cooldown — waits 1 cycle after a losing trade\n\n"
+            "POSITION SIZING (6 multipliers):\n"
+            "base × regime × confidence × time-of-day × FOMC × Friday\n"
+            "- Time-of-day: 1.1x morning, 0.9x lunch, 1.05x afternoon\n"
+            "- FOMC/CPI day: 0.5x (halved)\n"
+            "- Friday after 2 PM: 0.5x (weekend gap risk)"
         ),
     },
     "phase6_execute": {
