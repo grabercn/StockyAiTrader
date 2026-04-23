@@ -54,6 +54,7 @@ class AgentEngine:
 
         # Buy confirmation tracking: require 2+ consecutive BUY signals before executing
         self._buy_confirmations = {}  # {ticker: consecutive_buy_count}
+        self._regime = None           # Set during _run(), init here to avoid AttributeError
 
         # Callbacks (set by panel)
         self.on_tray_update = None   # callable(**kwargs)
@@ -240,7 +241,9 @@ class AgentEngine:
             wait_secs = 300
 
             try:
-                self._log(f"Agent cycle {cycle}: scanning market...", "agent")
+                # Check market session
+                session, session_wait, can_trade, session_note = self._get_market_session()
+                self._log(f"Agent cycle {cycle}: {session_note}", "agent")
                 self._tray(cycle=cycle)
 
                 # ═════════════════════════════════════════════════════════
@@ -355,6 +358,8 @@ class AgentEngine:
                 # ═════════════════════════════════════════════════════════
                 # PHASE 6A: EXECUTE SELLS (free capital first)
                 # ═════════════════════════════════════════════════════════
+                if not can_trade:
+                    self._log(f"  {session}: scan-only mode, skipping execution", "system")
                 self._set_phase("selling", f"Processing {len(sell_candidates)} sell signals...")
                 for r in sell_candidates:
                     if not self._running or self._trades_today >= max_trades:
@@ -375,6 +380,10 @@ class AgentEngine:
                         continue
                     held = int(float(pos.get("qty", 0)))
                     if held <= 0:
+                        continue
+
+                    if not can_trade:
+                        self._log(f"    SELL {r.ticker} — queued (market {session})", "decision")
                         continue
 
                     qty = held if r.confidence > 0.7 else max(1, int(held * 0.5)) if r.confidence > 0.5 else max(1, int(held * 0.25))
@@ -465,6 +474,10 @@ class AgentEngine:
                         continue
 
                     buys += 1
+
+                    if not can_trade:
+                        self._log(f"    BUY {r.ticker} — queued (market {session})", "decision")
+                        continue
 
                     # Capital rotation if BP too low
                     if effective_bp < 100:
@@ -616,17 +629,24 @@ class AgentEngine:
 
             # Market hours check before next cycle
             if self._running:
-                wait_for = self._wait_for_market()
-                if wait_for > 0:
-                    self._set_phase("waiting", "Market closed")
-                    self._log(
-                        f"  Market closed — next open in {wait_for//3600}h {(wait_for%3600)//60}m. "
-                        f"Agent paused.", "system")
+                session, wait_for, can_trade, note = self._get_market_session()
+                if not can_trade and wait_for > 0:
+                    self._set_phase("waiting", f"{session}: {note}")
+                    self._log(f"  {note}. Agent paused.", "system")
                     # Sleep in 30s chunks so we can still be stopped
                     end_wait = time.time() + wait_for
                     while self._running and time.time() < end_wait:
                         self._countdown = max(0, int(end_wait - time.time()))
                         time.sleep(30)
+                        # Re-check in case we crossed into a new session
+                        _, _, new_can_trade, _ = self._get_market_session()
+                        if new_can_trade:
+                            break
+                elif not can_trade:
+                    # Pre/after market: data changes but don't trade
+                    # Scan less frequently (every 10 min)
+                    self._set_phase("waiting", f"{session}: {note}")
+                    self._log(f"  {note}. Scanning only (no trades).", "system")
 
         # Cleanup
         self._countdown = 0
@@ -946,42 +966,87 @@ class AgentEngine:
         return max(60, min(900, base))
 
     @staticmethod
-    def _wait_for_market():
+    def _get_market_session():
         """
-        Check if market is open. Returns seconds to wait, or 0 if open.
+        Determine current market session and trading behavior.
 
-        Market hours: 9:45 AM - 3:45 PM ET (avoids first/last 15 min whipsaw).
-        Weekends: skip entirely.
+        Sessions (all times US/Eastern):
+            CLOSED      (8:00 PM - 4:00 AM)  — No trading, data frozen
+            PRE_MARKET  (4:00 AM - 9:30 AM)  — Extended hours, low volume
+            OPEN_AVOID  (9:30 AM - 9:45 AM)  — Market open, skip (whipsaw)
+            REGULAR     (9:45 AM - 3:45 PM)  — Prime trading window
+            CLOSE_AVOID (3:45 PM - 4:00 PM)  — Market close, skip (volatile)
+            AFTER_HOURS (4:00 PM - 8:00 PM)  — Extended hours, low volume
+
+        Returns:
+            (session_name: str, wait_seconds: int, can_trade: bool, note: str)
+            wait_seconds = 0 means can proceed now
         """
         try:
             import pytz
             et = pytz.timezone("US/Eastern")
             now = datetime.now(et)
 
-            # Weekend: skip to Monday 9:45 AM
-            if now.weekday() >= 5:  # Saturday=5, Sunday=6
+            # Weekend: skip to Monday pre-market
+            if now.weekday() >= 5:
                 days_until_monday = 7 - now.weekday()
                 next_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
                 next_open += timedelta(days=days_until_monday)
-                return int((next_open - now).total_seconds())
+                wait = int((next_open - now).total_seconds())
+                return "WEEKEND", wait, False, f"Weekend — market opens Monday"
 
-            market_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
-            market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+            hour, minute = now.hour, now.minute
+            t = hour * 60 + minute  # Minutes since midnight
 
-            if now < market_open:
-                # Before market open today
-                return int((market_open - now).total_seconds())
-            elif now > market_close:
-                # After market close — wait for tomorrow (or Monday)
-                if now.weekday() == 4:  # Friday → Monday
-                    next_open = market_open + timedelta(days=3)
-                else:
-                    next_open = market_open + timedelta(days=1)
-                return int((next_open - now).total_seconds())
+            # Time boundaries in minutes
+            PRE_START = 4 * 60       # 4:00 AM
+            MARKET_OPEN = 9 * 60 + 30   # 9:30 AM
+            SAFE_OPEN = 9 * 60 + 45     # 9:45 AM
+            SAFE_CLOSE = 15 * 60 + 45   # 3:45 PM
+            MARKET_CLOSE = 16 * 60      # 4:00 PM
+            AFTER_END = 20 * 60         # 8:00 PM
+
+            if t < PRE_START:
+                # Before pre-market (midnight - 4 AM): fully closed
+                wait = (PRE_START - t) * 60
+                return "CLOSED", wait, False, "Market closed — pre-market at 4:00 AM ET"
+            elif t < MARKET_OPEN:
+                # Pre-market (4:00 - 9:30): data changes but volume is thin
+                return "PRE_MARKET", 0, False, "Pre-market — monitoring only, no trades (thin volume)"
+            elif t < SAFE_OPEN:
+                # First 15 min (9:30 - 9:45): whipsaw zone
+                wait = (SAFE_OPEN - t) * 60
+                return "OPEN_AVOID", wait, False, f"Market just opened — waiting {wait//60}m for whipsaw to settle"
+            elif t < SAFE_CLOSE:
+                # Prime trading window (9:45 - 3:45)
+                return "REGULAR", 0, True, "Market open — prime trading window"
+            elif t < MARKET_CLOSE:
+                # Last 15 min (3:45 - 4:00): close volatility
+                wait = (MARKET_CLOSE - t) * 60
+                return "CLOSE_AVOID", wait, False, f"Market closing soon — paused (volatile close)"
+            elif t < AFTER_END:
+                # After hours (4:00 - 8:00 PM): data still changes
+                return "AFTER_HOURS", 0, False, "After hours — monitoring only, no trades (wide spreads)"
             else:
-                return 0  # Market is open
+                # After 8 PM: fully closed
+                if now.weekday() == 4:  # Friday → Monday
+                    next_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
+                    next_open += timedelta(days=3)
+                else:
+                    next_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
+                    next_open += timedelta(days=1)
+                wait = int((next_open - now).total_seconds())
+                return "CLOSED", wait, False, "Market closed — opens tomorrow"
+
         except ImportError:
-            # No pytz — can't determine timezone, assume market is open
-            return 0
+            return "UNKNOWN", 0, True, "Cannot determine timezone (pytz missing)"
         except Exception:
+            return "UNKNOWN", 0, True, "Market hours check failed"
+
+    @staticmethod
+    def _wait_for_market():
+        """Legacy helper — returns seconds to wait, 0 if can trade."""
+        session, wait, can_trade, _ = AgentEngine._get_market_session()
+        if can_trade:
             return 0
+        return wait
