@@ -17,7 +17,7 @@ All UI communication via callbacks (log_fn, on_tray_update, etc.).
 
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class AgentEngine:
@@ -560,6 +560,9 @@ class AgentEngine:
                     self._update_stock_entry(r)
                     holds += 1
 
+                # Phase 6D: Prune stale stocks from tracking
+                pruned = self._prune_stale_stocks(held_map)
+
                 # ═════════════════════════════════════════════════════════
                 # PHASE 7: SUMMARY + DYNAMIC TIMING
                 # ═════════════════════════════════════════════════════════
@@ -577,9 +580,10 @@ class AgentEngine:
                 self._set_phase("complete",
                     f"{buys}B {sells}S {holds}H ({skipped} skipped, {filtered_out} filtered)")
 
+                pruned_tag = f", {pruned} pruned" if pruned else ""
                 self._log(
                     f"Cycle {cycle}: {buys}B {sells}S {holds}H "
-                    f"({skipped} skipped, {filtered_out} filtered)", "agent")
+                    f"({skipped} skipped, {filtered_out} filtered{pruned_tag})", "agent")
 
                 wait_secs = int(self._calc_wait(buys, sells, profile_name) * regime.scan_mult)
                 self._log(
@@ -592,14 +596,37 @@ class AgentEngine:
                 wait_secs = 300
                 self._set_phase("error", str(e))
 
-            # Countdown
+            # Countdown — uses wall-clock time to survive laptop sleep
             self._set_phase("waiting", f"Next cycle in {wait_secs}s")
             self._countdown = wait_secs
-            for _ in range(wait_secs):
-                if not self._running:
-                    break
+            wake_at = time.time() + wait_secs
+            while self._running and time.time() < wake_at:
+                remaining = max(0, int(wake_at - time.time()))
+                self._countdown = remaining
+
+                # Sleep detection: if remaining jumped by >60s, laptop slept
                 time.sleep(1)
-                self._countdown = max(0, self._countdown - 1)
+                now = time.time()
+                new_remaining = max(0, int(wake_at - now))
+                if remaining - new_remaining > 60:
+                    self._log(
+                        f"  Sleep detected — skipped {remaining - new_remaining}s, "
+                        f"starting fresh cycle", "warn")
+                    break
+
+            # Market hours check before next cycle
+            if self._running:
+                wait_for = self._wait_for_market()
+                if wait_for > 0:
+                    self._set_phase("waiting", "Market closed")
+                    self._log(
+                        f"  Market closed — next open in {wait_for//3600}h {(wait_for%3600)//60}m. "
+                        f"Agent paused.", "system")
+                    # Sleep in 30s chunks so we can still be stopped
+                    end_wait = time.time() + wait_for
+                    while self._running and time.time() < end_wait:
+                        self._countdown = max(0, int(end_wait - time.time()))
+                        time.sleep(30)
 
         # Cleanup
         self._countdown = 0
@@ -809,6 +836,43 @@ class AgentEngine:
             "interval": dyn_label, "next_secs": dyn_interval,
         }
 
+    def _prune_stale_stocks(self, held_map):
+        """
+        Remove stocks from tracking that are no longer worth monitoring.
+
+        Criteria for pruning (ALL must be true):
+        - Not currently held (qty == 0 and not in held_map)
+        - Mode is "Scanned" (not "Auto" — we never prune stocks we bought)
+        - Has been checked 3+ times
+        - Last signal was HOLD with confidence < 60%
+        - Not in buy confirmation pipeline
+
+        Returns: number of stocks pruned
+        """
+        to_remove = []
+        for ticker, info in self._agent_stocks.items():
+            # Never prune stocks we own or bought
+            if info.get("qty", 0) > 0 or info.get("mode") == "Auto":
+                continue
+            if ticker.upper() in held_map:
+                continue
+            # Never prune stocks pending buy confirmation
+            if ticker in self._buy_confirmations:
+                continue
+            # Prune if checked 3+ times with weak HOLD signal
+            checks = info.get("checks", 0)
+            signal = info.get("signal", "HOLD")
+            conf = info.get("confidence", 0)
+            if checks >= 3 and signal == "HOLD" and conf < 0.60:
+                to_remove.append(ticker)
+
+        for ticker in to_remove:
+            checks = self._agent_stocks[ticker].get("checks", 0)
+            del self._agent_stocks[ticker]
+            self._log(f"  Pruned {ticker} — {checks} checks, no actionable signal", "system")
+
+        return len(to_remove)
+
     def _rotate_capital(self, r, held_map, effective_bp, profile_name):
         """Sell weakest position to fund a buy. Returns updated BP."""
         self._log(f"    BP ${effective_bp:,.0f} low — rotating capital...", "agent")
@@ -880,3 +944,44 @@ class AgentEngine:
         elif profile_name == "Aggressive": base = int(base * 0.7)
         elif profile_name == "Chill":      base = int(base * 1.5)
         return max(60, min(900, base))
+
+    @staticmethod
+    def _wait_for_market():
+        """
+        Check if market is open. Returns seconds to wait, or 0 if open.
+
+        Market hours: 9:45 AM - 3:45 PM ET (avoids first/last 15 min whipsaw).
+        Weekends: skip entirely.
+        """
+        try:
+            import pytz
+            et = pytz.timezone("US/Eastern")
+            now = datetime.now(et)
+
+            # Weekend: skip to Monday 9:45 AM
+            if now.weekday() >= 5:  # Saturday=5, Sunday=6
+                days_until_monday = 7 - now.weekday()
+                next_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
+                next_open += timedelta(days=days_until_monday)
+                return int((next_open - now).total_seconds())
+
+            market_open = now.replace(hour=9, minute=45, second=0, microsecond=0)
+            market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+
+            if now < market_open:
+                # Before market open today
+                return int((market_open - now).total_seconds())
+            elif now > market_close:
+                # After market close — wait for tomorrow (or Monday)
+                if now.weekday() == 4:  # Friday → Monday
+                    next_open = market_open + timedelta(days=3)
+                else:
+                    next_open = market_open + timedelta(days=1)
+                return int((next_open - now).total_seconds())
+            else:
+                return 0  # Market is open
+        except ImportError:
+            # No pytz — can't determine timezone, assume market is open
+            return 0
+        except Exception:
+            return 0
