@@ -247,12 +247,37 @@ class AutoTraderService(QThread):
 
     def _execute_trade(self, stock, action, price, atr):
         """Execute buy or sell. Checks BP before buying, dynamic qty for sells."""
+        # Market hours check — only execute during regular trading
+        try:
+            from core.market_hours import is_market_open
+            if not is_market_open():
+                self.log.emit(f"{stock.ticker}: market closed — skipping execution", "system")
+                return
+        except Exception:
+            pass
+
         size = self.rm.position_size(price, atr)
         if size <= 0:
             self.log.emit(f"{stock.ticker}: position size 0 — skipping", "warn")
             return
 
         side = "buy" if action == "BUY" else "sell"
+
+        # For buys: check if already holding this stock (prevent double-buy)
+        if side == "buy" and self.broker:
+            try:
+                positions = self.broker.get_positions()
+                if isinstance(positions, list):
+                    for p in positions:
+                        if p.get("symbol", "").upper() == stock.ticker.upper():
+                            held = int(float(p.get("qty", 0)))
+                            if held > 0:
+                                self.log.emit(
+                                    f"{stock.ticker}: already holding {held} shares — skipping buy",
+                                    "info")
+                                return
+            except Exception:
+                pass
 
         # For buys: check buying power first
         if side == "buy" and self.broker:
