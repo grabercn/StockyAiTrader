@@ -233,6 +233,10 @@ class AgentEngine:
         rl_retrain_interval = 5
 
         self._trades_today = 0
+        self._session_start_time = datetime.now()
+        self._starting_bp = 0  # Captured on first context gather
+        self._regime_time = {}  # {regime_name: seconds} for regime distribution
+        self._last_regime_check = time.time()
         log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {base_min_conf:.0%}")
 
         while self._running:
@@ -254,6 +258,8 @@ class AgentEngine:
                 self._set_phase("context", "Fetching account and positions...")
                 acct, effective_bp, dt_bp, held_map, positions_raw, pdt_restricted = self._gather_context()
                 initial_bp = effective_bp
+                if self._starting_bp == 0:
+                    self._starting_bp = effective_bp
 
                 if self._trades_today >= max_trades:
                     self._log(f"Agent: max trades/day ({max_trades}) reached. Waiting.", "warn")
@@ -274,6 +280,11 @@ class AgentEngine:
                 self._set_phase("context", "Detecting market regime...")
                 regime = detect_regime(log_fn=self._log)
                 self._regime = regime
+                # Track time spent in each regime
+                now_t = time.time()
+                elapsed = now_t - self._last_regime_check
+                self._regime_time[regime.name] = self._regime_time.get(regime.name, 0) + elapsed
+                self._last_regime_check = now_t
                 min_conf = min(0.95, base_min_conf + regime.conf_boost)
                 self._log(
                     f"  Min confidence: {base_min_conf:.0%} + {regime.conf_boost:+.0%} "
@@ -658,6 +669,37 @@ class AgentEngine:
                                 wait_secs = 120  # Scan every 2 min in last 30 min before open
                         except: pass
                     self._set_phase("waiting", f"{session}: {note}")
+
+        # Save session history before cleanup
+        try:
+            from core.agent.session_history import save_session as _save_hist
+            # Build regime distribution as percentages
+            total_regime_time = sum(self._regime_time.values()) or 1
+            regime_dist = {
+                k: round(v / total_regime_time, 4)
+                for k, v in self._regime_time.items()
+            }
+            sess_state = {
+                "session_pnl": self._session_pnl,
+                "wins": self._wins,
+                "losses": self._losses,
+                "trade_log": list(self._trade_log),
+                "trades_today": self._trades_today,
+                "cycle": cycle,
+                "bp": getattr(self, '_last_bp', 0),
+                "starting_bp": getattr(self, '_starting_bp', 0),
+                "regime": self._regime.name if self._regime else "UNKNOWN",
+                "regime_distribution": regime_dist,
+            }
+            _save_hist(
+                sess_state,
+                getattr(self, '_session_start_time', datetime.now()),
+                datetime.now(),
+                profile_name,
+            )
+            self._log("Session history saved", "system")
+        except Exception as _sh_err:
+            self._log(f"Session history save error: {_sh_err}", "error")
 
         # Cleanup
         self._countdown = 0

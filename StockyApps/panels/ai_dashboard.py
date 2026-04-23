@@ -284,10 +284,15 @@ class AIDashboardPanel(QWidget):
                         pass
 
     def _show_card_detail(self, card_type):
-        """Show rich detail popup with charts when stat card is clicked."""
+        """Show rich detail popup with charts when stat card is clicked.
+
+        Includes a session selector so users can browse historical sessions
+        alongside the current live session.
+        """
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
         from core.logger import get_log_entries, get_log_files
+        from core.agent.session_history import get_all_sessions
         from collections import defaultdict
 
         # Gather all log data across files
@@ -309,171 +314,368 @@ class AIDashboardPanel(QWidget):
         agent_stocks = engine.agent_stocks
         stats = engine.cycle_stats
 
+        # Load historical sessions
+        hist_sessions = get_all_sessions()
+
         dlg = QDialog(self)
         dlg.setWindowIcon(QApplication.instance().windowIcon())
-        dlg.setMinimumSize(700, 500)
+        dlg.setMinimumSize(700, 550)
 
         lay = QVBoxLayout()
         cc = chart_colors()
 
-        if card_type == "monitored":
-            dlg.setWindowTitle("Monitored Stocks — Detail")
+        # ── Session Selector (shared by all card types) ──
+        sess_row = QHBoxLayout()
+        sess_label = QLabel("Session:")
+        sess_label.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        sess_label.setStyleSheet(f"color: {TEXT_MUTED};")
+        sess_row.addWidget(sess_label)
 
-            title = QLabel(f"Tracking {len(agent_stocks)} Stocks")
-            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
-            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-            lay.addWidget(title)
+        sess_combo = QComboBox()
+        sess_combo.setMinimumWidth(320)
+        sess_combo.setStyleSheet(f"font-size: 10px; padding: 3px;")
+        sess_combo.addItem("Current Session", userData=None)
+        for s in reversed(hist_sessions):
+            sid = s.get("session_id", "?")
+            start = s.get("start_time", "")[:10]
+            dur = s.get("duration_minutes", 0)
+            pnl = s.get("total_pnl", 0)
+            dur_str = f"{int(dur)}m" if dur < 60 else f"{int(dur // 60)}h {int(dur % 60)}m"
+            pnl_str = f"${pnl:+,.0f}" if pnl != 0 else "$0"
+            sess_combo.addItem(
+                f"Session #{sid} -- {start} ({dur_str}, {pnl_str})",
+                userData=s,
+            )
+        sess_row.addWidget(sess_combo)
+        sess_row.addStretch()
+        lay.addLayout(sess_row)
 
-            # Confidence distribution chart
-            fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
-            ax = fig.add_subplot(111)
-            ax.set_facecolor(cc["ax_bg"])
+        # Container for dynamic content that refreshes on session change
+        content_widget = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_widget.setLayout(content_layout)
+        lay.addWidget(content_widget)
 
-            if agent_stocks:
-                tickers = []
-                confs = []
-                colors_list = []
-                for t, info in sorted(agent_stocks.items(), key=lambda x: -x[1].get("confidence", 0)):
-                    tickers.append(t)
-                    confs.append(info.get("confidence", 0) * 100)
-                    sig = info.get("signal", "HOLD")
-                    colors_list.append(COLOR_BUY if sig == "BUY" else COLOR_SELL if sig == "SELL" else COLOR_HOLD)
+        def _populate(card_type_inner, selected_session):
+            """Build the card content for the given session (None = current)."""
+            # Clear previous content
+            while content_layout.count():
+                child = content_layout.takeAt(0)
+                w = child.widget()
+                if w:
+                    w.deleteLater()
+                sub = child.layout()
+                if sub:
+                    while sub.count():
+                        sc = sub.takeAt(0)
+                        sw = sc.widget()
+                        if sw:
+                            sw.deleteLater()
 
-                bars = ax.barh(range(len(tickers)), confs, color=colors_list, alpha=0.85)
-                ax.set_yticks(range(len(tickers)))
-                ax.set_yticklabels(tickers, fontsize=8, color=cc["text"])
-                ax.set_xlabel("Confidence %", fontsize=9, color=cc["muted"])
-                ax.invert_yaxis()
+            is_live = selected_session is None
 
-                # Add value labels
-                for bar, val in zip(bars, confs):
-                    ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
-                            f"{val:.0f}%", va="center", fontsize=7, color=cc["text"])
+            if card_type_inner == "monitored":
+                dlg.setWindowTitle("Monitored Stocks -- Detail")
+                self._populate_monitored(
+                    content_layout, cc, agent_stocks if is_live else {},
+                    selected_session, is_live, plt, FigureCanvas)
 
-            ax.set_title("Current Signal Confidence by Stock", fontsize=10, color=cc["text"])
-            ax.tick_params(colors=cc["muted"], labelsize=7)
-            ax.grid(True, alpha=0.1, axis="x")
-            fig.tight_layout()
-            canvas = FigureCanvas(fig)
-            canvas.setMinimumHeight(200)
-            lay.addWidget(canvas)
+            elif card_type_inner == "trades":
+                dlg.setWindowTitle("Trade Activity -- Detail")
+                self._populate_trades(
+                    content_layout, cc,
+                    all_executions if is_live else [],
+                    selected_session, is_live, engine, plt, FigureCanvas)
 
-            # Stock detail table
-            tbl = QTableWidget()
-            tbl.setColumnCount(7)
-            tbl.setHorizontalHeaderLabels(["Stock", "Signal", "Conf", "Price", "Mode", "Checks", "Interval"])
-            for c in range(7):
-                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
-            tbl.verticalHeader().setVisible(False)
-            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            tbl.setRowCount(len(agent_stocks))
-            for i, (t, info) in enumerate(sorted(agent_stocks.items(), key=lambda x: -x[1].get("confidence", 0))):
-                sig = info.get("signal", "?")
-                sig_color = COLOR_BUY if sig == "BUY" else COLOR_SELL if sig == "SELL" else COLOR_HOLD
-                vals = [t, sig, f"{info.get('confidence',0):.0%}", f"${info.get('price',0):.2f}",
-                        info.get("mode", "?"), str(info.get("checks", 0)), info.get("interval", "?")]
-                for j, v in enumerate(vals):
-                    item = QTableWidgetItem(v)
-                    item.setTextAlignment(Qt.AlignCenter)
-                    if j == 1:
-                        item.setForeground(QColor(sig_color))
-                    tbl.setItem(i, j, item)
-            lay.addWidget(tbl)
+            elif card_type_inner == "signals":
+                dlg.setWindowTitle("Signal Distribution -- Detail")
+                self._populate_signals(
+                    content_layout, cc,
+                    all_decisions if is_live else [],
+                    selected_session, is_live, plt, FigureCanvas)
 
-        elif card_type == "trades":
-            dlg.setWindowTitle("Trade Activity — Detail")
+            elif card_type_inner == "mode":
+                dlg.setWindowTitle("Agent Mode -- Detail")
+                self._populate_mode(
+                    content_layout, cc, engine,
+                    selected_session, is_live, plt, FigureCanvas)
 
-            # Parse execution timestamps by hour and day
-            by_hour = defaultdict(int)
-            by_day = defaultdict(int)
-            buy_trades = []
-            sell_trades = []
-            for e in all_executions:
-                ts = e.get("timestamp", "")[:19]
-                side = e.get("side", "")
-                ticker = e.get("ticker", "")
-                if len(ts) >= 13:
-                    hour = ts[11:13]
-                    by_hour[hour] += 1
-                if len(ts) >= 10:
-                    day = ts[:10]
-                    by_day[day] += 1
-                if side == "buy":
-                    buy_trades.append(e)
-                elif side == "sell":
-                    sell_trades.append(e)
+        # Initial population
+        _populate(card_type, None)
 
-            title = QLabel(f"{len(all_executions)} Trades Executed ({len(buy_trades)} buys, {len(sell_trades)} sells)")
-            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
-            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-            lay.addWidget(title)
+        # Re-populate when session selector changes
+        def _on_session_changed(index):
+            sess_data = sess_combo.itemData(index)
+            _populate(card_type, sess_data)
 
-            # Trades by hour chart
-            fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
-            ax = fig.add_subplot(121)
-            ax.set_facecolor(cc["ax_bg"])
-            if by_hour:
-                hours = sorted(by_hour.keys())
-                counts = [by_hour[h] for h in hours]
-                ax.bar(hours, counts, color=BRAND_ACCENT, alpha=0.8)
-                ax.set_title("Trades by Hour", fontsize=9, color=cc["text"])
-                ax.tick_params(colors=cc["muted"], labelsize=7)
-                ax.set_xlabel("Hour", fontsize=8, color=cc["muted"])
+        sess_combo.currentIndexChanged.connect(_on_session_changed)
 
-            # Trades by day chart
-            ax2 = fig.add_subplot(122)
-            ax2.set_facecolor(cc["ax_bg"])
-            if by_day:
-                days = sorted(by_day.keys())
-                day_labels = [d[5:] for d in days]  # MM-DD
-                counts = [by_day[d] for d in days]
-                ax2.bar(day_labels, counts, color=BRAND_PRIMARY, alpha=0.8)
-                ax2.set_title("Trades by Day", fontsize=9, color=cc["text"])
-                ax2.tick_params(colors=cc["muted"], labelsize=7)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
 
-            fig.tight_layout()
-            canvas = FigureCanvas(fig)
-            canvas.setMinimumHeight(180)
-            lay.addWidget(canvas)
+        dlg.setLayout(lay)
+        dlg.exec_()
 
-            # Recent trades table
-            recent = sorted(all_executions, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
-            tbl = QTableWidget()
-            tbl.setColumnCount(6)
-            tbl.setHorizontalHeaderLabels(["Time", "Ticker", "Side", "Qty", "Status", "Error"])
-            for c in range(6):
-                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
-            tbl.verticalHeader().setVisible(False)
-            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            tbl.setRowCount(len(recent))
-            for i, e in enumerate(recent):
-                ts = e.get("timestamp", "")[:19]
-                side = e.get("side", "?")
-                sc = COLOR_BUY if side == "buy" else COLOR_SELL
-                err = e.get("error", "")
-                vals = [ts[11:19] if len(ts) > 11 else ts, e.get("ticker", "?"), side.upper(),
-                        str(e.get("qty", "?")), e.get("status", "?"), str(err or "OK")[:30]]
-                for j, v in enumerate(vals):
-                    item = QTableWidgetItem(v)
-                    item.setTextAlignment(Qt.AlignCenter)
-                    if j == 2:
-                        item.setForeground(QColor(sc))
-                    if j == 5 and err:
-                        item.setForeground(QColor(COLOR_SELL))
-                    elif j == 5:
-                        item.setForeground(QColor(BRAND_ACCENT))
-                    tbl.setItem(i, j, item)
-            lay.addWidget(tbl)
+    # ── Card detail population helpers ──────────────────────────────────
 
-        elif card_type == "signals":
-            dlg.setWindowTitle("Signal Distribution — Detail")
+    def _populate_monitored(self, lay, cc, agent_stocks, session, is_live, plt, FigureCanvas):
+        """Build monitored-stocks card content."""
+        if is_live:
+            stocks_data = agent_stocks
+            title_text = f"Tracking {len(stocks_data)} Stocks"
+        else:
+            # Historical: show stocks that were traded in that session
+            tickers = session.get("stocks_traded", [])
+            trade_log = session.get("trade_log", [])
+            stocks_data = {}
+            for t in trade_log:
+                tk = t.get("ticker", "")
+                if tk and tk not in stocks_data:
+                    stocks_data[tk] = {
+                        "signal": t.get("side", "HOLD").upper(),
+                        "confidence": 0,
+                        "price": t.get("exit") or t.get("entry", 0),
+                        "mode": "Historical",
+                        "checks": 0,
+                        "interval": "--",
+                    }
+            title_text = (
+                f"Session #{session.get('session_id','?')}: "
+                f"{len(tickers)} stocks traded"
+            )
 
-            # Count signals by action and by ticker
+        title = QLabel(title_text)
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
+
+        # Confidence distribution chart
+        fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(cc["ax_bg"])
+
+        if stocks_data:
+            tickers_list = []
+            confs = []
+            colors_list = []
+            for t, info in sorted(stocks_data.items(), key=lambda x: -x[1].get("confidence", 0)):
+                tickers_list.append(t)
+                confs.append(info.get("confidence", 0) * 100)
+                sig = info.get("signal", "HOLD")
+                colors_list.append(COLOR_BUY if sig in ("BUY", "buy") else COLOR_SELL if sig in ("SELL", "sell") else COLOR_HOLD)
+
+            bars = ax.barh(range(len(tickers_list)), confs, color=colors_list, alpha=0.85)
+            ax.set_yticks(range(len(tickers_list)))
+            ax.set_yticklabels(tickers_list, fontsize=8, color=cc["text"])
+            ax.set_xlabel("Confidence %", fontsize=9, color=cc["muted"])
+            ax.invert_yaxis()
+
+            for bar, val in zip(bars, confs):
+                ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                        f"{val:.0f}%", va="center", fontsize=7, color=cc["text"])
+
+        chart_title = "Current Signal Confidence by Stock" if is_live else "Stocks Traded in Session"
+        ax.set_title(chart_title, fontsize=10, color=cc["text"])
+        ax.tick_params(colors=cc["muted"], labelsize=7)
+        ax.grid(True, alpha=0.1, axis="x")
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(200)
+        lay.addWidget(canvas)
+
+        # Stock detail table
+        tbl = QTableWidget()
+        tbl.setColumnCount(7)
+        tbl.setHorizontalHeaderLabels(["Stock", "Signal", "Conf", "Price", "Mode", "Checks", "Interval"])
+        for c in range(7):
+            tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setRowCount(len(stocks_data))
+        for i, (t, info) in enumerate(sorted(stocks_data.items(), key=lambda x: -x[1].get("confidence", 0))):
+            sig = info.get("signal", "?")
+            sig_color = COLOR_BUY if sig in ("BUY", "buy") else COLOR_SELL if sig in ("SELL", "sell") else COLOR_HOLD
+            vals = [t, sig, f"{info.get('confidence',0):.0%}", f"${info.get('price',0):.2f}",
+                    info.get("mode", "?"), str(info.get("checks", 0)), info.get("interval", "?")]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignCenter)
+                if j == 1:
+                    item.setForeground(QColor(sig_color))
+                tbl.setItem(i, j, item)
+        lay.addWidget(tbl)
+
+    def _populate_trades(self, lay, cc, all_executions, session, is_live, engine, plt, FigureCanvas):
+        """Build trade activity card content with cumulative P&L chart."""
+        from collections import defaultdict
+
+        if is_live:
+            # Use engine trade log for current session
+            trade_log = list(engine.trade_log)
+            buy_count = sum(1 for t in trade_log if t.get("side") == "buy")
+            sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell"))
+            title_text = f"{len(trade_log)} Trades ({buy_count} buys, {sell_count} sells)"
+            pnl_val = engine.session_pnl
+            wins = engine._wins
+            losses = engine._losses
+        else:
+            trade_log = session.get("trade_log", [])
+            buy_count = sum(1 for t in trade_log if t.get("side") == "buy")
+            sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell"))
+            title_text = (
+                f"Session #{session.get('session_id','?')}: "
+                f"{len(trade_log)} trades ({buy_count} buys, {sell_count} sells)"
+            )
+            pnl_val = session.get("total_pnl", 0)
+            wins = session.get("wins", 0)
+            losses = session.get("losses", 0)
+
+        total_trades = wins + losses
+        wr = wins / total_trades if total_trades > 0 else 0
+
+        title = QLabel(title_text)
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
+
+        # P&L summary line
+        pnl_color = COLOR_PROFIT if pnl_val >= 0 else COLOR_LOSS
+        wr_str = f" | Win Rate: {wr:.0%} ({wins}W/{losses}L)" if total_trades > 0 else ""
+        pnl_label = QLabel(f"P&L: ${pnl_val:+,.2f}{wr_str}")
+        pnl_label.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        pnl_label.setStyleSheet(f"color: {pnl_color};")
+        lay.addWidget(pnl_label)
+
+        # Cumulative P&L chart from trade log
+        fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
+        ax = fig.add_subplot(121)
+        ax.set_facecolor(cc["ax_bg"])
+
+        closed = [t for t in trade_log if t.get("pnl") is not None]
+        if closed:
+            cum_pnl = []
+            timestamps = []
+            running = 0
+            for t in sorted(closed, key=lambda x: x.get("timestamp", "")):
+                running += t.get("pnl", 0)
+                cum_pnl.append(running)
+                ts = t.get("timestamp", "")
+                timestamps.append(ts[11:16] if len(ts) > 15 else ts[:5])
+
+            colors_fill = [COLOR_PROFIT if v >= 0 else COLOR_LOSS for v in cum_pnl]
+            ax.fill_between(range(len(cum_pnl)), cum_pnl, alpha=0.3,
+                            color=COLOR_PROFIT if cum_pnl[-1] >= 0 else COLOR_LOSS)
+            ax.plot(range(len(cum_pnl)), cum_pnl,
+                    color=COLOR_PROFIT if cum_pnl[-1] >= 0 else COLOR_LOSS,
+                    linewidth=1.5)
+            ax.axhline(y=0, color=cc["muted"], linewidth=0.5, linestyle="--")
+            if len(timestamps) <= 12:
+                ax.set_xticks(range(len(timestamps)))
+                ax.set_xticklabels(timestamps, fontsize=6, rotation=45, color=cc["muted"])
+            else:
+                step = max(1, len(timestamps) // 8)
+                ax.set_xticks(range(0, len(timestamps), step))
+                ax.set_xticklabels(timestamps[::step], fontsize=6, rotation=45, color=cc["muted"])
+            ax.set_ylabel("P&L ($)", fontsize=8, color=cc["muted"])
+            ax.set_title("Cumulative P&L", fontsize=9, color=cc["text"])
+        else:
+            ax.text(0.5, 0.5, "No closed trades", ha="center", va="center",
+                    fontsize=10, color=cc["muted"], transform=ax.transAxes)
+            ax.set_title("Cumulative P&L", fontsize=9, color=cc["text"])
+        ax.tick_params(colors=cc["muted"], labelsize=7)
+
+        # Trades by hour chart
+        ax2 = fig.add_subplot(122)
+        ax2.set_facecolor(cc["ax_bg"])
+        by_hour = defaultdict(int)
+        source = trade_log if not is_live else (trade_log or all_executions)
+        for e in source:
+            ts = e.get("timestamp", "")[:19]
+            if len(ts) >= 13:
+                by_hour[ts[11:13]] += 1
+        if by_hour:
+            hours = sorted(by_hour.keys())
+            counts = [by_hour[h] for h in hours]
+            ax2.bar(hours, counts, color=BRAND_ACCENT, alpha=0.8)
+            ax2.set_title("Trades by Hour", fontsize=9, color=cc["text"])
+            ax2.tick_params(colors=cc["muted"], labelsize=7)
+            ax2.set_xlabel("Hour", fontsize=8, color=cc["muted"])
+        else:
+            ax2.text(0.5, 0.5, "No data", ha="center", va="center",
+                     fontsize=10, color=cc["muted"], transform=ax2.transAxes)
+            ax2.set_title("Trades by Hour", fontsize=9, color=cc["text"])
+
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(180)
+        lay.addWidget(canvas)
+
+        # Trade log table
+        display_trades = sorted(trade_log, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
+        tbl = QTableWidget()
+        tbl.setColumnCount(7)
+        tbl.setHorizontalHeaderLabels(["Time", "Ticker", "Side", "Qty", "Entry", "Exit", "P&L"])
+        for c in range(7):
+            tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setRowCount(len(display_trades))
+        for i, e in enumerate(display_trades):
+            ts = e.get("timestamp", "")[:19]
+            side = e.get("side", "?")
+            sc = COLOR_BUY if side == "buy" else COLOR_SELL
+            pnl = e.get("pnl")
+            pnl_str = f"${pnl:+,.2f}" if pnl is not None else "--"
+            entry_px = e.get("entry")
+            exit_px = e.get("exit")
+            vals = [
+                ts[11:19] if len(ts) > 11 else ts,
+                e.get("ticker", "?"),
+                side.upper(),
+                str(e.get("qty", "?")),
+                f"${entry_px:.2f}" if entry_px else "--",
+                f"${exit_px:.2f}" if exit_px else "--",
+                pnl_str,
+            ]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignCenter)
+                if j == 2:
+                    item.setForeground(QColor(sc))
+                if j == 6 and pnl is not None:
+                    item.setForeground(QColor(COLOR_PROFIT if pnl >= 0 else COLOR_LOSS))
+                tbl.setItem(i, j, item)
+        lay.addWidget(tbl)
+
+    def _populate_signals(self, lay, cc, all_decisions, session, is_live, plt, FigureCanvas):
+        """Build signal distribution card content."""
+        from collections import defaultdict
+
+        if not is_live and session:
+            # Reconstruct signal counts from trade log
+            trade_log = session.get("trade_log", [])
             action_counts = defaultdict(int)
             ticker_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
             conf_by_action = defaultdict(list)
             hourly_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
-
+            for t in trade_log:
+                side = t.get("side", "hold").upper()
+                if side in ("ROTATE_SELL",):
+                    side = "SELL"
+                action = side if side in ("BUY", "SELL") else "HOLD"
+                ticker = t.get("ticker", "?")
+                action_counts[action] += 1
+                ticker_signals[ticker][action] += 1
+                ts = t.get("timestamp", "")
+                if len(ts) >= 13:
+                    hourly_signals[ts[11:13]][action] += 1
+        else:
+            action_counts = defaultdict(int)
+            ticker_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
+            conf_by_action = defaultdict(list)
+            hourly_signals = defaultdict(lambda: {"BUY": 0, "SELL": 0, "HOLD": 0})
             for d in all_decisions:
                 action = d.get("action", "?")
                 ticker = d.get("ticker", "?")
@@ -485,162 +687,207 @@ class AIDashboardPanel(QWidget):
                 if len(ts) >= 13:
                     hourly_signals[ts[11:13]][action] += 1
 
-            total = sum(action_counts.values())
-            title = QLabel(f"{total} Signals: {action_counts.get('BUY',0)} BUY / "
-                          f"{action_counts.get('SELL',0)} SELL / {action_counts.get('HOLD',0)} HOLD")
-            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
-            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-            lay.addWidget(title)
+        total = sum(action_counts.values())
+        if is_live:
+            title_text = (
+                f"{total} Signals: {action_counts.get('BUY',0)} BUY / "
+                f"{action_counts.get('SELL',0)} SELL / {action_counts.get('HOLD',0)} HOLD"
+            )
+        else:
+            title_text = (
+                f"Session #{session.get('session_id','?')}: "
+                f"{total} trade actions"
+            )
 
-            fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
+        title = QLabel(title_text)
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
 
-            # Pie chart: signal distribution
-            ax1 = fig.add_subplot(131)
-            ax1.set_facecolor(cc["fig_bg"])
-            if action_counts:
-                labels = list(action_counts.keys())
-                sizes = list(action_counts.values())
-                pie_colors = [COLOR_BUY if l == "BUY" else COLOR_SELL if l == "SELL" else COLOR_HOLD for l in labels]
-                ax1.pie(sizes, labels=labels, colors=pie_colors, autopct="%1.0f%%",
-                        textprops={"fontsize": 8, "color": "white"})
-                ax1.set_title("Distribution", fontsize=9, color=cc["text"])
+        fig = plt.Figure(figsize=(7, 3), dpi=100, facecolor=cc["fig_bg"])
 
-            # Confidence box plot by action
-            ax2 = fig.add_subplot(132)
-            ax2.set_facecolor(cc["ax_bg"])
-            if conf_by_action:
-                data = []
-                labels = []
-                bcolors = []
-                for action in ["BUY", "SELL", "HOLD"]:
-                    if action in conf_by_action:
-                        data.append([c * 100 for c in conf_by_action[action]])
-                        labels.append(action)
-                        bcolors.append(COLOR_BUY if action == "BUY" else COLOR_SELL if action == "SELL" else COLOR_HOLD)
+        # Pie chart
+        ax1 = fig.add_subplot(131)
+        ax1.set_facecolor(cc["fig_bg"])
+        if action_counts:
+            labels = list(action_counts.keys())
+            sizes = list(action_counts.values())
+            pie_colors = [COLOR_BUY if l == "BUY" else COLOR_SELL if l == "SELL" else COLOR_HOLD for l in labels]
+            ax1.pie(sizes, labels=labels, colors=pie_colors, autopct="%1.0f%%",
+                    textprops={"fontsize": 8, "color": "white"})
+            ax1.set_title("Distribution", fontsize=9, color=cc["text"])
+
+        # Confidence box plot
+        ax2 = fig.add_subplot(132)
+        ax2.set_facecolor(cc["ax_bg"])
+        if conf_by_action:
+            data = []
+            labels = []
+            bcolors = []
+            for action in ["BUY", "SELL", "HOLD"]:
+                if action in conf_by_action:
+                    data.append([c * 100 for c in conf_by_action[action]])
+                    labels.append(action)
+                    bcolors.append(COLOR_BUY if action == "BUY" else COLOR_SELL if action == "SELL" else COLOR_HOLD)
+            if data:
                 bp = ax2.boxplot(data, labels=labels, patch_artist=True)
                 for patch, color in zip(bp["boxes"], bcolors):
                     patch.set_facecolor(color)
                     patch.set_alpha(0.6)
-                ax2.set_title("Confidence %", fontsize=9, color=cc["text"])
-                ax2.tick_params(colors=cc["muted"], labelsize=7)
+        ax2.set_title("Confidence %", fontsize=9, color=cc["text"])
+        ax2.tick_params(colors=cc["muted"], labelsize=7)
 
-            # Signals by hour stacked bar
-            ax3 = fig.add_subplot(133)
-            ax3.set_facecolor(cc["ax_bg"])
-            if hourly_signals:
-                hours = sorted(hourly_signals.keys())
-                buys = [hourly_signals[h]["BUY"] for h in hours]
-                sells = [hourly_signals[h]["SELL"] for h in hours]
-                holds = [hourly_signals[h]["HOLD"] for h in hours]
-                x = range(len(hours))
-                ax3.bar(x, buys, color=COLOR_BUY, alpha=0.8, label="BUY")
-                ax3.bar(x, sells, bottom=buys, color=COLOR_SELL, alpha=0.8, label="SELL")
-                ax3.bar(x, holds, bottom=[b + s for b, s in zip(buys, sells)],
-                        color=COLOR_HOLD, alpha=0.8, label="HOLD")
-                ax3.set_xticks(x)
-                ax3.set_xticklabels(hours, fontsize=6, color=cc["muted"])
-                ax3.set_title("By Hour", fontsize=9, color=cc["text"])
-                ax3.tick_params(colors=cc["muted"], labelsize=7)
-                ax3.legend(fontsize=6)
+        # Signals by hour stacked bar
+        ax3 = fig.add_subplot(133)
+        ax3.set_facecolor(cc["ax_bg"])
+        if hourly_signals:
+            hours = sorted(hourly_signals.keys())
+            buys = [hourly_signals[h]["BUY"] for h in hours]
+            sells = [hourly_signals[h]["SELL"] for h in hours]
+            holds = [hourly_signals[h]["HOLD"] for h in hours]
+            x = range(len(hours))
+            ax3.bar(x, buys, color=COLOR_BUY, alpha=0.8, label="BUY")
+            ax3.bar(x, sells, bottom=buys, color=COLOR_SELL, alpha=0.8, label="SELL")
+            ax3.bar(x, holds, bottom=[b + s for b, s in zip(buys, sells)],
+                    color=COLOR_HOLD, alpha=0.8, label="HOLD")
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(hours, fontsize=6, color=cc["muted"])
+            ax3.set_title("By Hour", fontsize=9, color=cc["text"])
+            ax3.tick_params(colors=cc["muted"], labelsize=7)
+            ax3.legend(fontsize=6)
+        else:
+            ax3.set_title("By Hour", fontsize=9, color=cc["text"])
 
-            fig.tight_layout()
-            canvas = FigureCanvas(fig)
-            canvas.setMinimumHeight(220)
-            lay.addWidget(canvas)
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(220)
+        lay.addWidget(canvas)
 
-            # Top tickers table
-            top = sorted(ticker_signals.items(), key=lambda x: sum(x[1].values()), reverse=True)[:15]
-            tbl = QTableWidget()
-            tbl.setColumnCount(5)
-            tbl.setHorizontalHeaderLabels(["Ticker", "BUY", "SELL", "HOLD", "Total"])
-            for c in range(5):
-                tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
-            tbl.verticalHeader().setVisible(False)
-            tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            tbl.setRowCount(len(top))
-            for i, (ticker, counts) in enumerate(top):
-                total = sum(counts.values())
-                vals = [ticker, str(counts["BUY"]), str(counts["SELL"]), str(counts["HOLD"]), str(total)]
-                for j, v in enumerate(vals):
-                    item = QTableWidgetItem(v)
-                    item.setTextAlignment(Qt.AlignCenter)
-                    if j == 1: item.setForeground(QColor(COLOR_BUY))
-                    elif j == 2: item.setForeground(QColor(COLOR_SELL))
-                    elif j == 3: item.setForeground(QColor(COLOR_HOLD))
-                    tbl.setItem(i, j, item)
-            lay.addWidget(tbl)
+        # Top tickers table
+        top = sorted(ticker_signals.items(), key=lambda x: sum(x[1].values()), reverse=True)[:15]
+        tbl = QTableWidget()
+        tbl.setColumnCount(5)
+        tbl.setHorizontalHeaderLabels(["Ticker", "BUY", "SELL", "HOLD", "Total"])
+        for c in range(5):
+            tbl.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setRowCount(len(top))
+        for i, (ticker, counts) in enumerate(top):
+            total = sum(counts.values())
+            vals = [ticker, str(counts["BUY"]), str(counts["SELL"]), str(counts["HOLD"]), str(total)]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignCenter)
+                if j == 1: item.setForeground(QColor(COLOR_BUY))
+                elif j == 2: item.setForeground(QColor(COLOR_SELL))
+                elif j == 3: item.setForeground(QColor(COLOR_HOLD))
+                tbl.setItem(i, j, item)
+        lay.addWidget(tbl)
 
-        elif card_type == "mode":
-            dlg.setWindowTitle("Agent Mode — Detail")
+    def _populate_mode(self, lay, cc, engine, session, is_live, plt, FigureCanvas):
+        """Build agent mode card content."""
+        settings = load_settings()
 
-            settings = load_settings()
+        if is_live:
             aggr = settings.get("aggressivity", "Default")
-            from core.intelligent_trader import get_aggressivity, AGGRESSIVITY_PROFILES
-            p = get_aggressivity(aggr)
-
-            title = QLabel(f"Profile: {aggr}")
-            title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
-            title.setStyleSheet(f"color: {BRAND_PRIMARY};")
-            lay.addWidget(title)
-
-            # Regime + engine state
             regime_name = "Unknown"
             regime_desc = ""
             if engine.cycle_stats:
                 regime_name = engine.cycle_stats.get("regime", "?")
                 regime_desc = engine.cycle_stats.get("regime_detail", "")
+            cycle_num = engine.cycle
+            trades_today = engine.trades_today
+            phase = engine.phase
+        else:
+            aggr = session.get("profile_name", "Default")
+            regime_dist = session.get("regime_distribution", {})
+            regime_name = max(regime_dist, key=regime_dist.get) if regime_dist else "Unknown"
+            regime_desc = f"Time distribution: {', '.join(f'{k}: {v:.0%}' for k, v in regime_dist.items())}"
+            cycle_num = session.get("cycles_completed", 0)
+            trades_today = session.get("trades_executed", 0)
+            phase = "completed"
 
-            info_text = (
-                f"Aggressivity: {aggr}\n"
-                f"Min Confidence: {p['min_confidence']:.0%}\n"
-                f"Position Size: {p['size_multiplier']:.1f}x\n"
-                f"Max Trades/Day: {p['max_trades_per_day']}\n"
-                f"LLM Advisor: {'Enabled' if p.get('use_llm') else 'Disabled'}\n"
-                f"Stop Loss: {p.get('atr_stop_mult', 1.5):.1f}x ATR\n"
-                f"Take Profit: {p.get('atr_profit_mult', 2.5):.1f}x ATR\n\n"
-                f"Current Regime: {regime_name}\n"
-                f"{regime_desc}\n\n"
-                f"Engine: cycle {engine.cycle}, {engine.trades_today} trades today\n"
-                f"Phase: {engine.phase}"
-            )
-            info = QLabel(info_text)
-            info.setWordWrap(True)
-            info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-            lay.addWidget(info)
+        from core.intelligent_trader import get_aggressivity, AGGRESSIVITY_PROFILES
+        p = get_aggressivity(aggr)
 
-            # Profile comparison chart
-            fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
-            ax = fig.add_subplot(111)
-            ax.set_facecolor(cc["ax_bg"])
+        title_text = f"Profile: {aggr}" if is_live else f"Session #{session.get('session_id','?')}: {aggr}"
+        title = QLabel(title_text)
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
+        title.setStyleSheet(f"color: {BRAND_PRIMARY};")
+        lay.addWidget(title)
 
-            profiles = list(AGGRESSIVITY_PROFILES.keys())
-            metrics = ["min_confidence", "size_multiplier", "max_trades_per_day"]
-            x = range(len(profiles))
-            width = 0.25
-            for mi, metric in enumerate(metrics):
-                vals = []
-                for pn in profiles:
-                    pp = AGGRESSIVITY_PROFILES[pn]
-                    v = pp.get(metric, 0)
-                    if metric == "max_trades_per_day":
-                        v = v / 30.0  # Normalize to 0-1
-                    vals.append(v)
-                offset = (mi - 1) * width
-                bar_colors = [BRAND_ACCENT if pn == aggr else cc["muted"] for pn in profiles]
-                ax.bar([xi + offset for xi in x], vals, width, label=metric.replace("_", " ").title(),
-                       color=bar_colors, alpha=0.7 + (0.3 if mi == 0 else 0))
+        info_parts = [
+            f"Aggressivity: {aggr}",
+            f"Min Confidence: {p['min_confidence']:.0%}",
+            f"Position Size: {p['size_multiplier']:.1f}x",
+            f"Max Trades/Day: {p['max_trades_per_day']}",
+            f"LLM Advisor: {'Enabled' if p.get('use_llm') else 'Disabled'}",
+            f"Stop Loss: {p.get('atr_stop_mult', 1.5):.1f}x ATR",
+            f"Take Profit: {p.get('atr_profit_mult', 2.5):.1f}x ATR",
+            "",
+            f"{'Current' if is_live else 'Primary'} Regime: {regime_name}",
+            regime_desc,
+            "",
+            f"{'Engine' if is_live else 'Session'}: cycle {cycle_num}, {trades_today} trades",
+            f"Phase: {phase}",
+        ]
 
-            ax.set_xticks(x)
-            ax.set_xticklabels(profiles, fontsize=9, color=cc["text"])
-            ax.set_title("Profile Comparison (active highlighted)", fontsize=10, color=cc["text"])
-            ax.tick_params(colors=cc["muted"], labelsize=7)
-            ax.legend(fontsize=7)
-            fig.tight_layout()
-            canvas = FigureCanvas(fig)
-            canvas.setMinimumHeight(180)
-            lay.addWidget(canvas)
+        if not is_live:
+            pnl = session.get("total_pnl", 0)
+            wins = session.get("wins", 0)
+            losses = session.get("losses", 0)
+            dur = session.get("duration_minutes", 0)
+            best = session.get("best_trade")
+            worst = session.get("worst_trade")
+            info_parts.append("")
+            info_parts.append(f"P&L: ${pnl:+,.2f} | W/L: {wins}/{losses}")
+            dur_str = f"{int(dur)}m" if dur < 60 else f"{int(dur // 60)}h {int(dur % 60)}m"
+            info_parts.append(f"Duration: {dur_str}")
+            if best:
+                info_parts.append(f"Best: {best['ticker']} ${best['pnl']:+,.2f}")
+            if worst:
+                info_parts.append(f"Worst: {worst['ticker']} ${worst['pnl']:+,.2f}")
 
-            # Reflection rules
+        info = QLabel("\n".join(info_parts))
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        lay.addWidget(info)
+
+        # Profile comparison chart
+        fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(cc["ax_bg"])
+
+        profiles = list(AGGRESSIVITY_PROFILES.keys())
+        metrics = ["min_confidence", "size_multiplier", "max_trades_per_day"]
+        x = range(len(profiles))
+        width = 0.25
+        for mi, metric in enumerate(metrics):
+            vals = []
+            for pn in profiles:
+                pp = AGGRESSIVITY_PROFILES[pn]
+                v = pp.get(metric, 0)
+                if metric == "max_trades_per_day":
+                    v = v / 30.0
+                vals.append(v)
+            offset = (mi - 1) * width
+            bar_colors = [BRAND_ACCENT if pn == aggr else cc["muted"] for pn in profiles]
+            ax.bar([xi + offset for xi in x], vals, width, label=metric.replace("_", " ").title(),
+                   color=bar_colors, alpha=0.7 + (0.3 if mi == 0 else 0))
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(profiles, fontsize=9, color=cc["text"])
+        ax.set_title("Profile Comparison (active highlighted)", fontsize=10, color=cc["text"])
+        ax.tick_params(colors=cc["muted"], labelsize=7)
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(180)
+        lay.addWidget(canvas)
+
+        # Reflection rules (live only)
+        if is_live:
             from core.agent.reflection import get_active_rules
             rules = get_active_rules()
             if rules:
@@ -653,13 +900,6 @@ class AIDashboardPanel(QWidget):
                     rl.setWordWrap(True)
                     rl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
                     lay.addWidget(rl)
-
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(dlg.accept)
-        lay.addWidget(close_btn)
-
-        dlg.setLayout(lay)
-        dlg.exec_()
 
     def _on_log(self, msg, level):
         """Capture all trade/system/auto-related logs."""
@@ -1001,13 +1241,22 @@ class AIDashboardPanel(QWidget):
 
         if result == QDialog.Rejected:
             # New session — clear saved state but keep training data
+            # Session history was already saved when engine stopped, so it's safe
             settings["agent_was_running"] = False
             settings["agent_tracked_stocks"] = {}
             settings["monitored_stocks"] = {}
             settings["agent_managed_positions"] = []
+            settings.pop("agent_engine_state", None)
             save_settings(settings)
             self._engine.agent_stocks = {}
             self._agent_stocks = self._engine.agent_stocks
+            # Reset engine P&L / trade tracking for fresh session
+            self._engine._session_pnl = 0.0
+            self._engine._trade_log = []
+            self._engine._wins = 0
+            self._engine._losses = 0
+            self._engine._cycle = 0
+            self._engine._trades_today = 0
             try:
                 svc = self._get_svc()
                 if svc:
@@ -1015,7 +1264,7 @@ class AIDashboardPanel(QWidget):
                         svc.remove_stock(t)
             except Exception:
                 pass
-            self.bus.log_entry.emit("Starting fresh session — saved data cleared", "system")
+            self.bus.log_entry.emit("Starting fresh session -- saved data cleared", "system")
 
         # Both resume and new session start the agent
         self._start_agent()

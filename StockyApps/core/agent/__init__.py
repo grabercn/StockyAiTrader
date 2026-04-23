@@ -22,9 +22,13 @@ from .engine import AgentEngine
 from .info import PIPELINE_INFO, get_info_html
 from .regime import RegimeState, detect_regime
 from .reflection import get_active_rules, get_rules_for_prompt
+from .session_history import (
+    save_session, get_all_sessions, get_session, get_session_count,
+)
 
 __all__ = [
     "AgentEngine", "PIPELINE_INFO", "get_info_html",
     "RegimeState", "detect_regime",
     "get_active_rules", "get_rules_for_prompt",
+    "save_session", "get_all_sessions", "get_session", "get_session_count",
 ]
