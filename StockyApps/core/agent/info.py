@@ -92,6 +92,32 @@ PIPELINE_INFO = {
             "If both agree → confidence boosted. If disagree → confidence reduced."
         ),
     },
+    "safeguards": {
+        "title": "Safety Systems",
+        "text": (
+            "Active protective filters running every cycle:\n\n"
+            "MANUAL STOP-LOSS MONITOR:\n"
+            "For positions without bracket orders (PDT fallback), the agent\n"
+            "checks if current price hit the stored stop-loss level and sells\n"
+            "immediately. Prevents large drawdowns like the -8% on OPEN.\n\n"
+            "TRAILING STOP:\n"
+            "As a position moves favorably, the stop-loss ratchets up:\n"
+            "  +2x ATR → stop moves to breakeven\n"
+            "  +3x ATR → stop moves to entry + 1x ATR (locks profit)\n"
+            "  +4x ATR → stop moves to entry + 2x ATR\n"
+            "Stops only move UP, never down.\n\n"
+            "EARNINGS AVOIDANCE:\n"
+            "Skips buying stocks within 3 days of earnings announcements.\n"
+            "Earnings are binary events with unpredictable outcomes.\n"
+            "Uses Finnhub calendar data.\n\n"
+            "SECTOR DIVERSIFICATION:\n"
+            "Maximum 2 stocks per sector (Tech, Consumer, Finance, etc.).\n"
+            "Prevents correlated drawdowns from sector-wide moves.\n\n"
+            "ADDON SENTIMENT CONFIRMATION:\n"
+            "StockTwits bull/bear ratio and SEC insider trades adjust\n"
+            "confidence by up to ±5%. Insiders buying = stronger BUY signal."
+        ),
+    },
     "phase6_execute": {
         "title": "Phase 6: Execute Trades",
         "text": (
@@ -202,8 +228,9 @@ def get_info_html():
 
     sections = [
         "overview", "phase1_context", "phase2_discovery", "phase3_scan",
-        "phase4_filter", "phase5_gemini", "phase6_execute", "phase7_timing",
-        "regime_detection", "reflection_system", "rl_system", "risk_management",
+        "phase4_filter", "phase5_gemini", "safeguards", "phase6_execute",
+        "phase7_timing", "regime_detection", "reflection_system",
+        "rl_system", "risk_management",
     ]
 
     html = []

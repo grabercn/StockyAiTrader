@@ -211,6 +211,10 @@ class AgentEngine:
         from core.logger import log_event
         from core.agent.regime import detect_regime
         from core.agent.reflection import check_and_reflect, get_rules_for_prompt
+        from core.agent.safeguards import (
+            check_earnings_proximity, check_stop_loss_hits,
+            update_trailing_stops, check_sector_limit, get_addon_sentiment,
+        )
 
         settings = self._settings()
         rm = RiskManager()
@@ -296,6 +300,60 @@ class AgentEngine:
                     try:
                         new_rules = check_and_reflect(
                             held_map, self._agent_stocks, [], log_fn=self._log)
+                    except Exception:
+                        pass
+
+                # ── Trailing Stop Updates ──
+                if held_map and self._agent_stocks:
+                    try:
+                        trail_updates = update_trailing_stops(
+                            held_map, self._agent_stocks, log_fn=self._log)
+                    except Exception:
+                        pass
+
+                # ── Manual Stop-Loss Monitor ──
+                # For positions without bracket orders, check if price hit stop
+                if held_map and can_trade and self.broker:
+                    try:
+                        stop_hits = check_stop_loss_hits(
+                            held_map, self._agent_stocks, log_fn=self._log)
+                        for sym in stop_hits:
+                            if self._trades_today >= max_trades:
+                                break
+                            pos = held_map.get(sym)
+                            if not pos:
+                                continue
+                            qty = int(float(pos.get("qty", 0)))
+                            if qty <= 0:
+                                continue
+                            try:
+                                result = self.broker.close_position(sym, qty=qty)
+                                if "error" not in result:
+                                    self._trades_today += 1
+                                    sell_price = float(pos.get("current_price", 0))
+                                    entry = float(pos.get("avg_entry_price", 0))
+                                    trade_pnl = (sell_price - entry) * qty
+                                    self._session_pnl += trade_pnl
+                                    if trade_pnl >= 0:
+                                        self._wins += 1
+                                    else:
+                                        self._losses += 1
+                                    self._trade_log.append({
+                                        "ticker": sym, "side": "stop_sell", "qty": qty,
+                                        "entry": entry, "exit": sell_price,
+                                        "pnl": round(trade_pnl, 2),
+                                        "timestamp": datetime.now().isoformat(),
+                                    })
+                                    self._log(
+                                        f"  EMERGENCY SELL {sym} x{qty} — stop hit "
+                                        f"P&L ${trade_pnl:+,.2f}", "trade")
+                                    self._tray_act(f"STOP SELL {sym} ${trade_pnl:+,.0f}")
+                                    self._cycle_decisions.append(f"STOP {sym} (${trade_pnl:+,.0f})")
+                                    held_map.pop(sym, None)
+                                    if sym in self._agent_stocks:
+                                        self._agent_stocks[sym]["qty"] = 0
+                            except Exception as _e:
+                                self._log(f"  Stop sell {sym} error: {_e}", "error")
                     except Exception:
                         pass
 
@@ -485,6 +543,40 @@ class AgentEngine:
                             f"    SKIP BUY {r.ticker} — PDT restricted, already holding "
                             f"(adding shares risks day-trade violation)", "warn")
                         continue
+
+                    # Earnings avoidance: skip stocks within 3 days of earnings
+                    try:
+                        skip_earn, earn_days, earn_reason = check_earnings_proximity(r.ticker, 3)
+                        if skip_earn:
+                            self._log(
+                                f"    SKIP BUY {r.ticker} — {earn_reason} (binary event risk)", "warn")
+                            continue
+                    except Exception:
+                        pass
+
+                    # Sector diversification: max 2 per sector
+                    try:
+                        sec_ok, sector, sec_count, sec_reason = check_sector_limit(r.ticker, held_map, 2)
+                        if not sec_ok:
+                            self._log(
+                                f"    SKIP BUY {r.ticker} — {sec_reason}", "warn")
+                            continue
+                    except Exception:
+                        pass
+
+                    # Addon sentiment confirmation: adjust confidence based on sentiment
+                    try:
+                        sentiment, sent_detail = get_addon_sentiment(r.ticker)
+                        if sentiment != 0:
+                            old_conf = r.confidence
+                            # Sentiment adjusts confidence by ±5%
+                            r.confidence = max(0.1, min(1.0, r.confidence + sentiment * 0.05))
+                            if abs(sentiment) >= 0.3:
+                                self._log(
+                                    f"    Sentiment {r.ticker}: {sent_detail} "
+                                    f"({old_conf:.0%} -> {r.confidence:.0%})", "scan")
+                    except Exception:
+                        pass
 
                     buys += 1
 
