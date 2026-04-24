@@ -72,8 +72,8 @@ class AIDashboardPanel(QWidget):
         cards = QHBoxLayout()
         cards.setSpacing(8)
         self.card_monitored = StatCard("Monitored", "0", BRAND_ACCENT)
-        self.card_trades = StatCard("Trades Today", "0", BRAND_PRIMARY)
-        self.card_signals = StatCard("Signals", "0 B / 0 S", BRAND_SECONDARY)
+        self.card_trades = StatCard("Session P&L", "$0", BRAND_PRIMARY)
+        self.card_signals = StatCard("Signals", "0B / 0S", BRAND_SECONDARY)
         self.card_mode = StatCard("Mode", "Idle", TEXT_MUTED)
         self.card_monitored.on_clicked = lambda: self._show_card_detail("monitored")
         self.card_trades.on_clicked = lambda: self._show_card_detail("trades")
@@ -1026,15 +1026,33 @@ class AIDashboardPanel(QWidget):
         settings = load_settings()
         aggr = settings.get("aggressivity", "Default")
         is_running = getattr(self, '_agent_running', False)
-        self.card_mode.set_value(f"{aggr}" if is_running else aggr)
 
+        # Mode card: show regime + profile when running
+        if is_running:
+            regime = self._engine.cycle_stats.get("regime", "")
+            regime_tag = f" [{regime}]" if regime else ""
+            self.card_mode.set_value(f"{aggr}{regime_tag}")
+        else:
+            self.card_mode.set_value(aggr)
+
+        # Signals card: current signal distribution
         buys = sum(1 for s in monitored.values() if s.get("signal") == "BUY")
         sells = sum(1 for s in monitored.values() if s.get("signal") == "SELL")
         holds = sum(1 for s in monitored.values() if s.get("signal") == "HOLD")
         self.card_signals.set_value(f"{buys}B {sells}S {holds}H")
 
-        total_checks = sum(s.get("checks", 0) for s in monitored.values())
-        self.card_trades.set_value(str(total_checks))
+        # Trades/P&L card: show session P&L + trade count from engine
+        engine = self._engine
+        pnl = engine.session_pnl
+        inherited = getattr(engine, '_inherited_pnl', 0)
+        trades_done = engine.trades_today
+        total_wl = engine._wins + engine._losses
+        wr = f" {engine.win_rate:.0%}" if total_wl > 0 else ""
+        if pnl != 0 or inherited != 0 or trades_done > 0:
+            pnl_display = pnl + inherited
+            self.card_trades.set_value(f"${pnl_display:+,.0f} ({trades_done}T{wr})")
+        else:
+            self.card_trades.set_value(f"0 trades")
 
         # Table
         self.table.setRowCount(len(monitored))
