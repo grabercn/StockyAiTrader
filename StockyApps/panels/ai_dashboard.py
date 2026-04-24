@@ -512,11 +512,12 @@ class AIDashboardPanel(QWidget):
         from collections import defaultdict
 
         if is_live:
-            # Use engine trade log for current session
-            trade_log = list(engine.trade_log)
+            # Use engine trade log for current session — filter to today only
+            today_date = datetime.now().strftime("%Y-%m-%d")
+            trade_log = [t for t in engine.trade_log if t.get("timestamp", "")[:10] == today_date]
             buy_count = sum(1 for t in trade_log if t.get("side") == "buy")
             sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell", "stop_sell", "zombie_sell"))
-            title_text = f"{len(trade_log)} Trades ({buy_count} buys, {sell_count} sells)"
+            title_text = f"{len(trade_log)} Trades Today ({buy_count} buys, {sell_count} sells)"
             pnl_val = engine.session_pnl
             # Add unrealized P&L from current positions
             unrealized = 0
@@ -566,12 +567,14 @@ class AIDashboardPanel(QWidget):
         pnl_label.setStyleSheet(f"color: {pnl_color};")
         lay.addWidget(pnl_label)
 
-        # Cumulative P&L chart from trade log
+        # Cumulative P&L chart from trade log (today only for live session)
         fig = plt.Figure(figsize=(7, 2.5), dpi=100, facecolor=cc["fig_bg"])
         ax = fig.add_subplot(121)
         ax.set_facecolor(cc["ax_bg"])
 
-        closed = [t for t in trade_log if t.get("pnl") is not None]
+        today_str = datetime.now().strftime("%Y-%m-%d") if is_live else ""
+        closed = [t for t in trade_log if t.get("pnl") is not None
+                  and (not is_live or t.get("timestamp", "")[:10] == today_str)]
         if closed:
             cum_pnl = []
             timestamps = []
@@ -626,11 +629,13 @@ class AIDashboardPanel(QWidget):
             ax.set_title("Cumulative P&L", fontsize=9, color=cc["text"])
         ax.tick_params(colors=cc["muted"], labelsize=7)
 
-        # Trades by hour chart
+        # Trades by hour chart (today only for live)
         ax2 = fig.add_subplot(122)
         ax2.set_facecolor(cc["ax_bg"])
         by_hour = defaultdict(int)
         source = trade_log if not is_live else (trade_log or all_executions)
+        if is_live:
+            source = [t for t in source if t.get("timestamp", "")[:10] == today_str]
         for e in source:
             ts = e.get("timestamp", "")[:19]
             if len(ts) >= 13:
@@ -652,8 +657,9 @@ class AIDashboardPanel(QWidget):
         canvas.setMinimumHeight(180)
         lay.addWidget(canvas)
 
-        # Trade log table
-        display_trades = sorted(trade_log, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
+        # Trade log table (today only for live)
+        today_trades = [t for t in trade_log if not is_live or t.get("timestamp", "")[:10] == today_str]
+        display_trades = sorted(today_trades, key=lambda x: x.get("timestamp", ""), reverse=True)[:20]
         tbl = QTableWidget()
         tbl.setColumnCount(7)
         tbl.setHorizontalHeaderLabels(["Time", "Ticker", "Side", "Qty", "Entry", "Exit", "P&L"])
