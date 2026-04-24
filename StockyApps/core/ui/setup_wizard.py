@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QStackedWidget, QWidget, QFrame,
     QGraphicsOpacityEffect, QSpacerItem, QSizePolicy, QApplication,
+    QCheckBox,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QPointF, QSize,
@@ -244,7 +245,7 @@ class SetupWizard(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Step indicator
-        self.step_indicator = _StepIndicator(5)
+        self.step_indicator = _StepIndicator(6)
         self.step_indicator.setStyleSheet("background: transparent;")
         layout.addWidget(self.step_indicator)
 
@@ -255,6 +256,7 @@ class SetupWizard(QDialog):
         self.stack.addWidget(self._page_api_keys())
         self.stack.addWidget(self._page_theme())
         self.stack.addWidget(self._page_profile())
+        self.stack.addWidget(self._page_startup())
         self.stack.addWidget(self._page_done())
         layout.addWidget(self.stack)
 
@@ -264,7 +266,7 @@ class SetupWizard(QDialog):
         nav_layout = QHBoxLayout()
         nav_layout.setContentsMargins(30, 8, 30, 16)
 
-        self.step_label = QLabel("Step 1 of 5")
+        self.step_label = QLabel("Step 1 of 6")
         self.step_label.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px;")
         nav_layout.addWidget(self.step_label)
         nav_layout.addStretch()
@@ -519,6 +521,63 @@ class SetupWizard(QDialog):
         page.setLayout(layout)
         return page
 
+    def _page_startup(self):
+        page, layout = self._page_container()
+        self._title(layout, "Startup & Auto-Trade", "robot")
+        self._subtitle(layout, "Configure how Stocky Suite behaves when your computer starts "
+                       "and whether the AI agent runs automatically.")
+
+        layout.addSpacing(12)
+
+        cb_style = f"""
+            QCheckBox {{ color: {theme.color('text_primary')}; font-size: 12px;
+                background: transparent; spacing: 8px; padding: 6px 0; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 4px;
+                border: 2px solid {theme.color('border')}; background: {theme.color('bg_card')}; }}
+            QCheckBox::indicator:checked {{ background: {BRAND_PRIMARY}; border-color: {BRAND_PRIMARY}; }}
+        """
+
+        self.wiz_auto_start = QCheckBox("Start on Windows boot (minimized to tray)")
+        self.wiz_auto_start.setChecked(True)
+        self.wiz_auto_start.setStyleSheet(cb_style)
+        layout.addWidget(self.wiz_auto_start)
+
+        auto_start_note = QLabel("Stocky Suite will launch automatically when you log in to Windows, "
+                                 "running quietly in the system tray.")
+        auto_start_note.setWordWrap(True)
+        auto_start_note.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px; background: transparent; padding-left: 26px;")
+        layout.addWidget(auto_start_note)
+
+        layout.addSpacing(4)
+
+        self.wiz_auto_trade = QCheckBox("Auto-start AI Agent on launch")
+        self.wiz_auto_trade.setChecked(True)
+        self.wiz_auto_trade.setStyleSheet(cb_style)
+        layout.addWidget(self.wiz_auto_trade)
+
+        auto_trade_note = QLabel("The AI trading agent will begin monitoring and trading "
+                                 "as soon as the app starts.")
+        auto_trade_note.setWordWrap(True)
+        auto_trade_note.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px; background: transparent; padding-left: 26px;")
+        layout.addWidget(auto_trade_note)
+
+        layout.addSpacing(4)
+
+        self.wiz_skip_confirm = QCheckBox("Skip agent confirmation dialog")
+        self.wiz_skip_confirm.setChecked(False)
+        self.wiz_skip_confirm.setStyleSheet(cb_style)
+        layout.addWidget(self.wiz_skip_confirm)
+
+        skip_note = QLabel("When enabled, the AI agent starts without asking you to confirm. "
+                           "Recommended only after you are comfortable with the system.")
+        skip_note.setWordWrap(True)
+        skip_note.setStyleSheet(f"color: {theme.color('text_muted')}; font-size: 10px; background: transparent; padding-left: 26px;")
+        layout.addWidget(skip_note)
+
+        layout.addStretch()
+        page.setLayout(layout)
+        return page
+
     def _page_done(self):
         page, layout = self._page_container()
 
@@ -615,6 +674,30 @@ class SetupWizard(QDialog):
         if idx == 3:
             from ..profiles import apply_profile
             apply_profile(self.profile_combo.currentData())
+        if idx == 4:
+            s = _load()
+            s["auto_start_on_boot"] = self.wiz_auto_start.isChecked()
+            s["auto_trade_on_boot"] = self.wiz_auto_trade.isChecked()
+            s["auto_trade_skip_confirm"] = self.wiz_skip_confirm.isChecked()
+            _save(s)
+            # Set or remove Windows startup registry entry
+            if self.wiz_auto_start.isChecked():
+                try:
+                    import winreg
+                    suite_path = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                        "StockySuite.py",
+                    )
+                    key = winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        r"Software\Microsoft\Windows\CurrentVersion\Run",
+                        0, winreg.KEY_SET_VALUE,
+                    )
+                    winreg.SetValueEx(key, "StockySuite", 0, winreg.REG_SZ,
+                                      f'pythonw "{suite_path}" --silent')
+                    winreg.CloseKey(key)
+                except Exception:
+                    pass
 
         self.stack.setCurrentIndex(idx + 1)
         self._update_nav()

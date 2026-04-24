@@ -780,10 +780,16 @@ def boot_app():
     from core.ui.window_reveal import WindowReveal
 
     print("[BOOT] Preparing main window...", flush=True)
+    # Check if we should start hidden (silent/tray-only mode)
+    _silent_boot = "--silent" in sys.argv
     effect = QGraphicsOpacityEffect(suite)
     suite.setGraphicsEffect(effect)
     effect.setOpacity(0.0)
-    suite.show()
+    if _silent_boot:
+        # Start minimized to tray — don't show main window
+        suite.hide()
+    else:
+        suite.show()
 
     app.processEvents()
     for _ in range(10):
@@ -804,16 +810,47 @@ def boot_app():
         suite._entrance_anim = fade_in
 
     def _check_agent_resume():
-        """Ask to resume with a simple message box."""
+        """Ask to resume with a simple message box, or auto-start based on settings."""
         print("[BOOT] Checking agent resume...", flush=True)
         try:
             settings = load_settings()
             monitored = settings.get("monitored_stocks", {})
             managed_positions = settings.get("agent_managed_positions", [])
+            auto_trade = settings.get("auto_trade_on_boot", True)
+            skip_confirm = settings.get("auto_trade_skip_confirm", False)
 
-            if not monitored and not managed_positions:
+            # If auto_trade is disabled, don't auto-start at all
+            if not auto_trade:
+                print("[BOOT] auto_trade_on_boot is False — skipping agent start", flush=True)
                 return
 
+            if not monitored and not managed_positions:
+                # Nothing to resume — but if auto_trade is on, start fresh
+                if auto_trade and skip_confirm:
+                    suite.event_bus.log_entry.emit("Auto-starting AI agent (fresh)", "agent")
+                    suite.tabs.setCurrentIndex(1)
+                    def _start_fresh():
+                        ai = getattr(suite, 'ai_agent', None)
+                        if ai and hasattr(ai, '_start_agent'):
+                            ai._start_agent()
+                    QTimer.singleShot(1500, _start_fresh)
+                return
+
+            # If skip_confirm is True, auto-start without dialog
+            if skip_confirm:
+                suite.event_bus.log_entry.emit(
+                    f"Auto-resuming AI — {len(monitored)} stocks (confirmation skipped)", "agent")
+                for ticker in monitored:
+                    suite.event_bus.log_entry.emit(f"Restored {ticker}: will check shortly", "system")
+                suite.tabs.setCurrentIndex(1)
+                def _start_agent_auto():
+                    ai = getattr(suite, 'ai_agent', None)
+                    if ai and hasattr(ai, '_start_agent'):
+                        ai._start_agent()
+                QTimer.singleShot(1500, _start_agent_auto)
+                return
+
+            # Show the existing resume dialog (skip_confirm is False)
             # Custom dialog with position summary table
             dlg = QDialog(suite)
             dlg.setWindowTitle("Resume AI Trading")
@@ -913,7 +950,12 @@ def boot_app():
 
     # Start the reveal animation, fall back to direct fade-in
     from core.ui.anim_config import animations_enabled
-    if animations_enabled():
+    if _silent_boot:
+        # Silent boot — skip animations, just trigger agent resume check
+        suite.setGraphicsEffect(None)
+        QTimer.singleShot(1000, _check_agent_resume)
+        suite.event_bus.log_entry.emit("Started silently (tray only)", "system")
+    elif animations_enabled():
         try:
             reveal = WindowReveal(suite, on_done=_fade_in_app)
             reveal.start()
@@ -924,8 +966,9 @@ def boot_app():
     else:
         _fade_in_app()
 
-    suite.raise_()
-    suite.activateWindow()
+    if not _silent_boot:
+        suite.raise_()
+        suite.activateWindow()
 
     sys.exit(app.exec_())
 

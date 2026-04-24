@@ -184,6 +184,36 @@ class SettingsPanel(QWidget):
         appear_box.setLayout(al2)
         inner_layout.addWidget(appear_box)
 
+        # ── Startup & Auto-Trade ──
+        startup_box = QGroupBox("Startup & Auto-Trade")
+        sl = QVBoxLayout()
+
+        self.auto_start_cb = QCheckBox("Start on Windows boot (minimized to tray)")
+        self.auto_start_cb.setChecked(settings.get("auto_start_on_boot", True))
+        self.auto_start_cb.toggled.connect(self._toggle_auto_start)
+        sl.addWidget(self.auto_start_cb)
+
+        self.auto_trade_cb = QCheckBox("Auto-start AI Agent on launch")
+        self.auto_trade_cb.setChecked(settings.get("auto_trade_on_boot", True))
+        self.auto_trade_cb.toggled.connect(self._toggle_auto_trade)
+        sl.addWidget(self.auto_trade_cb)
+
+        self.skip_confirm_cb = QCheckBox("Skip agent confirmation dialog")
+        self.skip_confirm_cb.setChecked(settings.get("auto_trade_skip_confirm", False))
+        self.skip_confirm_cb.toggled.connect(self._toggle_skip_confirm)
+        sl.addWidget(self.skip_confirm_cb)
+
+        startup_note = QLabel(
+            "When auto-start is enabled, the AI agent resumes trading automatically on launch. "
+            "Skip confirmation bypasses the resume dialog entirely."
+        )
+        startup_note.setWordWrap(True)
+        startup_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        sl.addWidget(startup_note)
+
+        startup_box.setLayout(sl)
+        inner_layout.addWidget(startup_box)
+
         # API Keys — with placeholder formats, info icons, signup links
         keys_box = QGroupBox("API Keys")
         kl = QVBoxLayout()
@@ -667,6 +697,64 @@ class SettingsPanel(QWidget):
                       capture_output=True, timeout=120)
         discover_addons()
         self._refresh()
+
+    # ── Startup & Auto-Trade methods ────────────────────────────────────
+
+    def _toggle_auto_start(self, checked):
+        settings = load_settings()
+        settings["auto_start_on_boot"] = checked
+        save_settings(settings)
+        self._set_windows_startup(checked)
+        self.bus.log_entry.emit(
+            f"Auto-start on boot: {'enabled' if checked else 'disabled'}", "system"
+        )
+
+    def _set_windows_startup(self, enabled):
+        """Add or remove StockySuite from Windows startup via registry."""
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            if enabled:
+                # Find the path to StockySuite.py
+                suite_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    "StockySuite.py",
+                )
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
+                )
+                winreg.SetValueEx(
+                    key, "StockySuite", 0, winreg.REG_SZ,
+                    f'pythonw "{suite_path}" --silent',
+                )
+                winreg.CloseKey(key)
+            else:
+                try:
+                    key = winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
+                    )
+                    winreg.DeleteValue(key, "StockySuite")
+                    winreg.CloseKey(key)
+                except FileNotFoundError:
+                    pass  # Already removed
+        except Exception as e:
+            self.bus.log_entry.emit(f"Registry error: {e}", "error")
+
+    def _toggle_auto_trade(self, checked):
+        settings = load_settings()
+        settings["auto_trade_on_boot"] = checked
+        save_settings(settings)
+        self.bus.log_entry.emit(
+            f"Auto-trade on boot: {'enabled' if checked else 'disabled'}", "system"
+        )
+
+    def _toggle_skip_confirm(self, checked):
+        settings = load_settings()
+        settings["auto_trade_skip_confirm"] = checked
+        save_settings(settings)
+        self.bus.log_entry.emit(
+            f"Skip agent confirmation: {'enabled' if checked else 'disabled'}", "system"
+        )
 
     # ── Profile methods ───────────────────────────────────────────────────
 
