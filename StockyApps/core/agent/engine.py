@@ -247,12 +247,28 @@ class AgentEngine:
         self._last_regime_check = time.time()
         log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {base_min_conf:.0%}")
 
+        _last_trading_date = datetime.now().strftime("%Y-%m-%d")
+
         while self._running:
             cycle += 1
             self._cycle = cycle
             wait_secs = 300
 
             try:
+                # ── Daily Reset Check ──
+                # Detect new trading day even when agent runs continuously overnight
+                today = datetime.now().strftime("%Y-%m-%d")
+                if today != _last_trading_date:
+                    self._log(
+                        f"  New trading day ({_last_trading_date} -> {today}) — "
+                        f"resetting daily counters", "agent")
+                    self._trades_today = 0
+                    self._session_pnl = 0.0
+                    self._inherited_pnl = 0.0
+                    self._buy_confirmations.clear()
+                    self._cooldown_skipped = False
+                    _last_trading_date = today
+
                 # Check market session
                 from core.market_hours import get_session as _get_mkt_session
                 _mkt = _get_mkt_session()
