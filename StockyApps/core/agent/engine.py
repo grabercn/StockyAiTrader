@@ -47,7 +47,8 @@ class AgentEngine:
         self._tradeable_cache = {}   # {ticker: bool} persists across cycles
 
         # P&L tracking (persists across cycles within session, resets daily)
-        self._session_pnl = 0.0      # Realized P&L this session
+        self._session_pnl = 0.0      # Realized P&L from ACTIVE trades this session
+        self._inherited_pnl = 0.0    # P&L from zombie/cleanup sells (not agent decisions)
         self._trade_log = []         # [{ticker, side, qty, price, pnl, timestamp}, ...]
         self._wins = 0
         self._losses = 0
@@ -135,6 +136,7 @@ class AgentEngine:
             "last_dt_bp": getattr(self, '_last_dt_bp', 0),
             "saved_date": datetime.now().strftime("%Y-%m-%d"),
             "session_pnl": self._session_pnl,
+            "inherited_pnl": getattr(self, '_inherited_pnl', 0),
             "trade_log": self._trade_log[-20:],  # Keep last 20 trades
             "wins": self._wins,
             "losses": self._losses,
@@ -330,7 +332,7 @@ class AgentEngine:
                         has_stop = stock_info.get("stop_loss", 0) > 0
                         if upl_pct < -0.08 and not has_stop:
                             qty = int(float(pos.get("qty", 0)))
-                            if qty <= 0 or self._trades_today >= max_trades:
+                            if qty <= 0:
                                 continue
                             self._log(
                                 f"  ZOMBIE CUT: {sym} down {upl_pct:.1%} with no stop — "
@@ -338,12 +340,13 @@ class AgentEngine:
                             try:
                                 result = self.broker.close_position(sym, qty=qty)
                                 if "error" not in result:
-                                    self._trades_today += 1
+                                    # Zombie sells do NOT count toward max_trades
+                                    # (protective action, not a trading decision)
                                     sell_price = float(pos.get("current_price", 0))
                                     entry = float(pos.get("avg_entry_price", 0))
                                     trade_pnl = (sell_price - entry) * qty
-                                    self._session_pnl += trade_pnl
-                                    self._losses += 1
+                                    # Track separately: inherited loss, not active trading loss
+                                    self._inherited_pnl = getattr(self, '_inherited_pnl', 0) + trade_pnl
                                     self._trade_log.append({
                                         "ticker": sym, "side": "zombie_sell", "qty": qty,
                                         "entry": entry, "exit": sell_price,
@@ -367,8 +370,7 @@ class AgentEngine:
                         stop_hits = check_stop_loss_hits(
                             held_map, self._agent_stocks, log_fn=self._log)
                         for sym in stop_hits:
-                            if self._trades_today >= max_trades:
-                                break
+                            # Stop-loss sells bypass max_trades — they're protective, not discretionary
                             pos = held_map.get(sym)
                             if not pos:
                                 continue
@@ -378,7 +380,6 @@ class AgentEngine:
                             try:
                                 result = self.broker.close_position(sym, qty=qty)
                                 if "error" not in result:
-                                    self._trades_today += 1
                                     sell_price = float(pos.get("current_price", 0))
                                     entry = float(pos.get("avg_entry_price", 0))
                                     trade_pnl = (sell_price - entry) * qty
@@ -482,8 +483,9 @@ class AgentEngine:
                     self._log(f"  {session}: scan-only mode, skipping execution", "system")
                 self._set_phase("selling", f"Processing {len(sell_candidates)} sell signals...")
                 for r in sell_candidates:
-                    if not self._running or self._trades_today >= max_trades:
+                    if not self._running:
                         break
+                    # Sells are NEVER blocked by max_trades — protecting capital is always allowed
 
                     self._buy_confirmations.pop(r.ticker, None)  # SELL breaks BUY confirmation
                     self._apply_gemini(r, use_gemini, addon_signals, held_map, effective_bp, dt_bp, pdt_restricted)
@@ -1025,9 +1027,17 @@ class AgentEngine:
             pdt_note = (" PDT RESTRICTED — cannot buy stocks already held (round-trip risk). "
                        "Only new positions allowed.") if pdt_restricted else ""
             # Build rich portfolio context with P&L history
+            # Separate active trading P&L from inherited zombie cleanup losses
             total_trades = self._wins + self._losses
             wr_str = f", win rate {self.win_rate:.0%} ({self._wins}W/{self._losses}L)" if total_trades > 0 else ""
-            pnl_str = f", session P&L ${self._session_pnl:+,.2f}" if self._session_pnl != 0 else ""
+            inherited = getattr(self, '_inherited_pnl', 0)
+            if inherited != 0:
+                pnl_str = (f", active trading P&L ${self._session_pnl:+,.2f}"
+                          f" (inherited cleanup ${inherited:+,.2f} not counted)")
+            elif self._session_pnl != 0:
+                pnl_str = f", session P&L ${self._session_pnl:+,.2f}"
+            else:
+                pnl_str = ""
             port_ctx = (
                 f"BP=${effective_bp:,.0f},{pdt_note} "
                 f"{self._trades_today} trades today, "
