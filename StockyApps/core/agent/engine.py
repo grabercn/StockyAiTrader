@@ -225,7 +225,8 @@ class AgentEngine:
         profile_name = settings.get("aggressivity", "Default")
         profile = get_aggressivity(profile_name)
         base_min_conf = profile.get("min_confidence", 0.5)
-        max_trades = profile.get("max_trades_per_day", 8)
+        base_max_trades = profile.get("max_trades_per_day", 8)
+        max_trades = base_max_trades  # Will be adjusted dynamically each cycle
         cycle = 0
         self._regime = None  # Current regime state (for transparency)
 
@@ -318,9 +319,26 @@ class AgentEngine:
                 self._regime_time[regime.name] = self._regime_time.get(regime.name, 0) + elapsed
                 self._last_regime_check = now_t
                 min_conf = min(0.95, base_min_conf + regime.conf_boost)
+
+                # Dynamic buy limit: adapts to market conditions and performance
+                # Base from profile, adjusted by regime + win rate + session P&L
+                max_trades = base_max_trades
+                if regime.name == "RISK_ON":
+                    max_trades = int(base_max_trades * 1.5)    # More opportunities in bull market
+                elif regime.name == "RISK_OFF":
+                    max_trades = max(2, base_max_trades // 2)  # Cautious in bear market
+                elif regime.name == "VOLATILE":
+                    max_trades = max(1, base_max_trades // 3)  # Minimal in chaos
+                # If winning today, allow more trades; if losing, tighten
+                if self._wins > 0 and self.win_rate > 0.6:
+                    max_trades = int(max_trades * 1.25)  # Hot hand — trade more
+                elif self._losses > 2 and self.win_rate < 0.3:
+                    max_trades = max(2, max_trades // 2)  # Cold streak — slow down
+                max_trades = max(2, min(30, max_trades))  # Absolute bounds: 2-30
+
                 self._log(
                     f"  Min confidence: {base_min_conf:.0%} + {regime.conf_boost:+.0%} "
-                    f"(regime) = {min_conf:.0%}", "agent")
+                    f"(regime) = {min_conf:.0%}, max buys: {max_trades}", "agent")
 
                 # ── Post-Trade Reflection ──
                 if held_map:
@@ -528,7 +546,7 @@ class AgentEngine:
                     try:
                         result = self.broker.close_position(r.ticker, qty=qty)
                         if "error" not in result:
-                            self._trades_today += 1
+                            # Sells don't count toward daily trade limit — only buys do
                             sell_price = float(pos.get("current_price", r.price))
                             freed = qty * sell_price
                             effective_bp += freed
@@ -1172,7 +1190,7 @@ class AgentEngine:
                 w_qty = int(float(worst_pos.get("qty", 0)))
                 sell_result = self.broker.close_position(worst_sym, qty=w_qty)
                 if "error" not in sell_result:
-                    self._trades_today += 1
+                    # Rotation sells don't count toward daily limit
                     freed = w_qty * float(worst_pos.get("current_price", 0))
                     w_pl = float(worst_pos.get("unrealized_pl", 0))
                     # Track rotation P&L
