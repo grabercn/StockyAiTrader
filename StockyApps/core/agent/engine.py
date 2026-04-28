@@ -246,6 +246,7 @@ class AgentEngine:
         self._starting_bp = 0  # Captured on first context gather
         self._regime_time = {}  # {regime_name: seconds} for regime distribution
         self._last_regime_check = time.time()
+        self._cooldown_skipped = False  # Initialize before use in buy loop
         log_event("agent", f"Agent started — profile: {profile_name}, min_conf: {base_min_conf:.0%}")
 
         _last_trading_date = datetime.now().strftime("%Y-%m-%d")
@@ -686,13 +687,13 @@ class AgentEngine:
                     # Loss cooldown: wait after a losing trade
                     try:
                         cool, last_pnl = should_cooldown(self._trade_log)
-                        if cool and not hasattr(self, '_cooldown_skipped'):
+                        if cool and not self._cooldown_skipped:
                             self._log(
                                 f"    COOLDOWN — last trade lost ${last_pnl:+,.0f}, "
                                 f"waiting 1 cycle before buying", "warn")
                             self._cooldown_skipped = True
                             continue
-                        else:
+                        elif not cool:
                             self._cooldown_skipped = False
                     except Exception:
                         pass
@@ -803,6 +804,10 @@ class AgentEngine:
 
                 # Phase 6D: Prune stale stocks from tracking
                 pruned = self._prune_stale_stocks(held_map)
+
+                # Trim trade_log to prevent unbounded memory growth
+                if len(self._trade_log) > 50:
+                    self._trade_log = self._trade_log[-50:]
 
                 # ═════════════════════════════════════════════════════════
                 # PHASE 7: SUMMARY + DYNAMIC TIMING
@@ -1177,6 +1182,8 @@ class AgentEngine:
         for ticker in to_remove:
             checks = self._agent_stocks[ticker].get("checks", 0)
             del self._agent_stocks[ticker]
+            # Clean up buy confirmations for pruned stocks
+            self._buy_confirmations.pop(ticker, None)
             self._log(f"  Pruned {ticker} — {checks} checks, no actionable signal", "system")
 
         return len(to_remove)

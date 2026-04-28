@@ -295,12 +295,13 @@ class AIDashboardPanel(QWidget):
         from core.agent.session_history import get_all_sessions
         from collections import defaultdict
 
-        # Gather all log data across files
+        # Gather log data from last 2 files only (prevents lag with many log files)
         all_decisions = []
         all_executions = []
         all_events = []
-        for fi in get_log_files():
-            for e in get_log_entries(fi["file"], 500):
+        log_files = get_log_files()[:2]  # Most recent 2 files max
+        for fi in log_files:
+            for e in get_log_entries(fi["file"], 300):
                 t = e.get("type", "")
                 if t == "decision":
                     all_decisions.append(e)
@@ -313,6 +314,15 @@ class AIDashboardPanel(QWidget):
         engine = self._engine
         agent_stocks = engine.agent_stocks
         stats = engine.cycle_stats
+
+        # Cache positions once upfront (avoid repeated synchronous broker calls)
+        cached_positions = []
+        try:
+            if self.broker:
+                settings_chk = load_settings()
+                cached_positions = settings_chk.get("agent_managed_positions", [])
+        except Exception:
+            pass
 
         # Load historical sessions
         hist_sessions = get_all_sessions()
@@ -386,7 +396,8 @@ class AIDashboardPanel(QWidget):
                 self._populate_trades(
                     content_layout, cc,
                     all_executions if is_live else [],
-                    selected_session, is_live, engine, plt, FigureCanvas)
+                    selected_session, is_live, engine, plt, FigureCanvas,
+                    cached_positions=cached_positions)
 
             elif card_type_inner == "signals":
                 dlg.setWindowTitle("Signal Distribution -- Detail")
@@ -403,6 +414,7 @@ class AIDashboardPanel(QWidget):
 
         # Initial population
         _populate(card_type, None)
+        QApplication.processEvents()  # Keep UI responsive during dialog build
 
         # Re-populate when session selector changes
         def _on_session_changed(index):
@@ -484,6 +496,7 @@ class AIDashboardPanel(QWidget):
         canvas = FigureCanvas(fig)
         canvas.setMinimumHeight(200)
         lay.addWidget(canvas)
+        plt.close(fig)  # Prevent memory leak
 
         # Stock detail table
         tbl = QTableWidget()
@@ -507,7 +520,7 @@ class AIDashboardPanel(QWidget):
                 tbl.setItem(i, j, item)
         lay.addWidget(tbl)
 
-    def _populate_trades(self, lay, cc, all_executions, session, is_live, engine, plt, FigureCanvas):
+    def _populate_trades(self, lay, cc, all_executions, session, is_live, engine, plt, FigureCanvas, cached_positions=None):
         """Build trade activity card content with cumulative P&L chart."""
         from collections import defaultdict
 
@@ -519,14 +532,12 @@ class AIDashboardPanel(QWidget):
             sell_count = sum(1 for t in trade_log if t.get("side") in ("sell", "rotate_sell", "stop_sell", "zombie_sell"))
             title_text = f"{len(trade_log)} Trades Today ({buy_count} buys, {sell_count} sells)"
             pnl_val = engine.session_pnl
-            # Add unrealized P&L from current positions
+            # Use cached positions for unrealized P&L (avoids synchronous broker call)
             unrealized = 0
             try:
-                if self.broker:
-                    positions = self.broker.get_positions()
-                    if isinstance(positions, list):
-                        for p in positions:
-                            unrealized += float(p.get("unrealized_pl", 0))
+                if cached_positions:
+                    for p in cached_positions:
+                        unrealized += float(p.get("unrealized_pl", 0))
             except Exception:
                 pass
             wins = engine._wins
@@ -602,23 +613,21 @@ class AIDashboardPanel(QWidget):
             ax.set_ylabel("P&L ($)", fontsize=8, color=cc["muted"])
             ax.set_title("Cumulative P&L", fontsize=9, color=cc["text"])
         elif is_live:
-            # No closed trades yet — show unrealized P&L per position
+            # No closed trades yet — show unrealized P&L from cached positions
             try:
-                if self.broker:
-                    positions = self.broker.get_positions()
-                    if isinstance(positions, list) and positions:
-                        syms = [p.get("symbol", "?") for p in positions]
-                        pnls = [float(p.get("unrealized_pl", 0)) for p in positions]
-                        bar_colors = [COLOR_PROFIT if v >= 0 else COLOR_LOSS for v in pnls]
-                        ax.barh(range(len(syms)), pnls, color=bar_colors, alpha=0.8)
-                        ax.set_yticks(range(len(syms)))
-                        ax.set_yticklabels(syms, fontsize=8, color=cc["text"])
-                        ax.set_xlabel("Unrealized P&L ($)", fontsize=8, color=cc["muted"])
-                        ax.set_title("Position P&L (no closed trades yet)", fontsize=9, color=cc["text"])
-                        ax.axvline(x=0, color=cc["muted"], linewidth=0.5, linestyle="--")
-                    else:
-                        ax.text(0.5, 0.5, "No positions", ha="center", va="center",
-                                fontsize=10, color=cc["muted"], transform=ax.transAxes)
+                if cached_positions:
+                    syms = [p.get("symbol", "?") for p in cached_positions]
+                    pnls = [float(p.get("unrealized_pl", 0)) for p in cached_positions]
+                    bar_colors = [COLOR_PROFIT if v >= 0 else COLOR_LOSS for v in pnls]
+                    ax.barh(range(len(syms)), pnls, color=bar_colors, alpha=0.8)
+                    ax.set_yticks(range(len(syms)))
+                    ax.set_yticklabels(syms, fontsize=8, color=cc["text"])
+                    ax.set_xlabel("Unrealized P&L ($)", fontsize=8, color=cc["muted"])
+                    ax.set_title("Position P&L (no closed trades yet)", fontsize=9, color=cc["text"])
+                    ax.axvline(x=0, color=cc["muted"], linewidth=0.5, linestyle="--")
+                else:
+                    ax.text(0.5, 0.5, "No positions", ha="center", va="center",
+                            fontsize=10, color=cc["muted"], transform=ax.transAxes)
             except Exception:
                 ax.text(0.5, 0.5, "No data", ha="center", va="center",
                         fontsize=10, color=cc["muted"], transform=ax.transAxes)
@@ -656,6 +665,7 @@ class AIDashboardPanel(QWidget):
         canvas = FigureCanvas(fig)
         canvas.setMinimumHeight(180)
         lay.addWidget(canvas)
+        plt.close(fig)  # Prevent memory leak
 
         # Trade log table (today only for live)
         today_trades = [t for t in trade_log if not is_live or t.get("timestamp", "")[:10] == today_str]
@@ -808,6 +818,7 @@ class AIDashboardPanel(QWidget):
         canvas = FigureCanvas(fig)
         canvas.setMinimumHeight(220)
         lay.addWidget(canvas)
+        plt.close(fig)  # Prevent memory leak
 
         # Top tickers table
         top = sorted(ticker_signals.items(), key=lambda x: sum(x[1].values()), reverse=True)[:15]
@@ -931,6 +942,7 @@ class AIDashboardPanel(QWidget):
         canvas = FigureCanvas(fig)
         canvas.setMinimumHeight(180)
         lay.addWidget(canvas)
+        plt.close(fig)  # Prevent memory leak
 
         # Reflection rules (live only)
         if is_live:

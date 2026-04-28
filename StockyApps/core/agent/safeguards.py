@@ -371,6 +371,12 @@ CORRELATED_PAIRS = {
     frozenset({"T", "VZ"}),
     frozenset({"PFE", "MRK"}),
     frozenset({"MSFT", "AAPL"}),  # High correlation during tech moves
+    frozenset({"AMD", "INTC"}),
+    frozenset({"BAC", "WFC"}),
+    frozenset({"COP", "EOG"}),
+    frozenset({"NIO", "LCID"}),
+    frozenset({"ENPH", "SEDG"}),
+    frozenset({"GS", "MS"}),
 }
 
 

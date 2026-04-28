@@ -21,6 +21,7 @@ Optimization:
     first scan and every 10 cycles to prevent drift.
 """
 
+import os
 import time
 from datetime import datetime
 from dataclasses import dataclass, field

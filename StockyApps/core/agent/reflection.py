@@ -41,9 +41,12 @@ def get_active_rules():
     now = datetime.now()
     active = []
     for r in rules:
-        created = datetime.fromisoformat(r.get("created", "2020-01-01"))
-        if (now - created).days <= RULE_EXPIRY_DAYS:
-            active.append(r)
+        try:
+            created = datetime.fromisoformat(r.get("created", "2020-01-01"))
+            if (now - created).days <= RULE_EXPIRY_DAYS:
+                active.append(r)
+        except (ValueError, TypeError):
+            continue  # Skip rules with malformed dates
     return active
 
 

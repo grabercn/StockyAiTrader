@@ -100,8 +100,11 @@ def detect_regime(addon_data=None, log_fn=None):
     vix_chg = addon_data.get("vix_change")            # VIX change
 
     # Normalize F&G to 0-100 scale (addon may return 0-1)
-    if fg is not None and fg <= 1.0:
-        fg = fg * 100  # Convert 0-1 to 0-100
+    if fg is not None:
+        if fg < 0:
+            fg = None  # Invalid value, discard
+        elif fg <= 1.0:
+            fg = fg * 100  # Convert 0-1 to 0-100
     vix_norm = min(1.0, vix / 40.0) if vix is not None else None  # VIX 40+ = extreme
 
     # Classification logic
@@ -210,7 +213,10 @@ def _fetch_addon_data():
     try:
         import importlib
         from addons import get_all_addons
-        for addon in get_all_addons():
+        addons = get_all_addons()
+        if not addons:
+            return data
+        for addon in addons:
             if not addon.available or not addon.enabled:
                 continue
             if addon.module_name in ("fear_greed", "spy_correlation", "fred_macro"):
@@ -219,9 +225,14 @@ def _fetch_addon_data():
                     if hasattr(mod, "get_features"):
                         feats = mod.get_features("SPY", empty_df)
                         if isinstance(feats, dict):
-                            data.update(feats)
+                            # Only merge numeric values to avoid polluting regime data
+                            for k, v in feats.items():
+                                if v is not None and isinstance(v, (int, float)):
+                                    data[k] = v
                 except Exception:
-                    pass
+                    continue  # Skip failed addon, try next
+    except ImportError:
+        pass  # addons package not available
     except Exception:
         pass
     return data
