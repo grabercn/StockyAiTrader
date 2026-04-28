@@ -1162,8 +1162,35 @@ class AIDashboardPanel(QWidget):
     def _tick_countdown(self):
         cd = self._engine.countdown
         if cd > 0:
-            mins, secs = cd // 60, cd % 60
-            self.agent_countdown.setText(f"Next cycle: {mins}m {secs}s")
+            if cd < 3600:  # Under 60 minutes
+                mins, secs = cd // 60, cd % 60
+                self.agent_countdown.setText(f"Next: {mins}m {secs}s")
+            elif cd < 86400:  # Under 24 hours
+                hours = cd // 3600
+                mins = (cd % 3600) // 60
+                self.agent_countdown.setText(f"Next: {hours}h {mins}m")
+            else:  # Over 24 hours (weekends)
+                days = cd // 86400
+                hours = (cd % 86400) // 3600
+                self.agent_countdown.setText(f"Next: {days}d {hours}h")
+
+            # Show friendly message for long waits (market closed)
+            if cd > 3600:
+                try:
+                    from core.market_hours import get_session as _get_sess
+                    sess = _get_sess()
+                    if not sess.can_trade and sess.name in ("CLOSED", "WEEKEND"):
+                        # Calculate next open time for display
+                        import pytz
+                        et = pytz.timezone("US/Eastern")
+                        now = datetime.now(et)
+                        next_open = now + timedelta(seconds=cd)
+                        day_name = next_open.strftime("%a")
+                        open_time = next_open.strftime("%-I:%M %p").lstrip("0") if hasattr(str, 'lstrip') else next_open.strftime("%I:%M %p").lstrip("0")
+                        self.agent_countdown.setText(
+                            f"Market closed \u2014 opens {day_name} {open_time}")
+                except Exception:
+                    pass  # Fall back to the hours/days display above
         elif self._engine.running:
             phase = self._engine.phase
             if phase in ("scanning", "selling", "buying"):

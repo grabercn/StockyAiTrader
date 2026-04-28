@@ -293,22 +293,33 @@ def check_volume(scan_result):
     Check if current volume is sufficient to trust the BUY signal.
     Low volume moves are unreliable and often reverse.
 
+    Uses tiered ATR% thresholds by price band to avoid blocking
+    stable large-cap stocks (e.g. KO, PFE) that naturally have
+    low ATR% despite high liquidity.
+
     Args:
         scan_result: ScanResult with feature_importances or raw data
 
     Returns:
         (ok: bool, ratio: float, reason: str)
     """
-    # volume_ratio_5 is already a feature: current_vol / 5-bar avg
-    # If it's in feature importances, we can read it
-    # But we don't have the raw feature value in ScanResult
-    # Use ATR as a proxy: very low ATR = low activity
     if scan_result.atr <= 0 or scan_result.price <= 0:
         return True, 1.0, ""
 
     atr_pct = scan_result.atr / scan_result.price
-    # If ATR is extremely low (< 0.3% of price), volume is likely dead
-    if atr_pct < 0.003:
+
+    # Tiered thresholds: large-caps are always liquid despite low ATR%
+    if scan_result.price > 50:
+        # Large-cap stocks (>$50) — skip the filter entirely
+        return True, atr_pct, ""
+    elif scan_result.price >= 5:
+        # Mid-range stocks ($5-$50) — only block truly dead volatility
+        threshold = 0.001  # 0.1%
+    else:
+        # Penny stocks (<$5) — keep strict threshold
+        threshold = 0.003  # 0.3%
+
+    if atr_pct < threshold:
         return False, atr_pct, f"very low volatility ({atr_pct:.2%}), likely thin volume"
     return True, atr_pct, ""
 

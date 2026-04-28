@@ -506,6 +506,10 @@ class AgentEngine:
                 # Pre-load Gemini + addon data once
                 use_gemini, addon_signals = self._load_gemini_context()
 
+                # Skip Gemini during after-hours — data is stale, saves API costs
+                if not can_trade:
+                    use_gemini = False
+
                 # Reset cycle tracking
                 self._cycle_decisions = []
                 buys, sells, holds, skipped = 0, 0, 0, 0
@@ -823,9 +827,21 @@ class AgentEngine:
                     f"({skipped} skipped, {filtered_out} filtered{pruned_tag})", "agent")
 
                 wait_secs = int(self._calc_wait(buys, sells, profile_name) * regime.scan_mult)
+
+                # After-hours / closed: stretch to 30 min minimum (saves API calls + log noise)
+                if session in ("AFTER_HOURS", "CLOSED") and wait_secs < 1800:
+                    wait_secs = 1800
+
+                # Human-friendly cycle summary
+                if session in ("AFTER_HOURS", "CLOSED"):
+                    wait_tag = f"Next in {wait_secs // 60} min (after-hours)."
+                elif wait_secs >= 3600:
+                    wait_tag = "Market closed \u2014 next session tomorrow."
+                else:
+                    wait_tag = f"Next in {wait_secs/60:.1f} min."
                 self._log(
                     f"Cycle {cycle} done. {self._trades_today}/{max_trades} trades. "
-                    f"Next in {wait_secs/60:.1f} min.", "system")
+                    f"{wait_tag}", "system")
 
             except Exception as e:
                 self._log(f"Agent error: {e}", "error")
