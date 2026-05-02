@@ -282,8 +282,14 @@ class AgentEngine:
                 # Frozen data on weekends = wasted CPU, useless logs, stale confirmations
                 if session == "WEEKEND":
                     self._log("Weekend — market opens Monday. Agent sleeping.", "agent")
-                    wait_secs = session_wait
                     self._set_phase("waiting", "Weekend — sleeping until Monday")
+                    # Sleep in 60s chunks until market opens (check periodically)
+                    while self._running:
+                        _mkt_check = _get_mkt_session()
+                        if _mkt_check.name != "WEEKEND":
+                            break
+                        self._countdown = _mkt_check.wait_seconds
+                        time.sleep(60)
                     continue
 
                 # ═════════════════════════════════════════════════════════
