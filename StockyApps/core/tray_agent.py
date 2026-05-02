@@ -76,26 +76,37 @@ class TrayAgent:
         # Update tray icon + tooltip based on state
         if self._icon_animator:
             if not self._agent_state.get("running"):
-                self._icon_animator.set_state("idle")
-                self._set_tooltip("Stocky Suite - Idle")
+                # Check if market is closed
+                try:
+                    from core.market_hours import get_session
+                    session = get_session()
+                    if session.name in ("CLOSED", "WEEKEND"):
+                        self._icon_animator.set_state("market_closed")
+                        self._set_tooltip(f"Stocky Suite - {session.note}")
+                    else:
+                        self._icon_animator.set_state("idle")
+                        self._set_tooltip("Stocky Suite - Idle")
+                except Exception:
+                    self._icon_animator.set_state("idle")
+                    self._set_tooltip("Stocky Suite - Idle")
             elif kwargs.get("last_action") == "error":
-                self._icon_animator.set_state("error")
+                self._icon_animator.set_state("error", duration_ms=5000)
                 self._set_tooltip("Stocky Suite - Trade failed")
-                QTimer.singleShot(5000, lambda: self._icon_animator.set_state("agent")
-                                  if self._agent_state.get("running") else None)
             elif "scanned" in kwargs and kwargs["scanned"] > 0:
                 self._icon_animator.set_state("scanning")
-                self._set_tooltip(f"Stocky Suite - Scanning {kwargs['scanned']} stocks...")
-            elif "buys" in kwargs or "sells" in kwargs:
-                self._icon_animator.set_state("trading")
-                action = self._recent_actions[-1] if self._recent_actions else "Trading"
+                self._set_tooltip(f"Scanning {kwargs['scanned']} stocks...")
+            elif "buys" in kwargs and kwargs.get("buys", 0) > 0:
+                self._icon_animator.set_state("buying", duration_ms=4000)
+                action = self._recent_actions[-1] if self._recent_actions else "Buying"
                 self._set_tooltip(f"Stocky Suite - {action}")
-                QTimer.singleShot(3000, lambda: self._icon_animator.set_state("agent")
-                                  if self._agent_state.get("running") else None)
+            elif "sells" in kwargs and kwargs.get("sells", 0) > 0:
+                self._icon_animator.set_state("selling", duration_ms=4000)
+                action = self._recent_actions[-1] if self._recent_actions else "Selling"
+                self._set_tooltip(f"Stocky Suite - {action}")
             elif self._agent_state.get("running"):
                 cycle = self._agent_state.get("cycle", 0)
                 self._icon_animator.set_state("agent")
-                self._set_tooltip(f"Stocky Suite - Agent running (cycle {cycle})")
+                self._set_tooltip(f"Agent cycle {cycle} | {self._agent_state.get('scanned', 0)} scanned")
 
     def _set_tooltip(self, text):
         """Update tray tooltip text."""
@@ -333,13 +344,34 @@ class TrayAgent:
         hdr.addWidget(title)
         hdr.addStretch()
 
+        # Market session badge
+        try:
+            from core.market_hours import get_session_label
+            mkt_label = get_session_label()
+        except Exception:
+            mkt_label = "???"
+        mkt_badge = QLabel(mkt_label)
+        mkt_badge.setFont(QFont(FONT_FAMILY, 7, QFont.Bold))
+        mkt_colors = {
+            "OPEN": BRAND_ACCENT, "PRE-MKT": BRAND_SECONDARY,
+            "AFTER-HRS": BRAND_SECONDARY, "CLOSED": TEXT_MUTED,
+            "WEEKEND": TEXT_MUTED, "OPENING": COLOR_HOLD,
+            "CLOSING": COLOR_HOLD,
+        }
+        mkt_bg = mkt_colors.get(mkt_label, TEXT_MUTED)
+        mkt_badge.setStyleSheet(
+            f"color: white; background: {mkt_bg}; {NB} "
+            f"border-radius: 6px; padding: 1px 6px; font-size: 7px;"
+        )
+        hdr.addWidget(mkt_badge)
+
         # Agent status pill
         ag = self._agent_state
         if ag["running"]:
-            pill_text = f"Agent: Cycle {ag['cycle']}"
+            pill_text = f"Cycle {ag['cycle']}"
             pill_bg = BRAND_ACCENT
         else:
-            pill_text = "Agent: Off"
+            pill_text = "Off"
             pill_bg = TEXT_MUTED
         pill = QLabel(pill_text)
         pill.setFont(QFont(FONT_FAMILY, 8, QFont.Bold))
@@ -503,6 +535,44 @@ class TrayAgent:
             lay.addSpacing(2)
 
             if ag["running"]:
+                # Regime + P&L row
+                try:
+                    ai_panel = getattr(self.window, 'ai_agent', None)
+                    if ai_panel and hasattr(ai_panel, '_engine'):
+                        engine = ai_panel._engine
+                        regime = engine.cycle_stats.get("regime", "?")
+                        session_pnl = engine.session_pnl
+                        wr = engine.win_rate
+                        regime_colors = {
+                            "RISK_ON": BRAND_ACCENT, "CAUTIOUS": "#d97706",
+                            "RISK_OFF": COLOR_SELL, "VOLATILE": "#dc2626",
+                        }
+                        rc = regime_colors.get(regime, TEXT_MUTED)
+                        regime_row = QHBoxLayout()
+                        regime_row.setSpacing(6)
+                        rl = QLabel(regime)
+                        rl.setFont(QFont(FONT_FAMILY, 8, QFont.Bold))
+                        rl.setStyleSheet(
+                            f"color: white; background: {rc}; {NB} "
+                            f"border-radius: 4px; padding: 1px 6px;"
+                        )
+                        regime_row.addWidget(rl)
+                        pnl_c = COLOR_PROFIT if session_pnl >= 0 else COLOR_LOSS
+                        pl = QLabel(f"P&L ${session_pnl:+,.0f}")
+                        pl.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+                        pl.setStyleSheet(f"color: {pnl_c}; {NB}")
+                        regime_row.addWidget(pl)
+                        if engine._wins + engine._losses > 0:
+                            wrl = QLabel(f"WR {wr:.0%}")
+                            wrl.setFont(QFont(FONT_FAMILY, 8))
+                            wrl.setStyleSheet(f"color: {TEXT_SECONDARY}; {NB}")
+                            regime_row.addWidget(wrl)
+                        regime_row.addStretch()
+                        lay.addLayout(regime_row)
+                        lay.addSpacing(4)
+                except Exception:
+                    pass
+
                 # Agent stats row
                 agent_info = QHBoxLayout()
                 agent_info.setSpacing(12)
