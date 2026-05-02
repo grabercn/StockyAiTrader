@@ -31,7 +31,6 @@ INTRADAY_FEATURES = [
     "bb_position", "bb_width", "macd_hist",
     "RSI_14", "RSI_2",
     "ema_cross", "obv_slope", "range_atr_ratio",
-    "time_sin", "time_cos",
     "momentum_5", "momentum_10",
     "trend_consistency_5", "trend_consistency_10",
     "volume_direction", "range_position", "candle_body_ratio",

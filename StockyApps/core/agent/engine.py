@@ -137,7 +137,7 @@ class AgentEngine:
             "saved_date": datetime.now().strftime("%Y-%m-%d"),
             "session_pnl": self._session_pnl,
             "inherited_pnl": getattr(self, '_inherited_pnl', 0),
-            "trade_log": self._trade_log[-20:],  # Keep last 20 trades
+            "trade_log": self._trade_log[-50:],  # Keep last 50 trades
             "wins": self._wins,
             "losses": self._losses,
         }
@@ -277,6 +277,14 @@ class AgentEngine:
                 session, session_wait, can_trade, session_note = _mkt.name, _mkt.wait_seconds, _mkt.can_trade, _mkt.note
                 self._log(f"Agent cycle {cycle}: {session_note}", "agent")
                 self._tray(cycle=cycle)
+
+                # ── Weekend Skip ──
+                # Frozen data on weekends = wasted CPU, useless logs, stale confirmations
+                if session == "WEEKEND":
+                    self._log("Weekend — market opens Monday. Agent sleeping.", "agent")
+                    wait_secs = session_wait
+                    self._set_phase("waiting", "Weekend — sleeping until Monday")
+                    continue
 
                 # ═════════════════════════════════════════════════════════
                 # PHASE 1: GATHER CONTEXT
@@ -1153,12 +1161,12 @@ class AgentEngine:
         """
         Remove stocks from tracking that are no longer worth monitoring.
 
-        Criteria for pruning (ALL must be true):
-        - Not currently held (qty == 0 and not in held_map)
-        - Mode is "Scanned" (not "Auto" — we never prune stocks we bought)
-        - Has been checked 3+ times
-        - Last signal was HOLD with confidence < 60%
-        - Not in buy confirmation pipeline
+        Criteria for pruning (any one sufficient):
+        1. Scanned mode, 2+ checks, HOLD signal with confidence < 55%
+        2. Stale entries: not checked in 3+ cycles (no last_check or very old)
+        3. Over max tracked (30): prune lowest-confidence non-held stocks first
+
+        Never prunes: held positions, Auto-mode (agent-bought), buy confirmations.
 
         Returns: number of stocks pruned
         """
@@ -1172,12 +1180,39 @@ class AgentEngine:
             # Never prune stocks pending buy confirmation
             if ticker in self._buy_confirmations:
                 continue
-            # Prune if checked 3+ times with weak HOLD signal
+
             checks = info.get("checks", 0)
             signal = info.get("signal", "HOLD")
             conf = info.get("confidence", 0)
-            if checks >= 3 and signal == "HOLD" and conf < 0.60:
+
+            # Rule 1: Prune after 2+ checks with weak HOLD signal
+            if checks >= 2 and signal == "HOLD" and conf < 0.55:
                 to_remove.append(ticker)
+                continue
+
+            # Rule 2: Prune stale entries with no recent check (0 checks = leftover from previous session)
+            if checks == 0:
+                to_remove.append(ticker)
+                continue
+
+        # Rule 3: Max tracked stocks limit — if still over 30, prune lowest-confidence scanned stocks
+        remaining = {t: i for t, i in self._agent_stocks.items() if t not in to_remove}
+        if len(remaining) > 30:
+            # Sort prunable stocks by confidence (lowest first)
+            prunable = []
+            for ticker, info in remaining.items():
+                if info.get("qty", 0) > 0 or info.get("mode") == "Auto":
+                    continue
+                if ticker.upper() in held_map:
+                    continue
+                if ticker in self._buy_confirmations:
+                    continue
+                prunable.append((ticker, info.get("confidence", 0)))
+            prunable.sort(key=lambda x: x[1])
+            excess = len(remaining) - 30
+            for ticker, conf in prunable[:excess]:
+                if ticker not in to_remove:
+                    to_remove.append(ticker)
 
         for ticker in to_remove:
             checks = self._agent_stocks[ticker].get("checks", 0)
