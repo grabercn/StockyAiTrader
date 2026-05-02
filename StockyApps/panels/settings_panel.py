@@ -715,17 +715,19 @@ class SettingsPanel(QWidget):
             import winreg
             key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
             if enabled:
-                # Find the path to StockySuite.py
+                # Find full paths to pythonw and StockySuite.py
+                import shutil
                 suite_path = os.path.join(
                     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                     "StockySuite.py",
                 )
+                pythonw = shutil.which("pythonw") or "pythonw"
                 key = winreg.OpenKey(
                     winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
                 )
                 winreg.SetValueEx(
                     key, "StockySuite", 0, winreg.REG_SZ,
-                    f'pythonw "{suite_path}" --silent',
+                    f'"{pythonw}" "{suite_path}" --silent',
                 )
                 winreg.CloseKey(key)
             else:
