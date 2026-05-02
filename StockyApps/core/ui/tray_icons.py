@@ -236,25 +236,18 @@ def _draw_profit(p, s):
 
 
 def _draw_market_closed(p, s):
-    """Moon — market is closed."""
+    """Zzz — market is closed (sleep)."""
     cx, cy = s // 2, s // 2
-    r = s // 3
+    w = max(1, s // 7)
 
-    # Crescent moon using two overlapping circles
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(255, 255, 255, 220))
-    p.drawEllipse(QPoint(cx, cy), r, r)
-
-    # Cut out a circle to make the crescent
-    p.setBrush(QColor(_COLORS["market_closed"]))
-    offset = s // 5
-    p.drawEllipse(QPoint(cx + offset, cy - offset // 2), r, r)
-
-    # Small star dots
-    p.setBrush(QColor(255, 255, 255, 150))
-    star_r = max(1, s // 16)
-    p.drawEllipse(QPoint(cx + s // 4, cy - s // 5), star_r, star_r)
-    p.drawEllipse(QPoint(cx + s // 6, cy - s // 3), star_r, star_r)
+    p.setPen(QPen(QColor(255, 255, 255, 230), w, Qt.SolidLine, Qt.RoundCap))
+    # Big Z
+    zw = s // 4
+    zt = cy - s // 6
+    zb = cy + s // 6
+    p.drawLine(cx - zw, zt, cx + zw, zt)  # Top bar
+    p.drawLine(cx + zw, zt, cx - zw, zb)  # Diagonal
+    p.drawLine(cx - zw, zb, cx + zw, zb)  # Bottom bar
 
 
 # Color definitions
@@ -267,7 +260,7 @@ _COLORS = {
     "error":         "#ef4444",  # Red
     "waiting":       "#64748b",  # Slate
     "profit":        "#eab308",  # Gold
-    "market_closed": "#1e293b",  # Dark slate
+    "market_closed": "#475569",  # Medium slate (visible in tray)
 }
 
 _BORDERS = {
