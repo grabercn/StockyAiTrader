@@ -218,6 +218,7 @@ class AgentEngine:
             update_trailing_stops, check_sector_limit, get_addon_sentiment,
             is_economic_event_day, check_volume, should_cooldown,
             check_correlation, get_time_of_day_multiplier, is_friday_afternoon,
+            check_probability_margin, check_ticker_blacklist,
         )
 
         settings = self._settings()
@@ -647,6 +648,26 @@ class AgentEngine:
                             f"need 1 more confirmation", "decision")
                         continue
 
+                    # Ticker blacklist: block historically terrible performers
+                    try:
+                        bl_ok, bl_caution, bl_reason = check_ticker_blacklist(r.ticker)
+                        if not bl_ok:
+                            self._log(f"    BLOCK {r.ticker} — {bl_reason}", "warn")
+                            continue
+                        if bl_caution:
+                            self._log(f"    CAUTION {r.ticker} — {bl_reason}", "warn")
+                    except Exception:
+                        pass
+
+                    # Probability margin: buy_prob must exceed sell_prob by 15%
+                    try:
+                        pm_ok, pm_margin, pm_reason = check_probability_margin(r, min_margin=0.15)
+                        if not pm_ok:
+                            self._log(f"    SKIP BUY {r.ticker} — {pm_reason}", "decision")
+                            continue
+                    except Exception:
+                        pass
+
                     # Earnings avoidance: skip stocks within 3 days of earnings
                     try:
                         skip_earn, earn_days, earn_reason = check_earnings_proximity(r.ticker, 3)
@@ -734,14 +755,15 @@ class AgentEngine:
 
                     # Size and execute
                     # Multi-factor position sizing:
-                    # base * regime * confidence * time-of-day * FOMC * Friday
+                    # base * regime * confidence * time-of-day * FOMC * Friday * caution
                     base_alloc = min(effective_bp * 0.20, initial_bp / max(1, 5))
                     conf_scale = 0.7 + (r.confidence * 0.6)  # 50%=1.0x, 100%=1.3x
                     tod_mult, tod_window = get_time_of_day_multiplier()
                     friday_pm, _ = is_friday_afternoon()
                     friday_mult = 0.5 if friday_pm else 1.0  # Half size on Friday PM
                     event_mult = 0.5 if is_event else 1.0    # Half size on FOMC/CPI
-                    max_spend = base_alloc * regime.size_mult * conf_scale * tod_mult * friday_mult * event_mult
+                    caution_mult = 0.5 if bl_caution else 1.0  # Half size for caution tickers
+                    max_spend = base_alloc * regime.size_mult * conf_scale * tod_mult * friday_mult * event_mult * caution_mult
                     qty = max(1, int(max_spend / r.price)) if r.price > 0 else 0
                     cost = qty * r.price
 
