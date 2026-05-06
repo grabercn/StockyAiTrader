@@ -545,13 +545,21 @@ class AgentEngine:
                     self._apply_gemini(r, use_gemini, addon_signals, held_map, effective_bp, dt_bp, pdt_restricted)
                     self._update_stock_entry(r)
 
-                    if r.confidence < min_conf:
+                    # Sells use a LOWER threshold than buys — protecting profit is easier to justify
+                    # Also: if position is profitable, lower threshold further to lock in gains
+                    pos = held_map.get(r.ticker.upper())
+                    sell_conf_threshold = max(0.25, min_conf - 0.15)  # 15% lower than buy threshold
+                    if pos:
+                        upl = float(pos.get("unrealized_pl", 0))
+                        if upl > 100:  # Profitable position — even easier to sell
+                            sell_conf_threshold = max(0.20, min_conf - 0.25)
+
+                    if r.confidence < sell_conf_threshold:
                         skipped += 1
-                        self._log(f"    SKIP SELL {r.ticker} — {r.confidence:.0%} below threshold", "decision")
+                        self._log(f"    SKIP SELL {r.ticker} — {r.confidence:.0%} below {sell_conf_threshold:.0%}", "decision")
                         continue
 
                     sells += 1
-                    pos = held_map.get(r.ticker.upper())
                     if not pos:
                         continue
                     held = int(float(pos.get("qty", 0)))
