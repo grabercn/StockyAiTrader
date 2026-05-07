@@ -277,6 +277,21 @@ class SettingsPanel(QWidget):
 
             kl.addLayout(row)
 
+        # Live trading toggle
+        live_row = QHBoxLayout()
+        live_row.addSpacing(10)
+        self.live_cb = QCheckBox("LIVE TRADING (real money)")
+        self.live_cb.setChecked(settings.get("live_trading", False))
+        self.live_cb.setStyleSheet(f"color: {COLOR_SELL}; font-weight: bold;")
+        self.live_cb.setToolTip("Switch from paper trading to live trading with real money. Requires live API keys from Alpaca.")
+        self.live_cb.toggled.connect(self._toggle_live_trading)
+        live_row.addWidget(self.live_cb)
+        live_note = QLabel("Requires app restart. Use live API keys from alpaca.markets")
+        live_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px;")
+        live_row.addWidget(live_note)
+        live_row.addStretch()
+        kl.addLayout(live_row)
+
         # Addon API keys (dynamic)
         for addon in get_all_addons():
             if addon.requires_api_key and addon.api_key_name:
@@ -741,6 +756,29 @@ class SettingsPanel(QWidget):
                     pass  # Already removed
         except Exception as e:
             self.bus.log_entry.emit(f"Registry error: {e}", "error")
+
+    def _toggle_live_trading(self, checked):
+        settings = load_settings()
+        if checked:
+            from PyQt5.QtWidgets import QMessageBox
+            confirm = QMessageBox.warning(
+                self, "Enable Live Trading?",
+                "WARNING: This will use REAL MONEY.\n\n"
+                "Make sure you have:\n"
+                "- Live API keys from alpaca.markets (not paper)\n"
+                "- Understood the risks of automated trading\n"
+                "- Tested thoroughly on paper first\n\n"
+                "The app needs to be restarted for this to take effect.\n\n"
+                "Are you sure?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                self.live_cb.setChecked(False)
+                return
+        settings["live_trading"] = checked
+        save_settings(settings)
+        mode = "LIVE (real money)" if checked else "paper trading"
+        self.bus.log_entry.emit(f"Trading mode: {mode} — restart required", "warn" if checked else "system")
 
     def _toggle_auto_trade(self, checked):
         settings = load_settings()

@@ -379,8 +379,11 @@ class StockySuite(QMainWindow):
         settings = load_settings()
         key = settings.get("alpaca_api_key", "")
         secret = settings.get("alpaca_secret_key", "")
+        paper = not settings.get("live_trading", False)  # Default: paper trading
         if key and secret:
-            return AlpacaBroker(key, secret)
+            mode = "LIVE" if not paper else "paper"
+            log_event("broker", f"Connecting to Alpaca ({mode})")
+            return AlpacaBroker(key, secret, paper=paper)
         return None
 
     def _build(self):

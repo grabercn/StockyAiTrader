@@ -392,7 +392,8 @@ class TrayAgent:
             key, secret = settings.get("alpaca_api_key", ""), settings.get("alpaca_secret_key", "")
             if key and secret:
                 from core.broker import AlpacaBroker
-                broker = AlpacaBroker(key, secret)
+                paper = not settings.get("live_trading", False)
+                broker = AlpacaBroker(key, secret, paper=paper)
                 acct_data = broker.get_account()
                 positions_data = broker.get_positions()
                 if not isinstance(positions_data, list):
