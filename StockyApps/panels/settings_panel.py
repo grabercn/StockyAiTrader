@@ -807,9 +807,28 @@ class SettingsPanel(QWidget):
 
     def _toggle_simulate_live(self, checked):
         settings = load_settings()
+        if checked:
+            from PyQt5.QtWidgets import QMessageBox
+            confirm = QMessageBox.question(
+                self, "Enable Live Simulation?",
+                "This adds realistic trading friction to paper trading:\n\n"
+                "- Slippage (fill at slightly worse prices)\n"
+                "- Spread costs (bid-ask spread)\n"
+                "- Partial fills (large orders may not fully fill)\n"
+                "- Fill delays (0.3-2 seconds)\n"
+                "- PDT enforcement (4 day-trade limit)\n"
+                "- T+1 settlement (capital locked 1 day after sell)\n"
+                "- Wash sale tracking (IRS 30-day rule)\n\n"
+                "Your paper P&L will be LOWER but more realistic.\n"
+                "Takes effect on the next agent cycle.\n\n"
+                "Enable simulation?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                self.sim_live_cb.setChecked(False)
+                return
         settings["simulate_live_conditions"] = checked
         save_settings(settings)
-        self.bus.settings_changed.emit(settings)
         mode = "enabled" if checked else "disabled"
         self.bus.log_entry.emit(
             f"Live simulation: {mode} — "
