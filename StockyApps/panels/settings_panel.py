@@ -292,6 +292,31 @@ class SettingsPanel(QWidget):
         live_row.addStretch()
         kl.addLayout(live_row)
 
+        # Live simulation toggle (paper trading friction layer)
+        sim_row = QHBoxLayout()
+        sim_row.addSpacing(10)
+        self.sim_live_cb = QCheckBox("Simulate Live Conditions (on paper trading)")
+        self.sim_live_cb.setChecked(settings.get("simulate_live_conditions", False))
+        self.sim_live_cb.setStyleSheet(f"color: {COLOR_HOLD}; font-weight: bold;")
+        self.sim_live_cb.setToolTip(
+            "Adds realistic slippage, fill delays, partial fills, PDT rules, and "
+            "settlement delays to paper trading to test how the system would perform "
+            "with real money."
+        )
+        self.sim_live_cb.toggled.connect(self._toggle_simulate_live)
+        sim_row.addWidget(self.sim_live_cb)
+        sim_row.addStretch()
+        kl.addLayout(sim_row)
+
+        sim_note = QLabel(
+            "  Adds realistic slippage, fill delays, partial fills, PDT rules, and "
+            "settlement delays to paper trading to test how the system would perform "
+            "with real money."
+        )
+        sim_note.setWordWrap(True)
+        sim_note.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9px; padding-left: 20px;")
+        kl.addWidget(sim_note)
+
         # Addon API keys (dynamic)
         for addon in get_all_addons():
             if addon.requires_api_key and addon.api_key_name:
@@ -779,6 +804,18 @@ class SettingsPanel(QWidget):
         save_settings(settings)
         mode = "LIVE (real money)" if checked else "paper trading"
         self.bus.log_entry.emit(f"Trading mode: {mode} — restart required", "warn" if checked else "system")
+
+    def _toggle_simulate_live(self, checked):
+        settings = load_settings()
+        settings["simulate_live_conditions"] = checked
+        save_settings(settings)
+        self.bus.settings_changed.emit(settings)
+        mode = "enabled" if checked else "disabled"
+        self.bus.log_entry.emit(
+            f"Live simulation: {mode} — "
+            f"{'slippage, delays, PDT, and settlement friction active' if checked else 'pure paper trading'}",
+            "warn" if checked else "system",
+        )
 
     def _toggle_auto_trade(self, checked):
         settings = load_settings()

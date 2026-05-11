@@ -57,6 +57,9 @@ class AgentEngine:
         self._buy_confirmations = {}  # {ticker: consecutive_buy_count}
         self._regime = None           # Set during _run(), init here to avoid AttributeError
 
+        # Live simulation layer (friction on paper trading)
+        self._simulator = None  # Initialized in _run() if enabled
+
         # Callbacks (set by panel)
         self.on_tray_update = None   # callable(**kwargs)
         self.on_tray_action = None   # callable(text)
@@ -140,6 +143,7 @@ class AgentEngine:
             "trade_log": self._trade_log[-50:],  # Keep last 50 trades
             "wins": self._wins,
             "losses": self._losses,
+            "simulator_state": self._simulator.get_state() if self._simulator else {},
         }
 
     def restore_state(self, state):
@@ -175,6 +179,11 @@ class AgentEngine:
             self._cycle = state.get("cycle", 0)
             self._trades_today = state.get("trades_today", 0)
             self._session_pnl = state.get("session_pnl", 0.0)
+
+        # Restore simulator state if available
+        sim_state = state.get("simulator_state")
+        if sim_state and self._simulator:
+            self._simulator.restore_state(sim_state)
 
     # ── Control ─────────────────────────────────────────────────────────
 
@@ -231,6 +240,13 @@ class AgentEngine:
         cycle = 0
         self._regime = None  # Current regime state (for transparency)
 
+        # Initialize live simulation layer
+        from core.live_simulator import LiveSimulator
+        sim_enabled = settings.get("simulate_live_conditions", False)
+        self._simulator = LiveSimulator(enabled=sim_enabled)
+        if sim_enabled:
+            self._log("Agent: LIVE SIMULATION active — slippage, delays, PDT, settlement friction enabled", "warn")
+
         # RL feedback model
         rl_model = None
         try:
@@ -271,6 +287,14 @@ class AgentEngine:
                     self._buy_confirmations.clear()
                     self._cooldown_skipped = False
                     _last_trading_date = today
+
+                # Re-check simulation setting each cycle (can be toggled live)
+                settings = self._settings()
+                sim_now = settings.get("simulate_live_conditions", False)
+                if self._simulator.enabled != sim_now:
+                    self._simulator.enabled = sim_now
+                    state = "ON" if sim_now else "OFF"
+                    self._log(f"  Live simulation toggled {state}", "warn" if sim_now else "system")
 
                 # Check market session
                 from core.market_hours import get_session as _get_mkt_session
@@ -571,11 +595,40 @@ class AgentEngine:
                         continue
 
                     qty = held if r.confidence > 0.7 else max(1, int(held * 0.5)) if r.confidence > 0.5 else max(1, int(held * 0.25))
+
+                    # ── Live Simulation Layer (sell) ──
+                    sim_sell_tag = ""
+                    if self._simulator and self._simulator.enabled:
+                        entry_px = float(pos.get("avg_entry_price", r.price))
+                        sim_result = self._simulator.apply_to_order(
+                            "sell", r.ticker, qty, r.price, r.atr,
+                            entry_price=entry_px)
+                        if sim_result.rejection_reason:
+                            self._log(
+                                f"    SIM REJECT SELL {r.ticker}: {sim_result.rejection_reason}", "warn")
+                            continue
+                        if sim_result.adjusted_qty != qty:
+                            self._log(
+                                f"    SIM: partial fill {r.ticker} sell {sim_result.adjusted_qty}/{qty}", "system")
+                        qty = sim_result.adjusted_qty
+                        sim_sell_tag = (
+                            f" [SIM: slip ${sim_result.slippage:.4f}, "
+                            f"spread ${sim_result.spread_cost:.4f}, "
+                            f"delay {sim_result.delay_seconds:.1f}s, "
+                            f"fill {sim_result.adjusted_qty}/{sim_result.original_qty}]")
+                        for w in sim_result.warnings:
+                            self._log(f"    SIM WARN: {w}", "warn")
+
                     try:
                         result = self.broker.close_position(r.ticker, qty=qty)
                         if "error" not in result:
                             # Sells don't count toward daily trade limit — only buys do
                             sell_price = float(pos.get("current_price", r.price))
+
+                            # Apply simulation slippage to P&L if active
+                            if self._simulator and self._simulator.enabled and sim_sell_tag:
+                                sell_price = sim_result.fill_price
+
                             freed = qty * sell_price
                             effective_bp += freed
 
@@ -598,7 +651,7 @@ class AgentEngine:
                             wr = f" | Session: ${self._session_pnl:+,.2f} ({self.win_rate:.0%} WR)"
                             self._log(
                                 f"    EXECUTE SELL {r.ticker} x{qty}/{held} "
-                                f"({r.confidence:.0%}) — freed ${freed:,.0f}{pnl_tag}{wr}", "trade")
+                                f"({r.confidence:.0%}) — freed ${freed:,.0f}{pnl_tag}{wr}{sim_sell_tag}", "trade")
                             self._tray(sells=self._trades_today)
                             self._tray_act(f"SELL {r.ticker} x{qty} P&L ${trade_pnl:+,.2f}")
                             self._cycle_decisions.append(f"SOLD {r.ticker} x{qty} (${trade_pnl:+,.0f})")
@@ -779,6 +832,52 @@ class AgentEngine:
                         self._log(f"    BUY {r.ticker} — cost ${cost:,.0f} > BP ${effective_bp:,.0f}", "warn")
                         continue
 
+                    # ── Live Simulation Layer (buy) ──
+                    sim_buy_tag = ""
+                    sim_fill_price = r.price
+                    if self._simulator and self._simulator.enabled:
+                        # PDT check via simulator
+                        pdt_ok, pdt_msg = self._simulator.check_pdt(
+                            float(acct.get("equity", 100000)))
+                        if not pdt_ok:
+                            self._log(f"    SIM PDT BLOCK {r.ticker}: {pdt_msg}", "warn")
+                            continue
+                        elif "WARNING" in pdt_msg:
+                            self._log(f"    SIM: {pdt_msg}", "warn")
+
+                        # Settlement check — reduce effective BP by locked capital
+                        locked = self._simulator.get_settlement_locked()
+                        sim_bp = max(0, effective_bp - locked)
+                        if locked > 0:
+                            self._log(
+                                f"    SIM: ${locked:,.0f} locked in T+1 settlement, "
+                                f"effective BP ${sim_bp:,.0f}", "system")
+
+                        sim_result = self._simulator.apply_to_order(
+                            "buy", r.ticker, qty, r.price, r.atr,
+                            buying_power=sim_bp)
+                        if sim_result.rejection_reason:
+                            self._log(
+                                f"    SIM REJECT BUY {r.ticker}: {sim_result.rejection_reason}", "warn")
+                            continue
+                        # Apply simulation adjustments
+                        qty = sim_result.adjusted_qty
+                        sim_fill_price = sim_result.fill_price
+                        cost = qty * sim_fill_price  # Recalculate with simulated fill price
+                        sim_buy_tag = (
+                            f" [SIM: slip ${sim_result.slippage:.4f}, "
+                            f"spread ${sim_result.spread_cost:.4f}, "
+                            f"delay {sim_result.delay_seconds:.1f}s, "
+                            f"fill {sim_result.adjusted_qty}/{sim_result.original_qty}]")
+                        for w in sim_result.warnings:
+                            self._log(f"    SIM WARN: {w}", "warn")
+
+                        if qty <= 0 or cost > effective_bp:
+                            self._log(
+                                f"    SIM: after friction, cost ${cost:,.0f} > BP "
+                                f"${effective_bp:,.0f}", "warn")
+                            continue
+
                     try:
                         # Apply regime-adjusted stop/take-profit
                         adj_sl = r.stop_loss
@@ -810,24 +909,25 @@ class AgentEngine:
                             self._trades_today += 1
                             effective_bp -= cost
                             bracket_tag = "" if used_bracket else " [no bracket]"
+                            entry_price = sim_fill_price if (self._simulator and self._simulator.enabled) else r.price
                             self._log(
-                                f"    EXECUTE BUY {r.ticker} x{qty} @ ${r.price:.2f} "
-                                f"(${cost:,.0f}, {r.confidence:.0%}){bracket_tag}", "trade")
+                                f"    EXECUTE BUY {r.ticker} x{qty} @ ${entry_price:.2f} "
+                                f"(${cost:,.0f}, {r.confidence:.0%}){bracket_tag}{sim_buy_tag}", "trade")
                             if adj_sl and used_bracket:
                                 self._log(
                                     f"      SL=${adj_sl:.2f} TP=${adj_tp:.2f} "
                                     f"(R:R {abs(adj_tp-r.price)/abs(r.price-adj_sl):.1f}:1)", "system")
                             self._tray(buys=self._trades_today)
-                            self._tray_act(f"BUY {r.ticker} x{qty} @ ${r.price:.2f}")
+                            self._tray_act(f"BUY {r.ticker} x{qty} @ ${entry_price:.2f}")
                             self._cycle_decisions.append(f"BOUGHT {r.ticker} x{qty}")
                             self._trade_log.append({
                                 "ticker": r.ticker, "side": "buy", "qty": qty,
-                                "entry": r.price, "exit": None, "pnl": None,
+                                "entry": entry_price, "exit": None, "pnl": None,
                                 "timestamp": datetime.now().isoformat(),
                             })
                             self._agent_stocks[r.ticker]["qty"] = qty
                             self._agent_stocks[r.ticker]["mode"] = "Auto"
-                            self._agent_stocks[r.ticker]["entry_price"] = r.price
+                            self._agent_stocks[r.ticker]["entry_price"] = entry_price
                             self._agent_stocks[r.ticker]["stop_loss"] = adj_sl
                             self._agent_stocks[r.ticker]["take_profit"] = adj_tp
                             self._agent_stocks[r.ticker]["has_bracket"] = used_bracket
